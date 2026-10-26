@@ -18,6 +18,11 @@
     <Description>Pal.DDD PalORM 持久化适配核心层（真 AOT + 源生成 + 编译期方言特化）— 含 6 Store + UnitOfWork（v54 勘正：对齐 v34 P3 计数勘正）</Description>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
+    <!-- 兼容过渡：VersionProbeRow 标 [Obsolete] 后，PalORM 源生成器仍为它生成
+         RowFactory/CommandFactory/Registry，生成物引用该类型会触发 CS0618。
+         本抑制只作用于 PalORM 程序集自身，消费方引用该类型仍会收到弃用警告；
+         v5.0.0 删除 VersionProbeRow 后随之移除。 -->
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
     <!--
       PalORM 源生成器作为 analyzer 传递，自身无 IL3058 风险。
       所有 SQL 经源生成 RowFactory/CommandFactory，零反射、零 IL.Emit。
@@ -34,6 +39,14 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>compile; analyzers; build</IncludeAssets>
     </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- F16（2026-10-21）：SQLite 方言包执行 FTS DDL 时需要读取 IUnitOfWork 环境事务，
+         以便把多条语句包进同一事务（不新建连接、不与外层事务冲突）。 -->
+    <InternalsVisibleTo Include="PalDDD.PalORM.Sqlite" />
+    <!-- R12 H3：分类器 AOT 兜底分支（SqlState+文案）单测直测 internal 判定。 -->
+    <InternalsVisibleTo Include="PalDDD.PalORM.Tests" />
   </ItemGroup>
 
   <ItemGroup>

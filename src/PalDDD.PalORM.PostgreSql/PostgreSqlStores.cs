@@ -9,14 +9,18 @@ namespace PalDDD.PalORM.PostgreSql;
 // PostgreSQL 方言固化中间类
 // ════════════════════════════════════════════════════════════
 // PG 支持 RETURNING 子句 —— TProvider.SupportsReturningClause=true。
-// Outbox/Inbox/Idempotency/Projection 的 INSERT 走 ON CONFLICT DO NOTHING RETURNING 单语句原子路径。
+// 四个 Store 的实际形态（2026-10-21 评审勘正）：
+//   Inbox        —— ON CONFLICT DO NOTHING ... RETURNING（单语句原子路径）
+//   Idempotency  —— ON CONFLICT DO NOTHING，无 RETURNING（按 affected 判断）
+//   Projection   —— ON CONFLICT DO NOTHING，无 RETURNING（按 affected 判断）
+//   Outbox       —— 普通 INSERT（无 ON CONFLICT）；租约路径用 UPDATE ... RETURNING
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>PostgreSQL 方言 Outbox Store。</summary>
 public sealed class PostgreSqlOutboxStore : PalOrmOutboxStore<PostgreSqlProvider>
 {
-    public PostgreSqlOutboxStore(DataSession<PostgreSqlProvider> session, TimeProvider? clock = null)
-        : base(session, clock) { }
+    public PostgreSqlOutboxStore(DataSession<PostgreSqlProvider> session, TimeProvider? clock = null, IOutboxWakeUpSignal? wakeUpSignal = null)
+        : base(session, clock, wakeUpSignal) { }
 }
 
 /// <summary>PostgreSQL 方言 Inbox Store。</summary>

@@ -120,6 +120,14 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(responseType);
         ArgumentNullException.ThrowIfNull(executor);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _frozen) is not null, this);
+        // R12 C-16：needsScope:false 的 executor 在派发时直接使用 _rootProvider!。
+        // 低层 Register 是公开 API，手构 Dispatcher(scopeFactory)（未提供根容器）后
+        // 传入 needsScope:false 会让首个请求抛 NRE；注册期 fail-fast 并给出可操作提示。
+        if (!needsScope && _rootProvider is null)
+            throw new InvalidOperationException(
+                "Register(needsScope: false) requires the Dispatcher to be constructed with a root provider "
+                + "(Dispatcher(IServiceScopeFactory, IServiceProvider?)). Pass the root provider, or register "
+                + "the handler through the DI overload Register<TRequest, TResponse, THandler>().");
         // ITM-182 修复（二十九轮）：Freeze 在发布 _frozen 后置 _entries = null!——并发
         // Register 通过上方守卫后的狭窄窗口内 _entries 已失效，直接写入抛 NRE。
         // 补 null 检查以抛与守卫一致的可定位异常（违反"启动期单线程"文档契约时，
@@ -220,7 +228,7 @@ public sealed class Dispatcher
     {
         ArgumentNullException.ThrowIfNull(cmd);
 
-        var vt = ExecutePipelineAsync(cmd.GetType(), cmd, ct);
+        var vt = ExecutePipelineAsync(cmd.GetType(), cmd, requestServices: null, ct);
         return vt.IsCompletedSuccessfully ? ValueTask.CompletedTask : DiscardResultAsync(vt);
     }
 
@@ -234,7 +242,32 @@ public sealed class Dispatcher
         // 运行时无法区分 T 与 T?（typeof(OrderDto?) == typeof(OrderDto)）。
         // IQuery<OrderDto?> 未找到返回 null 是合法契约；非空契约由调用方 NRT 保证。
         // ITM-218 修复（三十二轮）：库内核心分发路径补 ConfigureAwait(false)（G12 口径）
-        var result = await ExecutePipelineAsync(cmd.GetType(), cmd, ct).ConfigureAwait(false);
+        var result = await ExecutePipelineAsync(cmd.GetType(), cmd, requestServices: null, ct).ConfigureAwait(false);
+        return (TResponse)result!;
+    }
+
+    /// <summary>
+    /// 发送命令（无返回值），复用调用方提供的作用域（2026-10-19 性能实施轮）。
+    /// ASP.NET 端点应传 <c>HttpContext.RequestServices</c>，避免每请求再建一层 scope。
+    /// </summary>
+    public ValueTask SendAsync(ICommand cmd, IServiceProvider requestServices, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        ArgumentNullException.ThrowIfNull(requestServices);
+
+        var vt = ExecutePipelineAsync(cmd.GetType(), cmd, requestServices, ct);
+        return vt.IsCompletedSuccessfully ? ValueTask.CompletedTask : DiscardResultAsync(vt);
+    }
+
+    /// <summary>发送命令（有返回值），复用调用方提供的作用域。</summary>
+    [OverloadResolutionPriority(1)]
+    public async ValueTask<TResponse> SendAsync<TResponse>(
+        ICommand<TResponse> cmd, IServiceProvider requestServices, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        ArgumentNullException.ThrowIfNull(requestServices);
+
+        var result = await ExecutePipelineAsync(cmd.GetType(), cmd, requestServices, ct).ConfigureAwait(false);
         return (TResponse)result!;
     }
 
@@ -245,7 +278,18 @@ public sealed class Dispatcher
 
         // ITM-223：同 SendAsync——IQuery<OrderDto?> 合法返回 null
         // ITM-218 修复（三十二轮）：补 ConfigureAwait(false)（见 SendAsync）
-        var result = await ExecutePipelineAsync(q.GetType(), q, ct).ConfigureAwait(false);
+        var result = await ExecutePipelineAsync(q.GetType(), q, requestServices: null, ct).ConfigureAwait(false);
+        return (TResponse)result!;
+    }
+
+    /// <summary>执行查询，复用调用方提供的作用域。</summary>
+    public async ValueTask<TResponse> QueryAsync<TResponse>(
+        IQuery<TResponse> query, IServiceProvider requestServices, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(requestServices);
+
+        var result = await ExecutePipelineAsync(query.GetType(), query, requestServices, ct).ConfigureAwait(false);
         return (TResponse)result!;
     }
 
@@ -257,10 +301,17 @@ public sealed class Dispatcher
     ///   （R1/A-F1——原 Select+ToImmutableArray 迭代器物化链，1+ 行为场景每请求 ~100-150B）<br/>
     /// — 快路径省 AwaitAndBox 状态机装箱；每次请求创建新状态机实例（~40B），确保线程安全（Dispatcher 为 Singleton）
     /// </remarks>
-    private async ValueTask<object?> ExecutePipelineAsync(Type requestType, IBaseRequest request, CancellationToken ct)
+    private async ValueTask<object?> ExecutePipelineAsync(
+        Type requestType, IBaseRequest request, IServiceProvider? requestServices, CancellationToken ct)
     {
         if (!GetFrozenEntries().TryGetValue(requestType, out var entry))
             throw new HandlerNotFoundException(requestType);
+
+        // 2026-10-19 性能实施轮：HTTP 端点传入 ASP.NET 请求作用域时直接复用，避免在
+        // 请求作用域内再建一层 scope；同时保证中间件与 handler 解析到同一个 scoped 实例
+        //（原实现每请求两个 DbContext/连接的最坏形态由此消除）。
+        if (requestServices is not null)
+            return await entry.Executor(requestServices, request, ct).ConfigureAwait(false);
 
         // v4.0 ①（ADR-026）：实例注册路径免 scope——handler 即注册实例、行为从根容器解析，
         // 无 per-request scope 创建（零行为分发 160B 中的最大剩余项）

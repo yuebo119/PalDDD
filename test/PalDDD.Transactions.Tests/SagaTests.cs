@@ -401,6 +401,66 @@ public class SagaTimeoutTests
         await Assert.That(steps).Count().IsEqualTo(1);
         await Assert.That(steps[0].Name).IsEqualTo("Slow");
     }
+
+    [Test]
+    public async Task ComputeNextCheckAt_ReturnsEarliestStepDeadline()
+    {
+        var saga = new TestSaga();
+        saga.PublicWhenWithTimeout("Initial", "Slow", TimeSpan.FromSeconds(5));
+        var started = new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero);
+        var state = new TestSagaState { CurrentState = "Initial" };
+        state.StepStartedAt["Initial"] = started;
+
+        var next = saga.ComputeNextCheckAt(state);
+
+        await Assert.That(next).IsEqualTo(started.AddSeconds(5));
+    }
+
+    [Test]
+    public async Task ProcessEvent_ActiveWithoutPendingTimeout_WritesSentinel()
+    {
+        var saga = new TestSaga();
+        saga.PublicWhen("Initial", "Next");
+        var state = new TestSagaState { Status = SagaStatus.Active, CurrentState = "Initial" };
+
+        state = await saga.ProcessEventAsync(state, new object());
+
+        // 活动 Saga 恒有 NextCheckAt：无待检查超时写哨兵，到期扫描自然跳过。
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.Active);
+        await Assert.That(state.NextCheckAt).IsEqualTo(SagaState.NoPendingTimeout);
+    }
+
+    [Test]
+    public async Task LeaseDueSagas_LeasesDueAndLegacyNull_SkipsFutureAndSentinel()
+    {
+        var store = new InMemorySagaStateStore<TestSagaState>();
+        var now = new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero);
+        var due = new TestSagaState { Status = SagaStatus.Active, NextCheckAt = now.AddSeconds(-1), CreatedAt = now };
+        var future = new TestSagaState { Status = SagaStatus.Active, NextCheckAt = now.AddMinutes(1), CreatedAt = now };
+        // NULL = 迁移前存量行：到期谓词视其为到期，首次扫描后由 SagaProcessor 回填。
+        var legacyNull = new TestSagaState { Status = SagaStatus.Active, NextCheckAt = null, CreatedAt = now };
+        // 哨兵 = 当前状态无待检查超时：不参与扫描。
+        var idle = new TestSagaState
+        {
+            Status = SagaStatus.Active,
+            NextCheckAt = SagaState.NoPendingTimeout,
+            CreatedAt = now
+        };
+        store.Add(due);
+        store.Add(future);
+        store.Add(legacyNull);
+        store.Add(idle);
+
+        var leased = await store.LeaseDueSagasAsync(
+            "worker", TimeSpan.FromMinutes(1), 10, now, CancellationToken.None);
+
+        await Assert.That(leased).Count().IsEqualTo(2);
+        var leasedIds = leased.Select(static s => s.SagaId).ToHashSet();
+        await Assert.That(leasedIds.Contains(due.SagaId)).IsTrue();
+        await Assert.That(leasedIds.Contains(legacyNull.SagaId)).IsTrue();
+        await Assert.That(leasedIds.Contains(future.SagaId)).IsFalse();
+        await Assert.That(leasedIds.Contains(idle.SagaId)).IsFalse();
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -32,7 +32,7 @@
 | 工作单元端口 | Begin/Commit/Rollback/SaveChanges，不支持嵌套（ADR-023），模板方法扩展 | `IUnitOfWork`（IUnitOfWork.cs） |
 | 强类型标识 | `IPalIdentity<TKey>` 契约 + Ulid 生成器抽象（RFC 9562 合规实现） | `IPalIdGenerator`（Identity/） |
 | 日志门面 | 五成员接口隔离具体日志后端，空实现 NullPalLogger | `IPalLogger<T>`（Logging/） |
-| 可观测门面 | 28 个指标计数器 + 12 个 Activity 工厂（命令/事件/Saga/Outbox/Inbox/幂等/投影/事件日志读写/流式查询） | `PalDiagnostics`（PalDiagnostics.cs） |
+| 可观测门面 | 30 个指标计数器 + 12 个 Activity 工厂（命令/事件/Saga/Outbox/Inbox/幂等/投影/事件日志读写/流式查询） | `PalDiagnostics`（PalDiagnostics.cs） |
 | 失败原因归一 | 五处理器共用：截断 2000 字符 + UTF-16 代理对完整性守卫 | `FailureReason`（FailureReason.cs） |
 | 契约标记 | GenerateId / GenerateEnum / GenerateMessage / BoundedContext / ProcessManager 五个 Attribute | Attributes.cs |
 
@@ -64,7 +64,7 @@
 
 | 特性 | 说明 | 锚点 |
 |---|---|---|
-| 消息代理契约 | `IMessageBroker` 泛型/非泛型发布 + 订阅；接口 remarks 显式声明投递语义（当前两实现均为 at-most-once、不保证顺序、多订阅者语义分叉），消费幂等由 Inbox 保证 | MessageBroker.cs |
+| 消息代理契约 | `IMessageBroker` 泛型/非泛型发布 + 逐条订阅 + 批量订阅（数量/时间界组批，`ConsumedMessage<T>` 携带含 `MessageId` 的消费上下文）；接口 remarks 显式声明投递语义（当前两实现均为 at-most-once、不保证顺序、多订阅者语义分叉），消费幂等由 Inbox 保证 | MessageBroker.cs、MessageBatchPump.cs |
 | 追踪信封闭环 | 发布侧 W3C TraceParent/CorrelationId/CausationId，消费侧 FromHeaders 还原，头键名常量锁定读写一致 | MessagePublishContext.cs、MessageConsumeContext.cs |
 | 空实现 | 单节点模式零发送 | `NullMessageBroker` |
 | Kafka 适配器 | 按消息类型名路由同名 Topic、后台线程阻塞消费循环、订阅句柄幂等释放 + Flush 排空、librdkafka 错误/统计/日志接线 | `KafkaBroker`（KafkaBroker.cs） |
@@ -100,13 +100,13 @@
 |---|---|---|
 | 后台调度 | 周期轮询 + 满批自适应排空（让步 1ms 立即续批），PollInterval 支持热读 | `OutboxProcessor` / `PeriodicBackgroundProcessor` |
 | 原子租约 | LeasePending 原子认领，MaxDegreeOfParallelism 分区并行且每 worker 独立 DI scope | `OutboxBatchProcessor`、`IPalOutboxStore`（OutboxStore.cs） |
-| 发布确认流水线 | MaxInFlightPublishes（默认 1 = 串行行为不变）：FIFO 窗口内发布按序启动、出窗按启动序标记 | ProcessPartitionPipelinedAsync（OutboxBatchProcessor.cs） |
+| 发布确认流水线 | `DeliveryMode.Auto`（默认）：broker 声明 `SupportsConcurrentPublish` 时窗口至少 16；`Serial` 保留逐条确认旧行为 | ProcessPartitionPipelinedAsync（OutboxBatchProcessor.cs） |
 | 重试与死信 | 指数退避（2^n 秒、上限封顶、可选 jitter 防惊群）/固定退避两种策略；重试耗尽转 Dead 状态；`RequeueDeadAsync` 运维重投（保留失败历史） | RetryBackoffPolicy.cs、OutboxMessage.cs |
 | fencing 契约 | (LockedBy, LockedUntil) 租约 token + RetryCount 快照 + Status 守卫三重防护；v4.0 全接口异步化（ADR-026） | `IPalOutboxStore`（OutboxStore.cs） |
 
 ### Inbox 收件箱
 
-`(ConsumerName, MessageId)` 粒度幂等消费：TryStart 抢占、僵尸 Processing 超时可夺、handler 失败可重试。锚点：`InboxProcessor`（InboxProcessor.cs）、`InboxMessage`（InboxMessage.cs）。
+`(ConsumerName, MessageId)` 粒度幂等消费：TryStart 抢占、僵尸 Processing 超时可夺、handler 失败可重试。批量路径（`IBatchInboxStore` + `InboxProcessor.TryProcessBatchAsync`）每批一次认领/完成往返，`InboxBatchConsumer<T>` 把 broker 批量订阅、每批 DI scope 与幂等处理器串成开箱即用消费者。锚点：`InboxProcessor`（InboxProcessor.cs）、`InboxBatchConsumer`（InboxBatchConsumer.cs）、`InboxMessage`（InboxMessage.cs）。
 
 ### Saga 编排
 
@@ -115,12 +115,12 @@
 | 步骤 DSL | When 泛型/非泛型/通配三种注册，精确 + 通配双级路由 | `Saga<TState>`（Saga.cs） |
 | 五种步骤车道 | Normal / FanOut（并发门 + 整批重放）/ ChildSaga（子 Saga 分发）/ Interrupt（人工介入）/ Dynamic（运行时路由） | SagaStep.cs、FanOutStep.cs、ChildSagaStep.cs、InterruptStep.cs、DynamicStep.cs |
 | 重试补偿骨架 | 每车道共享：MaxRetries 默认 3，耗尽后逆序补偿全部已执行步骤（失败步骤优先），补偿失败并入 AggregateException | RunRetryLaneAsync（Saga.cs）、SagaCompensation.cs |
-| 超时治理 | 按 StepStartedAt 起算的检测器 + 后台扫描处理器（租约式扫描、超时自动补偿、批量租约释放走 `ISagaLeaseBatchStore`） | SagaTimeoutDetector.cs、SagaProcessor.cs |
+| 超时治理 | 按 StepStartedAt 起算的检测器 + 后台扫描处理器（租约式扫描、超时自动补偿、批量租约释放走 `ISagaLeaseBatchStore`；内置四栈实现 `ISagaScanCursorStore`，释放写回 leased_until 作轮转游标，避免固定前 N 条饿死） | SagaTimeoutDetector.cs、SagaProcessor.cs |
 | 中断与恢复 | `DefaultSagaManager` 中断登记 + ResumeAsync 以决策为事件重入，幽灵条目 TOCTOU 防护 | DefaultSagaManager.cs |
 | 状态与并发 | SagaState 版本乐观锁（租约即换代）、CloneForLease successor、执行序字典作为补偿顺序唯一依据 | SagaState.cs |
 | 执行观察者 | 五观察点零分配事件 + AsyncLocal 传播，Sink 异常与业务隔离 | SagaExecutionObserver.cs |
 
-**配置面**：`OutboxOptions`（BatchSize=100、LeaseDuration=2min、PollInterval=500ms、MaxRetryCount=10、MaxInFlightPublishes=1 等）、`InboxOptions`、`SagaProcessorOptions`，全部 ValidateOnStart 校验。DI 入口：`AddPalOutbox` / `AddPalInbox` / `AddPalSaga<TState,TOrchestrator>`（Transactions/ServiceCollectionExtensions.cs）。
+**配置面**：`OutboxOptions`（BatchSize=100、LeaseDuration=2min、PollInterval=500ms、MaxRetryCount=10、DeliveryMode=Auto、BatchMarkFlushInterval=1s 等）、`InboxOptions`、`SagaProcessorOptions`，全部 ValidateOnStart 校验。DI 入口：`AddPalOutbox` / `AddPalInbox` / `AddPalSaga<TState,TOrchestrator>`（Transactions/ServiceCollectionExtensions.cs）。
 
 ## 8. 事件溯源与投影
 
@@ -128,8 +128,8 @@
 |---|---|---|
 | 事件日志端口 | 按流追加 + 4 态期望版本（NoStream/Any/StreamExists/Exact）乐观并发；流读与全局读均为游标语义 | `IEventLog`、`ExpectedStreamVersion`（EventLog/） |
 | 审计元数据 | ActorId/Reason/Correlation/Causation/TraceParent/TraceState，可从 Activity.Current 自动捕获 | EventAuditMetadata.cs |
-| EFCore 事件日志 | Hi/Lo 全局位置分配器（chunk 100 + DB 行 CAS 重试）、唯一索引冲突分类为并发异常、零拷贝重水化 | EventLogDbContext.cs、EventLogPositionReserver.cs |
-| 投影处理器 | 检查点租约式逐事件投影，at-least-once 契约（投影必须幂等） | `ProjectionProcessor<T>`（Projections/） |
+| EFCore 事件日志 | Hi/Lo 全局位置分配器（chunk 1000 + DB 行 CAS 重试）、唯一索引冲突分类为并发异常、零拷贝重水化 | EventLogDbContext.cs、EventLogPositionReserver.cs |
+| 投影处理器 | 检查点租约式逐事件投影，at-least-once 契约（投影必须幂等）；批量回放时 handler 可实现 `IProjectionBatchHandler<T>` 整组一次 `ProjectBatchAsync`（批量 upsert），未实现则逐条 | `ProjectionProcessor<T>`（Projections/）、IProjectionHandler.cs |
 | 投影重建 | RebuildAsync 全量重建（先清检查点）/ ReplayAsync 增量补齐，名称一致性守卫 | `ProjectionRebuilder<T>`（ProjectionRebuilder.cs） |
 | 事件日志驱动回放源 | 按消息契约三重精确匹配反序列化；每流单事件类型约束已声明 | EventLogReplaySource.cs（Projections.EventLog） |
 | 事件流导入导出 | JSON Lines 流式导出（O(1) 内存）与导入（导入即重建，坏行报物理行号） | EventStreamJsonLines.cs |
@@ -152,7 +152,15 @@
 | Dapper | `[module:DapperAOT]` 调用点拦截器 + DapperDbType 枚举运行时分发 | Sqlite / PostgreSql / MySql 三增强包 |
 | EF Core | 抽象基类 + 方言虚方法覆写 | Transactions.EFCore（Outbox 四方言变体）/ EventLog.EFCore / Idempotency.EFCore / Projections.EFCore / Repository.EFCore |
 
+域事件 → Outbox 的桥：EF Core 由 `OutboxDomainEventInterceptor` 自动完成；Dapper/PalORM 用
+`DomainEventOutboxBridge.PersistAsync(aggregates, outboxStore, ct)`（同一工作单元事务内调用），
+不再需要自行复制 catalog 查找/序列化/清理逻辑（2026-10-21 增）。
+
 存储层共性能力：原子租约三分支（PG FOR UPDATE SKIP LOCKED RETURNING / MySQL 版本探针 JOIN / SQLite RETURNING）、三重 fencing 标记、原生批量导入（PG Binary COPY / MySQL BulkCopy / SQLite 批 INSERT）、SQL 错误分类器（四方言唯一约束码集）、MySQL ≥8.0.18 SKIP LOCKED 版本探针（`MySqlLeasePolicy`，ADR-025）、Saga jsonb CAST 适配、连接池预热 HostedService。
+
+> ⚠️ **方言不对称声明（2026-10-21）**：`PalDDD.Dapper.PostgreSql` 承载九个 PG 单方言特性
+>（MultiHost/复制/Notify/JSONB/分库分表等），不代表三方言能力对称；其他方言缺这些能力是
+> 既定支持面，不是缺陷。三栈「平等」指同一组抽象接口与租约/fencing 契约，不指方言特性数量。
 
 Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁移）；SQLite FTS5/JSON1 例外，已按 ADR-032 双栈提供：
 
@@ -170,8 +178,11 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 | Handler 显式注册 | `AddPalCommandHandler` / `AddPalQueryHandler` / `AddPalEventHandler` 三族：自动补漏调、重复注册快速失败、启动期 HostedService 零反射装配后冻结 Dispatcher | 同上 |
 | 管道行为注册 | 开放泛型（非 AOT 值类型守卫）与闭合泛型（AOT 安全）两形态，互斥防重复执行 | `AddPalPipelineBehaviors` 两重载 |
 | ASP.NET Core 端点 | `MapCommand`（POST，调用方传 JsonTypeInfo 保 AOT）、`MapQuery`（GET + 显式绑定委托）、415/400/404/500 全套 ProblemDetails 编排 | EndpointExtensions.cs（Hosting.AspNetCore） |
+| 流式读端点（SSE） | `IStreamQuery`/`IStreamQueryHandler` + `MapStreamQuery` GET/POST：验证前置 400、SSE 帧（data-only / `formatFrame` / event/id 选择器）、心跳、`Last-Event-ID` 读取入口、取消贯穿、遥测（TTFT `first-item` 事件 + 五个计数器） | EndpointExtensions.cs、StreamResumeExtensions.cs（Hosting.AspNetCore） |
+| 断线续跑端点 | `AddDetachedStreamRuns` + `MapDetachedStreamQuery`（GET/POST 双启动形态）+ `MapStreamRunAttach` + `MapStreamRunCancel`：单写者 + 单附着 + 有界环形缓冲、`event: gap`、接管 `event: detached`、run 自有 scope、`paldd.stream.attached/gap` 计数 | DetachedStreamEndpoints.cs、StreamRunRegistry.cs（Hosting.AspNetCore） |
 | 全局异常中间件 | PalValidationException→400、HandlerNotFound→404（类型级信息不泄露内部）、响应已开始分支 rethrow 补日志 | ExceptionMiddleware.cs |
-| 健康检查 | message_broker 注册检查 + outbox 存储探测两个内置检查，自定义响应体（逐组件明细 + 耗时） | HealthCheckExtensions.cs |
+| 健康检查 | message_broker 注册检查 + outbox 存储探测两个内置检查，自定义响应体（逐组件明细 + 耗时）；仅需 outbox 检查时可改用可选包 `AddPalOutboxHealthCheck()`（PalDDD.Hosting.AspNetCore.OutboxHealth，避免通过 Hosting 传递引用 Transactions；与 `AddPalHealthChecks()` 二选一） | HealthCheckExtensions.cs、OutboxHealthServiceCollectionExtensions.cs |
+| 结构化日志 | `IPalLogger<T>` 的 `Debug/Information/Warning/Error` 带 `EventId` 与模板参数重载：适配器把 `{MessageId}` 等槽位原样交给 MEL/ZLogger，可按字段检索；旧实现者走默认实现，模板格式化后转调原方法（二进制兼容） | IPalLogger.cs、PalLogger.cs |
 
 ## 12. 元包与 AI 资产
 
@@ -184,7 +195,7 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 ## 横切能力
 
 - **AOT 分层矩阵**：抽象层（Core/CQRS/Messaging/Serialization/Compression/EventLog/Idempotency/Projections/Transactions 抽象面）零反射；基础设施 4 包（Kafka、RabbitMQ、Compression.Native、Serialization.MemoryPack）加 Transactions 的子 Saga 反射路径显式豁免，豁免均有 csproj/注释理由。详见 [AOT 指南](aot.md)。
-- **可观测统一**：12 个 Activity 工厂 + 28 个指标计数器贯穿全部处理器；五处理器共用的 FailureReason 归一化。
+- **可观测统一**：12 个 Activity 工厂 + 30 个指标计数器贯穿全部处理器；五处理器共用的 FailureReason 归一化。
 - **并发防护三形态**：Outbox 用租约 token + RetryCount 快照；Saga 用 Version 换代乐观锁；Checkpoint/Idempotency 用单调 Revision CAS。
 - **全端口 InMemory 替身**：事件日志、Outbox、Inbox、Saga、检查点、幂等存储均有内存实现（替身与真实实现的语义分叉均以注释定案）。
 
@@ -192,7 +203,7 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 
 1. Broker 层投递语义是 at-most-once，at-least-once 由应用侧 Inbox/幂等组合达成（`IMessageBroker` remarks 明示）。
 2. `SagaStatus.DeadLettered` 枚举在案但框架内无赋值路径，Saga 实际失败终态为 Compensated/CompensationFailed。
-3. `AddPalFullStack` 当前等价于 AddPalCoreStack（更名留给 v5.0）。
+3. `AddPalFullStack` 已在 v5.0 契约窗口移除，统一入口为 `AddPalCoreStack`（原名字易被误解为包含基础设施）。
 4. SQLite 时间列编码在 PalORM 栈与 Dapper 栈互不兼容，同一物理库只能单选一个适配器族（双侧对称声明）。
 5. `SqlServerOutboxDbContext` 已标 Obsolete（v5.0 移除预告）。
 6. 运行时调小 Outbox MaxRetryCount 存在 Pending 消息滞留窗口（既不派发也不转 Dead，代码内声明）。

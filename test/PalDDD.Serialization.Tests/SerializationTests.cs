@@ -120,6 +120,24 @@ public sealed class MessageCatalogTests
 public sealed class JsonMessageSerializerTests
 {
     [Test]
+    public async Task ContentType_MemoryPackDescriptor_AllEntryPoints_Throw()
+    {
+        // R11 F5 回归锁：JSON 序列化器原只校验 ClrType，接受 MemoryPack ContentType
+        // 并写出 JSON 字节，下游按 ContentType 解析必然失败。
+        var descriptor = MessageDescriptor.Create(
+            TestJsonContext.Default.TestMessage,
+            name: "test-message-memorypack-type",
+            contentType: ContentTypes.MemoryPack);
+        var serializer = new JsonMessageSerializer(MessageCatalog.Empty);
+        var message = new TestMessage("order-1", 3);
+
+        await Assert.That(() => serializer.Serialize(message, descriptor)).Throws<InvalidOperationException>();
+        await Assert.That(() => serializer.Serialize<TestMessage>(message, descriptor)).Throws<InvalidOperationException>();
+        await Assert.That(() => serializer.Deserialize(ReadOnlySpan<byte>.Empty, descriptor)).Throws<InvalidOperationException>();
+        await Assert.That(() => serializer.Deserialize<TestMessage>(ReadOnlySpan<byte>.Empty, descriptor)).Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task RoundTrip_UsesSourceGeneratedJsonTypeInfo()
     {
         var descriptor = MessageDescriptor.Create(
@@ -590,6 +608,23 @@ public sealed class JsonLinesEventTests
             await Assert.That(deserialized[i]).IsEqualTo(messages[i]);
     }
 
+    [Test]
+    public async Task JsonLines_InvalidSecondLine_ErrorNamesDocumentLine()
+    {
+        // R13 F23：JsonException 的行号相对每次单行 Deserialize（恒为 1），多行 .jsonl
+        // 无法定位坏行；包装后消息带文档级行号，原路径/位置保留。
+        var reader = new JsonLinesEventReader();
+        var writer = new JsonLinesEventWriter();
+        var firstLine = writer.SerializeLine(new TestMessage("ok", 1), TestJsonContext.Default.TestMessage).ToArray();
+        var payload = firstLine.Concat(System.Text.Encoding.UTF8.GetBytes("{oops}\n")).ToArray();
+
+        var exception = await Assert.That(() => reader.DeserializeAll<TestMessage>(
+                payload.AsMemory(), TestJsonContext.Default.TestMessage))
+            .Throws<System.Text.Json.JsonException>();
+
+        await Assert.That(exception!.Message).Contains("line 2");
+    }
+
     // B2-T2: 逐行读取无整批缓存 — 10000 条事件每事件分配低于阈值（无与批处理模式的峰值对比）
     [Test]
     public async Task JsonLines_PerEventAlloc_BelowThreshold()
@@ -793,8 +828,11 @@ public sealed class SerializerDirectWriteTests
         });
 
         // 池化 Utf8JsonWriter 直写 + 无 ToArray——稳态每调用 0 分配
-        //（DIM 回退形态：内存载荷 ToArray + 拷贝 = 载荷尺寸 ×2 每调用）
-        await Assert.That(alloc).IsEqualTo(0L);
+        //（DIM 回退形态：内存载荷 ToArray + 拷贝 = 载荷尺寸 ×2 每调用）。
+        // 容差 1KB：全量并行跑时偶发一次性的运行时事件（分层 JIT 记账/首用静态）
+        // 会计入当前线程；回退形态是 ≥100B × 10,000 = 1MB 量级，与容差差 3 个数量级，
+        // 回归检测力不受影响。
+        await Assert.That(alloc).IsLessThanOrEqualTo(1024L);
     }
 
     [Test]

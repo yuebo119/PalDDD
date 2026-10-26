@@ -42,6 +42,94 @@ public sealed class InMemoryStoreTests
         var b = await store.TryStartProcessingAsync("consumer-b", "msg-001", now, TimeSpan.FromMinutes(5), cancellationToken);
         await Assert.That(a).IsNotNull();
         await Assert.That(b).IsNotNull();
+        await Assert.That(a!.MessageId).IsEqualTo("msg-001");
+        await Assert.That(a.ConsumerName).IsEqualTo("consumer-a");
+        await Assert.That(b!.MessageId).IsEqualTo("msg-001");
+        await Assert.That(b.ConsumerName).IsEqualTo("consumer-b");
+    }
+
+    [Test]
+    public async Task InMemoryInboxStore_BatchClaimMarkAndSkip(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var now = DateTimeOffset.UtcNow;
+        string[] ids = ["batch-1", "batch-2", "batch-3"];
+
+        var claimed = await store.TryStartProcessingManyAsync(
+            "consumer", ids, now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(claimed).Count().IsEqualTo(3);
+        await Assert.That(string.Join(",", claimed.Select(static m => m.MessageId).OrderBy(static x => x, StringComparer.Ordinal)))
+            .IsEqualTo("batch-1,batch-2,batch-3");
+
+        var duplicate = await store.TryStartProcessingManyAsync(
+            "consumer", ids, now.AddSeconds(1), TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(duplicate).IsEmpty();
+
+        var marked = await store.MarkProcessedManyAsync(
+            "consumer", claimed, now.AddSeconds(2), cancellationToken);
+        await Assert.That(marked).IsEqualTo(3);
+
+        var after = await store.TryStartProcessingManyAsync(
+            "consumer", ids, now.AddSeconds(3), TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(after).IsEmpty();
+    }
+
+    [Test]
+    public async Task InMemoryInboxStore_BatchMark_MixedConsumerNames_ThrowsInsteadOfSilentSkip(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var now = DateTimeOffset.UtcNow;
+        var claimed = await store.TryStartProcessingManyAsync(
+            "consumer", ["mix-1", "mix-2"], now, TimeSpan.FromMinutes(5), cancellationToken);
+        var mixed = new List<InboxMessage>
+        {
+            claimed[0],
+            new()
+            {
+                MessageId = claimed[1].MessageId,
+                ConsumerName = "other-consumer",
+                ProcessingStartedAt = claimed[1].ProcessingStartedAt,
+            },
+        };
+
+        // R14：对齐 Dapper R13 F19 —— 异消费者元素入口 fail-fast，不静默跳过。
+        await Assert.That(async () => await store.MarkProcessedManyAsync(
+                "consumer", mixed, now.AddSeconds(1), cancellationToken))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task InMemoryInboxStore_BatchReclaimsFailedAndExpiredLease(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var now = DateTimeOffset.UtcNow;
+
+        var failed = await store.TryStartProcessingAsync(
+            "consumer", "batch-failed", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(failed!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(failed.Attempts).IsEqualTo(1);
+        await store.MarkFailedAsync(failed, "boom", cancellationToken);
+
+        var active = await store.TryStartProcessingAsync(
+            "consumer", "batch-active", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(active!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(active.Attempts).IsEqualTo(1);
+
+        // 租约在 10 分钟前开始、超时 5 分钟 → 已过期。
+        var expired = await store.TryStartProcessingAsync(
+            "consumer", "batch-expired", now.AddMinutes(-10), TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(expired!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(expired.Attempts).IsEqualTo(1);
+
+        var claimed = await store.TryStartProcessingManyAsync(
+            "consumer", ["batch-failed", "batch-active", "batch-expired"],
+            now, TimeSpan.FromMinutes(5), cancellationToken);
+
+        await Assert.That(claimed).Count().IsEqualTo(2);
+        await Assert.That(string.Join(",", claimed.Select(static m => m.MessageId).OrderBy(static x => x, StringComparer.Ordinal)))
+            .IsEqualTo("batch-expired,batch-failed");
+        await Assert.That(claimed[0].Attempts).IsEqualTo(2);
+        await Assert.That(claimed[1].Attempts).IsEqualTo(2);
     }
 
     [Test]
@@ -101,6 +189,7 @@ public sealed class InMemoryStoreTests
         await store.AddMessageAsync(msg);
         // ITM-174 修复：先 Lease 拿到 successor 再 ReleaseForRetry（守卫要求租约持有者）
         var leased = await store.LeasePendingMessagesAsync(10, "owner-1", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leased[0].NextAttemptAt).IsEqualTo(leased[0].LockedUntil);
         await store.ReleaseForRetryAsync(leased[0], "test failure", DateTimeOffset.UtcNow.AddSeconds(-1));
 
         var pending = await store.GetPendingMessagesAsync(10, 1, cancellationToken);
@@ -424,5 +513,79 @@ public sealed class InMemoryStoreTests
         // GetByIdAsync 仍返回终态条目（行为契约不变）
         var reloaded = await store.GetByIdAsync(state.SagaId, cancellationToken);
         await Assert.That(reloaded!.Status).IsEqualTo(SagaStatus.Completed);
+    }
+
+    [Test]
+    public async Task InMemorySagaStateStore_ScanCursor_RotatesReleasedBatchToBack(CancellationToken cancellationToken)
+    {
+        var store = new InMemorySagaStateStore<LifecycleSagaState>();
+        var created = new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);
+        var first = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active, CreatedAt = created };
+        var second = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active, CreatedAt = created.AddSeconds(1) };
+        var third = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active, CreatedAt = created.AddSeconds(2) };
+        store.Add(first);
+        store.Add(second);
+        store.Add(third);
+
+        var leased = await store.LeaseActiveSagasAsync("owner-a", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(leased.Count).IsEqualTo(1);
+        var firstLeasedId = leased[0].SagaId;
+
+        var released = await store.ReleaseLeasesAsync(
+            "owner-a", leased, DateTimeOffset.UtcNow.AddSeconds(-1), cancellationToken);
+        await Assert.That(released).IsEqualTo(1);
+
+        var next = await store.LeaseActiveSagasAsync("owner-a", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(next.Count).IsEqualTo(1);
+        await Assert.That(next[0].SagaId).IsNotEqualTo(firstLeasedId);
+    }
+
+    [Test]
+    public async Task InMemorySagaStateStore_AdvanceNextCheckAt_BatchUpdatesAndGuardsOwner(CancellationToken cancellationToken)
+    {
+        var store = new InMemorySagaStateStore<LifecycleSagaState>();
+        var first = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active };
+        var second = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active };
+        store.Add(first);
+        store.Add(second);
+
+        var leased = await store.LeaseActiveSagasAsync("owner-a", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leased).Count().IsEqualTo(2);
+        var nextCheck = DateTimeOffset.UtcNow.AddMinutes(5);
+        foreach (var saga in leased)
+            saga.NextCheckAt = nextCheck;
+
+        var advanced = await store.AdvanceNextCheckAtAsync("owner-a", leased, cancellationToken);
+        await Assert.That(advanced).IsEqualTo(2);
+
+        var reloaded = await store.GetByIdAsync(first.SagaId, cancellationToken);
+        await Assert.That(reloaded!.NextCheckAt).IsEqualTo(nextCheck);
+
+        var foreign = await store.AdvanceNextCheckAtAsync("owner-b", leased, cancellationToken);
+        await Assert.That(foreign).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task InMemorySagaStateStore_SaveManyAsync_PersistsTerminalStatesInOneCall(CancellationToken cancellationToken)
+    {
+        var store = new InMemorySagaStateStore<LifecycleSagaState>();
+        var first = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active };
+        var second = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active };
+        store.Add(first);
+        store.Add(second);
+
+        var leased = await store.LeaseActiveSagasAsync("owner-a", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        foreach (var saga in leased)
+        {
+            saga.Status = SagaStatus.Completed;
+            saga.CurrentState = "Completed";
+        }
+
+        var results = await store.SaveManyAsync(leased, cancellationToken);
+        await Assert.That(results).Count().IsEqualTo(2);
+        await Assert.That(results[0]).IsEqualTo(1);
+        await Assert.That(results[1]).IsEqualTo(1);
+        var active = await store.GetActiveSagasAsync(10, cancellationToken);
+        await Assert.That(active).IsEmpty();
     }
 }

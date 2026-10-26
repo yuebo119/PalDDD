@@ -69,7 +69,7 @@
 
 | 项目 | 类型 | 职责 |
 |------|------|------|
-| `PalDDD.Core.Tests` | 单元 | AggregateRoot/Entity/ValueObject/SmartEnum/Specification/DomainEvent/PublicApiSnapshot/AotContract/AllocationContract（性能契约由 ArchitectureBoundaryTests 的 PerformanceContract 存在性断言守护） |
+| `PalDDD.Core.Tests` | 单元 | AggregateRoot/Entity/ValueObject/SmartEnum/Specification/DomainEvent/AotContract/AllocationContract（性能契约由 ArchitectureBoundaryTests 的 PerformanceContract 存在性断言守护；PublicApiSnapshot 已迁 Integration.Tests） |
 | `PalDDD.Core.Abstractions.Tests` | 单元 | 核心抽象（IUnitOfWork/IMessageBroker 等）契约 |
 | `PalDDD.CQRS.Tests` | 单元 | Dispatcher/PipelineStateMachine/CommandHandler/QueryHandler |
 | `PalDDD.Transactions.Tests` | 单元 + 集成 | Saga/Outbox/Inbox + 租约锁 + 补偿链 + 死信重投递 |
@@ -80,7 +80,7 @@
 | `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 38 方法机械守护** + DI 注册规范 |
 | `PalDDD.Repository.EFCore.Tests` | 集成 | UnitOfWork + OutboxDomainEventInterceptor Scoped |
 | `PalDDD.Hosting.AspNetCore.Tests` | 集成 | ExceptionMiddleware + AspNetCore 中间件链 |
-| `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 + Idempotency |
+| `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 + Idempotency + PublicApiSnapshot（公共 API 快照） |
 | `PalDDD.Messaging.Integration.Tests` | 集成 | Testcontainers 真库（RabbitMQ/Kafka）+ Broker 抽象对称 |
 | `PalDDD.PalORM.Tests` | 集成 | PalORM 6 Store + 跨方言（SQLite/PG/MySQL）+ 并发竞争 |
 | `PalDDD.Compression.Tests` | 单元 + 集成 | 系统压缩器往返（Brotli/GZip/Deflate）+ Native（LZ4/ZStandard） |
@@ -96,7 +96,7 @@
 
 | 维度 | DDD 约定 |
 |------|---------|
-| **测试框架** | TUnit 1.75.0 + MTP（Microsoft.Testing.Platform） |
+| **测试框架** | TUnit 1.76.28 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
 | **快照测试** | Verify.TUnit 32.0.1（已用于 Hosting.AspNetCore.Tests 的 ExceptionMiddleware，3 个 `.verified.txt` 基线；公共 API 快照另由自实现 PublicApiSnapshot 承载） |
@@ -367,11 +367,12 @@ Error / Mean > 15%  → 统计无效，必须：
 # 1. 清 obj/bin
 rm -rf src/*/obj src/*/bin test/*/obj test/*/bin
 
-# 2. 全量构建 + 重生成公共 API 快照
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet build PalDDD.slnx --no-incremental
+# 2. 重生成公共 API 快照（快照由 Integration.Tests 的 PublicApiSnapshotTests 承载；
+#    dotnet build 不会执行测试，PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS 只在测试体内读取）
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 
 # 3. 评审 git diff 的快照变更，确认 emit 差异符合预期
-git diff test/PalDDD.Core.Tests/Snapshots/
+git diff test/PalDDD.Integration.Tests/Snapshots/
 
 # 4. 如 diff 不符合预期，回滚 Generator 改动，重新分析
 ```
@@ -450,7 +451,8 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke | tee /tmp/after.txt
 | `ci.yml` dialect-probe | push/PR，路径门控（仅 Store/SQL/DDL/映射面变更；PR 全跑） | DialectProbeTests（Testcontainers PG/MySQL 真库） |
 | `codeql.yml` | push（main/dev）/PR + 每周一 schedule + workflow_dispatch | CodeQL 静态安全分析 |
 | `perf-gate.yml`（待实施） | 每周日 + `[perf]` PR | Smoke 基线 + 回归检测 |
-| `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests） | 每次 PR/本地（dotnet test） | 断言强度棘轮（替代 Stryker；Stryker 不支持 TUnit/MTP；MIG-003 由脚本下沉） |
+| `mutation.yml` | 每周一 schedule + workflow_dispatch | Stryker 两个 curated 基线（Compression / Transactions lease），break 95，JSON/HTML artifact |
+| `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests） | 每次 PR/本地（dotnet test） | 断言强度棘轮（与 Stryker 互补；Stryker 5.0.0 MTP runner 见 mutation.yml；MIG-003 由脚本下沉） |
 
 ### Testcontainers CI 要求
 
@@ -469,8 +471,10 @@ git status --short
 # 2. 全量构建（0 警告 0 错误）
 dotnet build PalDDD.slnx --no-incremental
 
-# 3. 单元测试全绿——MTP 禁用 slnx 批量（握手 → exit 5），逐测试项目循环
-for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore --no-build; done
+# 3. 单元测试全绿——slnx 批量可直接运行（2026-10-21 实测 exit 0；用例数以当次输出为准）
+dotnet test PalDDD.slnx --no-build
+# 需要单项目定位 / treenode-filter / 逐项目失败归因时，再逐项目循环：
+# for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore --no-build; done
 
 # 4. 规范验证（grep 静态检查）
 dotnet run scripts/verify-conventions.cs -- --quick
@@ -482,8 +486,8 @@ dotnet run scripts/verify-conventions.cs -- --quick
 dotnet run scripts/gate.cs -- --allow-dirty
 
 # 6. 源生成器变更额外验证（如改了 SourceGen）
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet build PalDDD.slnx
-git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
+git diff test/PalDDD.Integration.Tests/Snapshots/   # 评审快照
 
 # 7. 公共 API 变更三方一致（如改了签名）
 # - 同步更新 docs/conventions.md / docs/architecture.md
@@ -504,13 +508,13 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `.ai/test/prompt.md` | T1-T14 + T-DDD-1..6 测试铁律 |
 | `test/PalDDD.Testing/TestHelpers.cs` | 共享测试工具（FakeTimeProvider 等） |
 | `test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs` | 38 测试方法机械守护 |
-| `test/PalDDD.Core.Tests/PublicApiSnapshotTests.cs` | 公共 API 快照 |
-| `test/PalDDD.Core.Tests/Snapshots/*.txt` | 快照基线（评审后提交） |
+| `test/PalDDD.Integration.Tests/PublicApiSnapshotTests.cs` | 公共 API 快照 |
+| `test/PalDDD.Integration.Tests/Snapshots/*.txt` | 快照基线（评审后提交） |
 | `bench/PalDDD.Benchmarks/Program.cs` | BenchmarkSwitcher + Smoke 模式入口 |
 | `bench/PalDDD.Benchmarks/FrameworkBenchmarks.cs` | 领域核心基准 |
 | `bench/PalDDD.Benchmarks/InfraBenchmarks.cs` | 基础设施基准 |
 | `scripts/verify-conventions.cs` | 规范验证脚本（三模式） |
-| `AssertionStrengthGateTests.cs` | 断言强度检查测试（替代 Stryker；原 bash 脚本 MIG-003 下沉） |
+| `AssertionStrengthGateTests.cs` | 断言强度检查测试（与 Stryker 互补；原 bash 脚本 MIG-003 下沉） |
 
 ---
 

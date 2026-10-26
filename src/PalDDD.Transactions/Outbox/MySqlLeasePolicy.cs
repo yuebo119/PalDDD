@@ -10,9 +10,13 @@
 namespace PalDDD.Transactions;
 
 /// <summary>
-/// MySQL 租约 SQL 形态的版本判定（ADR-025）。纯函数，Dapper/PalORM 两栈共用。
+/// MySQL 租约 SQL 形态的版本判定（ADR-025）。纯函数，Dapper/PalORM/EF Core 三栈共用。
+/// <para>
+/// 2026-10-21 契约盘点：由 public 下沉为 internal（IVT 授三栈适配器）——MySQL 专属
+/// SQL 形态策略不应出现在抽象程序集的承诺面。
+/// </para>
 /// </summary>
-public static class MySqlLeasePolicy
+internal static class MySqlLeasePolicy
 {
     /// <summary>启用 JOIN 派生表 FOR UPDATE SKIP LOCKED 的最低版本（与 EF 栈 MySqlOutboxDbContext 声明对齐）。</summary>
     public const string MinimumSkipLockedVersion = "8.0.18";

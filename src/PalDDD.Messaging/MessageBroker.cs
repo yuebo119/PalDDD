@@ -9,6 +9,9 @@ using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Messaging;
 
+/// <summary>批量订阅的单条消息（消息体 + 消费上下文）。</summary>
+public readonly record struct ConsumedMessage<TMessage>(TMessage Message, MessageConsumeContext? Context);
+
 // ─────────────────────────────────────────────────────────────
 // 跨进程消息代理抽象
 // ─────────────────────────────────────────────────────────────
@@ -32,6 +35,34 @@ namespace PalDDD.Messaging;
 /// </remarks>
 public interface IMessageBroker
 {
+    /// <summary>
+    /// 是否可安全并发发布（2026-10-19 性能实施轮）。Outbox 的自动升窗只在本属性为
+    /// <c>true</c> 时启用；默认 <c>false</c> 保证自定义 broker 保持逐条确认语义。
+    /// Kafka 实现仅在 producer 开启幂等时返回 true；RabbitMQ 在单发布 channel 的
+    /// publisher confirms 下保序，返回 true。
+    /// </summary>
+    bool SupportsConcurrentPublish => false;
+
+    /// <summary>
+    /// 是否支持原始载荷发布（2026-10-19 性能实施轮）。支持时 Outbox 可直接把持久化的
+    /// 字节交给 broker，跳过“反序列化成对象 + 再序列化”的往返；默认 false 保证自定义
+    /// broker 走既有对象发布语义。
+    /// </summary>
+    bool SupportsRawPublish => false;
+
+    /// <summary>
+    /// 发布已序列化的原始载荷（字节必须与 <paramref name="descriptor"/> 的 ContentType/
+    /// SchemaVersion 一致）。仅当 <see cref="SupportsRawPublish"/> 为 true 时由 Outbox 调用。
+    /// </summary>
+    ValueTask PublishRawAsync(
+        ReadOnlyMemory<byte> payload,
+        MessageDescriptor descriptor,
+        PalUlid messageId,
+        MessagePublishContext context,
+        CancellationToken ct = default)
+        => throw new NotSupportedException(
+            $"Broker '{GetType().Name}' does not implement raw payload publishing.");
+
     /// <summary>发布消息（泛型，编译时已知类型）。⚠️ 不保证顺序——见接口 remarks 顺序性声明。</summary>
     ValueTask PublishAsync<TMessage>(TMessage message, CancellationToken ct = default);
 
@@ -64,6 +95,20 @@ public interface IMessageBroker
     ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)
         => SubscribeAsync<TMessage>((message, _, token) => handler(message, null, token), ct);
+
+    /// <summary>
+    /// 批量订阅（2026-10-21）：复用逐条订阅，按 <paramref name="maxBatchSize"/> 或
+    /// <paramref name="maxDelay"/> 先到者组批后交给批量 handler。批内消息按到达顺序；
+    /// 每批 flush 后列表被清空复用，handler 不得保留列表引用。单个批 handler 抛异常时
+    /// 由实现的错误回调记录并继续下一批（<see cref="MessageBrokerBase"/> 经
+    /// OnBatchHandlerFailed 记录；默认 DIM 实现静默继续）。
+    /// </summary>
+    ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, CancellationToken, ValueTask> handler,
+        int maxBatchSize = 64,
+        TimeSpan? maxDelay = null,
+        CancellationToken ct = default)
+        => MessageBatchPump.StartAsync(this, handler, maxBatchSize, maxDelay, static _ => { }, ct);
 }
 
 /// <summary>
@@ -77,6 +122,20 @@ public sealed class NullMessageBroker : IMessageBroker
     /// <summary>创建 NullMessageBroker，可选注入日志器。</summary>
     public NullMessageBroker(IPalLogger<NullMessageBroker>? logger = null)
         => _logger = logger;
+
+    // 单节点模式所有发布都是丢弃：声明 raw 能力让 Outbox 跳过“反序列化 + 再序列化”，
+    // 声明并发能力让窗口/批量标记正常启用；实现均为 no-op，无顺序/确认语义。
+    bool IMessageBroker.SupportsRawPublish => true;
+
+    bool IMessageBroker.SupportsConcurrentPublish => true;
+
+    ValueTask IMessageBroker.PublishRawAsync(
+        ReadOnlyMemory<byte> payload,
+        MessageDescriptor descriptor,
+        PalUlid messageId,
+        MessagePublishContext context,
+        CancellationToken ct)
+        => ValueTask.CompletedTask;
 
     // A14（S1 轮，2026-10-15）：Debug 日志补 IsEnabled 门控——IPalLogger.Debug 收预构造
     // 字符串，插值在调用点已发生；?. 只判 logger 非空不判级别，单节点模式下每次发布/订阅
@@ -112,6 +171,19 @@ public sealed class NullMessageBroker : IMessageBroker
         if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
             _logger.Debug($"NullMessageBroker: subscribe to '{typeof(TMessage).Name}' ignored (single-node mode)");
         return new ValueTask<IAsyncDisposable>(NullAsyncDisposable.Instance);
+    }
+
+    ValueTask<IAsyncDisposable> IMessageBroker.SubscribeBatchAsync<TMessage>(
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, CancellationToken, ValueTask> handler,
+        int maxBatchSize,
+        TimeSpan? maxDelay,
+        CancellationToken ct)
+    {
+        // 2026-10-21 评审：批量订阅与单条订阅同样补 Debug 门控日志——原实现静默返回，
+        // 误注册 NullMessageBroker 的批量链路无日志可查。
+        if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"NullMessageBroker: batch subscribe to '{typeof(TMessage).Name}' ignored (single-node mode)");
+        return new(NullAsyncDisposable.Instance);
     }
 
     private sealed class NullAsyncDisposable : IAsyncDisposable

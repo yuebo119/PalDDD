@@ -24,7 +24,9 @@ namespace PalDDD.Transactions;
 /// 中断恢复使用内存字典暂存决策与恢复派发闭包。<see cref="ResumeAsync{TDecision}"/>
 /// 以决策为事件重新进入 Saga 的 <c>ProcessEventAsync</c> 管线，成功后移除条目；
 /// 未知 SagaId 或二次恢复抛 <see cref="InvalidOperationException"/>（不再静默丢弃决策）。
-/// 生产环境应替换为持久化实现（重启后内存条目丢失）。<br/>
+/// <b>本实现仅进程内</b>：中断条目随进程重启丢失。<see cref="ISagaManager"/> 含 internal
+/// 成员，外部程序集无法实现持久化替换（编译失败，CS0535）——需要持久化时应等待接口公开化
+/// （v5.0 破坏性变更轨道），不要按「可替换」设计。<br/>
 /// 子 Saga 执行直接委托给子编排器的 ProcessEventAsync。
 /// </remarks>
 public sealed class DefaultSagaManager : ISagaManager

@@ -42,6 +42,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
 {
     private int _disposed;
     private readonly IChannel _channel;
+    private readonly IConnection _connection;
     private readonly IPalLogger<RabbitMqBroker> _logger;
     // P2 修复（八轮评审）：exchange 声明任务缓存——声明幂等但避免每发布一次 AMQP 往返；
     // 任务化后并发发布者 await 同一声明，消除"声明飞行中直接 publish → 404 关 channel"竞态。
@@ -83,13 +84,46 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
+        _connection = connection;
         _logger = logger;
         _prefetchCount = prefetchCount;
+        // 发布 channel 的 publisher confirms 保证同一 channel 内的帧序；并发发布
+        // 由 channel 内部确认跟踪串行化，Outbox 窗口可安全启用。
+        SupportsConcurrentPublish = true;
 
         // L5（perf-opt-sweep，2026-09-20）：发布超时指引——框架不包装 PublishAsync 超时
         //（透传调用方 ct）；半坏 broker 下的等待时长由注入的 IConnection/ChannelOptions
         // 控制（publisher confirmations + continuation timeout，见 CreateChannelOptions
         // 使用方配置）。此处仅声明，不改写使用方的连接配置。
+    }
+
+    /// <inheritdoc />
+    public override bool SupportsConcurrentPublish { get; }
+
+    /// <summary>
+    /// 为 true 时所有订阅复用发布的单 channel（4.x 旧行为，兼容/受限拓扑）；
+    /// 默认 false：每个订阅经 <see cref="IConnection"/> 创建独立 consumer channel，
+    /// 发布 channel 只承担发布与确认，订阅之间不再共享 QoS/ack/消费串行面。
+    /// </summary>
+    public bool UseSharedConsumerChannel { get; init; }
+
+    private ushort? _consumerDispatchConcurrency;
+
+    /// <summary>
+    /// 每订阅 consumer channel 的消费分发并发度；null = 继承连接配置（RabbitMQ.Client 默认 1）。
+    /// 大于 1 时同一订阅的 handler 可并发执行，调用方必须保证 handler 线程安全与幂等；
+    /// 建议同时把 prefetch 设为不小于该值。共享单 channel 模式下本选项不生效。
+    /// 必须在 <c>SubscribeAsync</c> 之前设置。
+    /// </summary>
+    public ushort? ConsumerDispatchConcurrency
+    {
+        get => _consumerDispatchConcurrency;
+        set
+        {
+            if (value is 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "ConsumerDispatchConcurrency must be greater than zero.");
+            _consumerDispatchConcurrency = value;
+        }
     }
 
     // ITM-639：outstanding publisher confirms 上限——对齐 RabbitMQ.Client 文档所述默认
@@ -177,35 +211,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
 
         var exchange = descriptor.Name;
-        // P2 修复（八轮评审）：声明任务化——首个发布者 GetOrAdd 占位声明 Task，并发发布者
-        // await 同一任务，杜绝"声明飞行中他人直接 publish → exchange 不存在 404 → channel 被服务端关闭"。
-        // P3 修复（十七轮）：声明任务不连坐——原 lambda 透传首个发布者的 ct，其取消使缓存的
-        // 声明任务进入 Canceled，并发 await 同一声明的其他发布者（自身 ct 未取消）被 OCE 连坐。
-        // 声明幂等无业务副作用，改用 CancellationToken.None 使声明独立于单个发布者的生命周期；
-        // 发布取消语义由下方 BasicPublishAsync(ct) 独立承担。
-        var declaration = _exchangeDeclarations.GetOrAdd(
-            exchange,
-            static (name, channel) => channel.ExchangeDeclareAsync(
-                name, ExchangeType.Fanout, durable: true, cancellationToken: CancellationToken.None),
-            _channel);
-        try
-        {
-            await declaration.ConfigureAwait(false);
-        }
-        catch
-        {
-            // P2 修复：声明失败回滚占位——仅当字典中仍是本失败任务时移除（不误删他人重试的新任务），下次发布重新声明
-            _exchangeDeclarations.TryRemove(new KeyValuePair<string, Task>(exchange, declaration));
-            throw;
-        }
+        var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
 
         // A2：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
         // using 保证发布抛出后缓冲归还池（池化 writer 无 Clear 复位需求，天然干净入口）
         using var bodyWriter = new PooledBodyWriter(InitialBodyBufferBytes);
         Serializer.Serialize(message, descriptor, bodyWriter);
-        // 优化（二十五轮 R-1）：CachedString 重载——缓存 exchange 名的 UTF-8 字节表示
-        // （免每发布 string→bytes 编码分配；XML 证实 BasicPublishAsync(CachedString,...) 存在）
-        var cachedExchange = _cachedExchanges.GetOrAdd(exchange, static name => new CachedString(name));
         // ITM-213 修复（三十二轮）：mandatory:true——无绑定队列时发布抛 PublishException，
         // 不再静默丢弃（原 mandatory:false 使 Outbox 标记 Processed 但消息实际未路由）。
         // ITM-639：该语义仅在 channel 启用 publisher confirms（含 confirmation tracking）时
@@ -238,6 +249,78 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // 优化（二十五轮 Z-1）：同 KafkaBroker——Debug 级门控免白做插值
         if (_logger.IsEnabled(LogLevel.Debug))
             _logger.Debug($"Published message {descriptor.ClrType.Name} to exchange {exchange}");
+    }
+
+    /// <inheritdoc />
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static",
+        Justification = "接口成员必须为实例成员；能力值由 broker 实现类型决定。")]
+    public override bool SupportsRawPublish => true;
+
+    /// <summary>批量 handler 异常记录后继续消费后续批次（消息已按 at-most-once 弃置）。</summary>
+    protected override void OnBatchHandlerFailed(Exception ex)
+        => _logger.Error(ex, "RabbitMQ batch handler failed; subsequent batches continue");
+
+    /// <inheritdoc />
+    public override async ValueTask PublishRawAsync(
+        ReadOnlyMemory<byte> payload,
+        MessageDescriptor descriptor,
+        PalUlid messageId,
+        MessagePublishContext context,
+        CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
+
+        var exchange = descriptor.Name;
+        var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
+        try
+        {
+            await _channel.BasicPublishAsync(
+                exchange: cachedExchange,
+                routingKey: CachedString.Empty,
+                mandatory: true,
+                basicProperties: CreateProperties(descriptor, messageId, context),
+                body: payload,
+                cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (PublishReturnException ex)
+        {
+            _logger.Warning(
+                $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
+                $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
+            throw;
+        }
+
+        if (_logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"Published message {descriptor.ClrType.Name} to exchange {exchange}");
+    }
+
+    /// <summary>
+    /// 声明 exchange 并返回 CachedString（对象发布与 raw 发布共用单一出处）。
+    /// 声明任务化：并发发布者 await 同一任务，杜绝“声明飞行中直接 publish → 404 关 channel”；
+    /// 声明任务不连坐（CancellationToken.None），发布取消由各发布调用独立承担。
+    /// </summary>
+    private async ValueTask<CachedString> EnsureExchangeAsync(string exchange)
+    {
+        var declaration = _exchangeDeclarations.GetOrAdd(
+            exchange,
+            static (name, channel) => channel.ExchangeDeclareAsync(
+                name, ExchangeType.Fanout, durable: true, cancellationToken: CancellationToken.None),
+            _channel);
+        try
+        {
+            await declaration.ConfigureAwait(false);
+        }
+        catch
+        {
+            // 声明失败回滚占位——仅当字典中仍是本失败任务时移除，下次发布重新声明
+            _exchangeDeclarations.TryRemove(new KeyValuePair<string, Task>(exchange, declaration));
+            throw;
+        }
+
+        // CachedString 重载缓存 exchange 名的 UTF-8 字节表示，免每发布 string→bytes 编码分配
+        return _cachedExchanges.GetOrAdd(exchange, static name => new CachedString(name));
     }
 
     private static BasicProperties CreateProperties(
@@ -300,8 +383,31 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         var exchange = descriptor.Name;
         var queueName = $"{exchange}.{PalUlid.New()}";
 
-        await _channel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct).ConfigureAwait(false);
-        await _channel.QueueDeclareAsync(queueName, durable: false, exclusive: true, autoDelete: true, cancellationToken: ct).ConfigureAwait(false);
+        // M3（2026-10-19）：默认每订阅独立 consumer channel；发布 channel 只承担发布/确认。
+        // 共享单 channel 旧行为可通过 UseSharedConsumerChannel=true 复现。
+        var ownsConsumerChannel = !UseSharedConsumerChannel;
+        var consumerOptions = _consumerDispatchConcurrency is { } concurrency
+            ? new CreateChannelOptions(
+                publisherConfirmationsEnabled: false,
+                publisherConfirmationTrackingEnabled: false,
+                consumerDispatchConcurrency: concurrency)
+            : null;
+        var consumerChannel = ownsConsumerChannel
+            ? await _connection.CreateChannelAsync(consumerOptions, ct).ConfigureAwait(false)
+            : _channel;
+
+        try
+        {
+            await consumerChannel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct).ConfigureAwait(false);
+            await consumerChannel.QueueDeclareAsync(queueName, durable: false, exclusive: true, autoDelete: true, cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // F14（2026-10-21）：原实现在此无 catch——ct 在 channel 创建后取消、或声明失败时，
+            // 每订阅独立 channel 模式会残留 1 个 channel 到连接关闭。
+            await DisposeConsumerChannelSafeAsync(consumerChannel, ownsConsumerChannel, queueName).ConfigureAwait(false);
+            throw;
+        }
 
         // v33 P3：队列删除清理的共享收口——v31 初始化失败 catch 与本轮扩围后的新 catch
         // 共用（避免两处 catch 各自内联同一段尽力删除逻辑）
@@ -312,7 +418,13 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             // 初始化失败会累积一个空壳队列。失败吞掉（channel 已关等，对齐安全包装模式）
             try
             {
-                await _channel.QueueDeleteAsync(queueName, cancellationToken: ct).ConfigureAwait(false);
+                // R14：清理不随订阅取消——ct 已取消时 QueueDelete 抛 OCE 会逃出下方过滤，
+                // 跳过调用方的 channel 释放与 linkedCts.Dispose。
+                await consumerChannel.QueueDeleteAsync(queueName, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 清理链路不响应取消；OCE 已由 None 消除，此处仅防御驱动层意外取消。
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -320,7 +432,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             }
         }
 
-        var consumer = new AsyncEventingBasicConsumer(_channel);
+        var consumer = new AsyncEventingBasicConsumer(consumerChannel);
         // v33 P3 清理域扩围：v31 的清理 catch 只覆盖 BasicQos 起的失败——QueueBindAsync
         // 失败、CreateLinkedTokenSource 抛出时已声明队列无清理（连接长驻时每次失败累积
         // 一个空壳匿名队列）。两失败点纳入下方 try-catch，尽力删除已声明队列后重抛；
@@ -331,7 +443,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         CancellationTokenSource linkedCts;
         try
         {
-            await _channel.QueueBindAsync(queueName, exchange, "", cancellationToken: ct).ConfigureAwait(false);
+            await consumerChannel.QueueBindAsync(queueName, exchange, "", cancellationToken: ct).ConfigureAwait(false);
             linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         }
         catch
@@ -339,19 +451,21 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             // QueueBind 失败时 consumer 尚未注册消费（无 consumerTag），清理只需队列删除；
             // CreateLinkedTokenSource 抛出时无 CTS 对象产生，同样只需队列删除
             await CleanupDeclaredQueueAsync().ConfigureAwait(false);
+            await DisposeConsumerChannelSafeAsync(consumerChannel, ownsConsumerChannel, queueName).ConfigureAwait(false);
             throw;
         }
         consumer.ReceivedAsync += async (_, ea) =>
         {
             try
             {
-                var message = Serializer.Deserialize(ea.Body.Span, descriptor);
+                // 2026-10-19 性能实施轮：泛型反序列化，免运行时 Type 查找与值类型装箱。
+                TMessage? message = Serializer.Deserialize<TMessage>(ea.Body.Span, descriptor);
                 if (message is not null)
                 {
                     // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像，
                     // correlation 兜底读 BasicProperties.CorrelationId（写侧未写 x-correlation-id 头）
                     var consumeContext = MessageConsumeContext.FromHeaders(
-                        ea.BasicProperties.Headers, ea.BasicProperties.CorrelationId);
+                        ea.BasicProperties.Headers, ea.BasicProperties.CorrelationId, ea.BasicProperties.MessageId);
                     // v25 P2-5：per-delivery token 与订阅生命周期 token 组合（每消息一个小 CTS
                     // 分配，消费路径本有反序列化分配；订阅取消/释放时 handler 感知取消→走
                     // OCE 分支 nack 弃置，与关停语义一致）
@@ -376,22 +490,22 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                         // Warning 语义（subscription disposed, in-flight delivery discarded），
                         // 不 requeue
                         _logger.Warning($"Subscription disposed while handling {typeof(TMessage).Name} message, in-flight delivery discarded: {queueName}");
-                        await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                        await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
                         return;
                     }
                     using (deliveryCts)
                     {
-                        await handler((TMessage)message, consumeContext, deliveryCts.Token).ConfigureAwait(false);
+                        await handler(message, consumeContext, deliveryCts.Token).ConfigureAwait(false);
                         // 手动确认 — 仅在处理成功后 ACK
                         // P3 修复：ACK 与 Nack 同样加保护——channel 已关时异常逃逸进消费者回调
-                        await TryAckSafeAsync(ea.DeliveryTag, queueName).ConfigureAwait(false);
+                        await TryAckSafeAsync(consumerChannel, ea.DeliveryTag, queueName).ConfigureAwait(false);
                     }
                 }
                 else
                 {
                     // 反序列化返回 null — 消息无法处理，不重试
                     _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {queueName}");
-                    await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                    await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (linkedCts.IsCancellationRequested)
@@ -404,7 +518,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // 误标为关停 Warning；CTS.IsCancellationRequested 属性在 Dispose 后读取安全（不抛），
                 // 句柄释放（linkedCts.Dispose）后的飞行中 OCE 同样落回通用 catch 记 Error
                 _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled during shutdown, discarding: {queueName}");
-                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is OperationCanceledException)
             {
@@ -416,7 +530,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // 共用 _channel 的全部订阅与发布一并瘫痪。本分支记 Error + nack 弃置
                 //（与 ITM-008 at-most-once 对齐），消费继续
                 _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, discarding: {queueName}");
-                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -424,7 +538,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // P2 定案：exclusive 队列的消费者只有本连接——requeue:true 会立即重投给自己，
                 // 持续失败时形成无退避热循环。与 Kafka 路径 ITM-008 对齐：记录后弃置（at-most-once）。
                 // 需要失败重试语义的应用应使用持久队列 + DLX，由自身的 Broker 配置承载。
-                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
         };
 
@@ -437,23 +551,35 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         CancellationTokenRegistration tokenReg = default;
         try
         {
-            await _channel.BasicQosAsync(0, _prefetchCount, false, ct).ConfigureAwait(false);
-            consumerTag = await _channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken: ct).ConfigureAwait(false);
+            await consumerChannel.BasicQosAsync(0, _prefetchCount, false, ct).ConfigureAwait(false);
+            consumerTag = await consumerChannel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken: ct).ConfigureAwait(false);
 
             // v25 P2-5：ct 取消 → 异步解绑消费者终止消费；channel 已关等异常由安全包装吞成
             // Warning。句柄释放时 Dispose registration 防泄漏（释放与取消并发时，双
             // BasicCancelAsync 的后者同样被安全包装吞掉）
-            tokenReg = ct.Register(() => { _ = CancelConsumeSafeAsync(consumerTag, queueName); });
+            // CA2025：ct 回调为同步签名，无法 await；取消任务与 consumer channel 释放
+            // 由订阅句柄的有序清理（Cancel → Dispose channel）兜底。
+#pragma warning disable CA2025
+            // F21（2026-10-21）：丢弃的 Task 改为内部 catch-all 观察——原 CancelConsumeSafeAsync
+            // 的过滤排除 OCE，逃逸路径无日志且成为未观察任务。
+            tokenReg = ct.Register(static state =>
+            {
+                var (broker, channel, tag, queue) = ((RabbitMqBroker, IChannel, string, string))state!;
+                _ = broker.CancelConsumeObservedAsync(channel, tag, queue);
+            }, (this, consumerChannel, consumerTag, queueName));
+#pragma warning restore CA2025
         }
         catch
         {
             await tokenReg.DisposeAsync().ConfigureAwait(false);
             if (consumerTag is not null)
-                await CancelConsumeSafeAsync(consumerTag, queueName).ConfigureAwait(false);
-            linkedCts.Dispose();
-            // v33 P3：队列删除逻辑上移至 CleanupDeclaredQueueAsync 共享收口（QueueBind/
-            // linkedCts 失败的扩围 catch 同用；v31 原内联 try-catch 注释见局部函数内）
+                await CancelConsumeSafeAsync(consumerChannel, consumerTag, queueName).ConfigureAwait(false);
+            // F14（2026-10-21）：顺序修正——队列删除必须先于 channel 释放。原实现先
+            // DisposeConsumerChannelSafeAsync 再 QueueDeleteAsync，删除打在已释放 channel 上
+            // 必失败并被吞，exclusive 空队列残留到连接关闭。
             await CleanupDeclaredQueueAsync().ConfigureAwait(false);
+            await DisposeConsumerChannelSafeAsync(consumerChannel, ownsConsumerChannel, queueName).ConfigureAwait(false);
+            linkedCts.Dispose();
             throw;
         }
 
@@ -473,7 +599,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             _subscriptions.TryRemove(consumerTag, out _);
             await tokenReg.DisposeAsync().ConfigureAwait(false);
             await linkedCts.CancelAsync().ConfigureAwait(false);
-            await CancelConsumeSafeAsync(consumerTag, queueName).ConfigureAwait(false);
+            await CancelConsumeSafeAsync(consumerChannel, consumerTag, queueName).ConfigureAwait(false);
+            await DisposeConsumerChannelSafeAsync(consumerChannel, ownsConsumerChannel, queueName).ConfigureAwait(false);
             linkedCts.Dispose();
         });
         _subscriptions[consumerTag] = subscription;
@@ -500,11 +627,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     /// Nack 的安全包装——channel 已关/连接断时 BasicNackAsync 自身会抛异常，
     /// 若从 ReceivedAsync 事件处理器逃逸会中断消费者（P2 修复）。
     /// </summary>
-    private async Task TryNackSafeAsync(ulong deliveryTag, bool requeue, string queueName)
+    private async Task TryNackSafeAsync(IChannel channel, ulong deliveryTag, bool requeue, string queueName)
     {
         try
         {
-            await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: requeue).ConfigureAwait(false);
+            await channel.BasicNackAsync(deliveryTag, multiple: false, requeue: requeue).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -516,11 +643,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     /// ACK 的安全包装——与 TryNackSafeAsync 同型（P3 修复：成功路径 channel 已关时
     /// BasicAckAsync 抛异常同样会逃逸进消费者回调）。
     /// </summary>
-    private async Task TryAckSafeAsync(ulong deliveryTag, string queueName)
+    private async Task TryAckSafeAsync(IChannel channel, ulong deliveryTag, string queueName)
     {
         try
         {
-            await _channel.BasicAckAsync(deliveryTag, multiple: false).ConfigureAwait(false);
+            await channel.BasicAckAsync(deliveryTag, multiple: false).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -532,15 +659,46 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     /// 取消订阅的安全包装——channel 已关/连接断时 BasicCancelAsync 抛 AlreadyClosed 类异常，
     /// 吞成 Warning（v25 P2-5：ct 取消路径与句柄释放路径共用，对齐 TryNackSafeAsync 模式）。
     /// </summary>
-    private async Task CancelConsumeSafeAsync(string consumerTag, string queueName)
+    private async Task CancelConsumeSafeAsync(IChannel channel, string consumerTag, string queueName)
     {
         try
         {
-            await _channel.BasicCancelAsync(consumerTag).ConfigureAwait(false);
+            await channel.BasicCancelAsync(consumerTag).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicCancel failed (channel closed?): {queueName}, consumerTag={consumerTag}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// F21（2026-10-21）：取消回调的观察包装——取消回调不能 async，原 `_ = CancelConsumeSafeAsync`
+    /// 丢弃的 Task 在 OCE 路径无日志且可能成为未观察异常。本方法捕获全部异常并记录。
+    /// </summary>
+    private async Task CancelConsumeObservedAsync(IChannel channel, string consumerTag, string queueName)
+    {
+        try
+        {
+            await CancelConsumeSafeAsync(channel, consumerTag, queueName).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, $"CancelConsume callback failed: {queueName}, consumerTag={consumerTag}");
+        }
+    }
+
+    /// <summary>释放本订阅自有的 consumer channel；共享 channel 模式不释放。</summary>
+    private async Task DisposeConsumerChannelSafeAsync(IChannel channel, bool ownsChannel, string queueName)
+    {
+        if (!ownsChannel)
+            return;
+        try
+        {
+            await channel.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Warning($"Consumer channel dispose failed: {queueName}: {ex.Message}");
         }
     }
 

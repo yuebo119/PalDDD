@@ -200,10 +200,18 @@ public static class PostgreSqlJsonb
 
     // ── 常用于 Outbox / Saga 查询的快捷方法 ──
 
-    /// <summary>按 Outbox 消息类型过滤（payload @> '{"Type":"xxx"}')</summary>
+    /// <summary>
+    /// 按 Outbox 消息类型过滤：<c>"type" = 'xxx'</c>。
+    /// R13 F6：框架 outbox 表的类型在独立 <c>type</c> 列（payload 是消息体，不含 Type
+    /// 字段）——原 payload @> '{"Type":"xxx"}' 对框架表恒 0 行。payload 内嵌 Type 的
+    /// 自定义表请用 <see cref="Include"/>。
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string OutboxByType(string messageType)
-        => Include("payload", "Type", messageType);
+    {
+        ArgumentNullException.ThrowIfNull(messageType);
+        return $"{Escape("type")} = '{EscapeLiteral(messageType)}'";
+    }
 
     /// <summary>按 Saga 状态键过滤（saga_data @> '{"OrderId":"xxx"}')</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

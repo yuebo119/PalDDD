@@ -40,6 +40,58 @@ public sealed partial class DetachedStreamTests
     }
 
     [Test]
+    public async Task DetachedRun_PostBody_StartsAndExposesRunId()
+    {
+        // POST 启动形态（2026-10-19 补强）：prompt 类请求体走 JSON body，避免 URL 长度上限。
+        await using var host = await DetachedHost.StartAsync(run => run
+            .WithHandler(new SequencedHandler(2))
+            .WithOptions(o => o.DetachGrace = TimeSpan.FromSeconds(30)));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri($"{host.BaseAddress}/detached/post"))
+        {
+            Content = new StringContent("{\"prompt\":\"p\"}", Encoding.UTF8, "application/json")
+        };
+        using var response = await host.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        var frames = await ReadSseAsync(response);
+
+        await Assert.That(response.StatusCode).IsEqualTo(System.Net.HttpStatusCode.OK);
+        await Assert.That(response.Headers.TryGetValues("X-Run-Id", out var ids)).IsTrue();
+        await Assert.That(ids!.First()).IsNotEmpty();
+        await Assert.That(frames.Count(f => f.EventName == "token")).IsEqualTo(2);
+        await Assert.That(frames.Last().EventName).IsEqualTo("done");
+    }
+
+    [Test]
+    public async Task DetachedRun_Post_NonJsonContentType_Returns415()
+    {
+        await using var host = await DetachedHost.StartAsync(run => run
+            .WithHandler(new SequencedHandler(1)));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri($"{host.BaseAddress}/detached/post"))
+        {
+            Content = new StringContent("{\"prompt\":\"p\"}", Encoding.UTF8, "text/plain")
+        };
+        using var response = await host.Client.SendAsync(request);
+
+        await Assert.That(response.StatusCode).IsEqualTo(System.Net.HttpStatusCode.UnsupportedMediaType);
+    }
+
+    [Test]
+    public async Task DetachedRun_Post_MalformedJson_Returns400()
+    {
+        await using var host = await DetachedHost.StartAsync(run => run
+            .WithHandler(new SequencedHandler(1)));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri($"{host.BaseAddress}/detached/post"))
+        {
+            Content = new StringContent("{not-json", Encoding.UTF8, "application/json")
+        };
+        using var response = await host.Client.SendAsync(request);
+
+        await Assert.That(response.StatusCode).IsEqualTo(System.Net.HttpStatusCode.BadRequest);
+    }
+
+    [Test]
     public async Task Reattach_AfterDisconnect_ReplaysFromLastEventId()
     {
         await using var host = await DetachedHost.StartAsync(run => run
@@ -308,6 +360,25 @@ public sealed partial class DetachedStreamTests
         }
         return frames;
     }
+
+    [Test]
+    public async Task MapDetachedStreamQuery_InvalidKeepAlive_ThrowsAtMapTime()
+    {
+        // R13 F18：断线续跑三端点原先只拒绝 <=0，缺失 Task.Delay 上限与亚毫秒下界——
+        // 60 天被静默钳到约 24.8 天（配置错误无声通过），0.5ms 则退化为紧循环。
+        var web = WebApplication.CreateSlimBuilder();
+        web.Services.AddDetachedStreamRuns();
+        await using var app = web.Build();
+
+        await Assert.That(() => app.MapDetachedStreamQuery<DetachedQuery, DetachedChunk>(
+                "/d-beyond", ctx => new DetachedQuery("p"), DetachedStreamJsonContext.Default.DetachedChunk,
+                keepAliveInterval: TimeSpan.FromDays(60)))
+            .Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => app.MapDetachedStreamQuery<DetachedQuery, DetachedChunk>(
+                "/d-subms", ctx => new DetachedQuery("p"), DetachedStreamJsonContext.Default.DetachedChunk,
+                keepAliveInterval: TimeSpan.FromTicks(5000)))
+            .Throws<ArgumentOutOfRangeException>();
+    }
 }
 
 // ─── 测试宿主（真 Kestrel，独立端口） ───
@@ -367,6 +438,13 @@ internal sealed class DetachedHost : IAsyncDisposable
             DetachedStreamJsonContext.Default.DetachedChunk,
             eventSelector: chunk => chunk.Kind,
             idSelector: chunk => chunk.Index.ToString());
+        // POST 启动形态（2026-10-19 补强）：JSON body 承载 prompt 类请求体
+        app.MapDetachedStreamQuery<DetachedQuery, DetachedChunk>(
+            "/detached/post",
+            DetachedStreamJsonContext.Default.DetachedQuery,
+            DetachedStreamJsonContext.Default.DetachedChunk,
+            eventSelector: chunk => chunk.Kind,
+            idSelector: chunk => chunk.Index.ToString());
         app.MapStreamRunAttach<DetachedChunk>(
             "/runs", DetachedStreamJsonContext.Default.DetachedChunk);
         app.MapStreamRunCancel("/runs");
@@ -419,6 +497,7 @@ internal sealed class DetachedHostBuilder
 
 // 让 WebApplication 的 JSON 上下文可跨夹具复用（测试项目内单一类型）
 [JsonSerializable(typeof(DetachedChunk))]
+[JsonSerializable(typeof(DetachedQuery))]
 internal sealed partial class DetachedStreamJsonContext : JsonSerializerContext
 {
 }

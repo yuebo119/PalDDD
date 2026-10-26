@@ -8,6 +8,8 @@
 //     · `.github/dependabot.yml` 的 `Verify.TUnit >= 33` ignore 注释 —— 2026-09-23
 //       裁决「本项目只使用开源依赖，不接带商业许可门的库」，豁免声明 / 赞助 /
 //       Verify_SponsorshipLicenseIgnored 三条路都不走；
+//       （该文件已于 2026-10-26 随「移除 Dependabot」裁决删除，原文见 git 历史；
+//         本条裁决由下方 [2] 禁令清单继续机械执行，防线不丢）
 //     · `CHANGELOG.md` `[Unreleased]` → `### Dependencies` 段同一裁决的发布记录。
 // 为什么写成脚本：声明只活在文档里，而文档不会执行。依赖一变就跑、跑不过就拦，
 // 才叫机械门禁（全局 AGENTS.md「确定性 > 概率性」）。

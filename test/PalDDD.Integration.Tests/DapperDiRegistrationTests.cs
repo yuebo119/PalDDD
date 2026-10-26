@@ -10,6 +10,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using PalDDD.Core.Repository;
 using PalDDD.Dapper;
+using PalDDD.Dapper.MySql;
 using PalDDD.EventLog;
 using PalDDD.Projections;
 using PalDDD.Transactions;
@@ -71,5 +72,22 @@ public sealed class DapperDiRegistrationTests
         var conn1 = scope.ServiceProvider.GetRequiredService<DbConnection>();
         var conn2 = scope.ServiceProvider.GetRequiredService<DbConnection>();
         await Assert.That(ReferenceEquals(conn1, conn2)).IsTrue();
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSource_ContainerDispose_ReleasesDataSource()
+    {
+        // R13 F15：实例注册（AddSingleton(instance)）不会被 MS.DI 释放——宿主关闭后
+        // 连接池留到进程退出。改工厂注册后容器拥有实例，Dispose 应使 DataSource 失效。
+        var services = new ServiceCollection();
+        services.AddPalMySqlDataSource(
+            "Server=127.0.0.1;Port=3306;Database=probe;User ID=root;Password=placeholder",
+            applyOptimization: false);
+        var provider = services.BuildServiceProvider();
+        var dataSource = provider.GetRequiredService<DbDataSource>();
+
+        provider.Dispose();
+
+        await Assert.That(() => dataSource.CreateConnection()).Throws<ObjectDisposedException>();
     }
 }

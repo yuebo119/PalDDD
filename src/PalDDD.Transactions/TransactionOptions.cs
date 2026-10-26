@@ -17,6 +17,16 @@ internal static class LeaseOwnerFactory
     internal static string Create() => $"{Environment.MachineName}:{PalUlid.New()}";
 }
 
+/// <summary>Outbox 投递模式（2026-10-19 性能实施轮）。</summary>
+public enum OutboxDeliveryMode
+{
+    /// <summary>逐条确认 + 逐条终态标记（旧行为，兼容回退）。</summary>
+    Serial,
+
+    /// <summary>按 broker/store 能力自动选择窗口与批量标记；能力不足时回落 Serial。</summary>
+    Auto
+}
+
 /// <summary>发件箱发布器运行时选项。</summary>
 /// <remarks>
 /// ITM-166 声明：<see cref="LeaseDuration"/> 与 <see cref="LeaseOwner"/> 的集中校验在
@@ -30,6 +40,22 @@ public sealed class OutboxOptions
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// 投递模式（2026-10-19 性能实施轮）。<see cref="OutboxDeliveryMode.Auto"/> 在 broker
+    /// 声明支持并发发布且 store 实现 <see cref="IBatchMarkOutboxStore"/> 时，自动启用
+    /// 至少 16 路发布窗口，并把标记阈值提升到与 BatchSize 对齐（上限 400 行），
+    /// 用 <see cref="BatchMarkFlushInterval"/> 设时间上界；
+    /// <see cref="OutboxDeliveryMode.Serial"/> 保持旧行为（逐条确认/逐条标记）作为兼容回退。
+    /// </summary>
+    public OutboxDeliveryMode DeliveryMode { get; set; } = OutboxDeliveryMode.Auto;
+
+    /// <summary>
+    /// 终态标记时间上界（<see cref="OutboxDeliveryMode.Auto"/> 生效）。标记在“满
+    /// <see cref="BatchMarkThreshold"/> 条”或“距上次冲刷满本间隔”时发生，重复窗口由本值
+    /// 加上在途发布时长界定，而不是由整批时长界定。必须小于 <see cref="LeaseDuration"/>
+    /// 的三分之一（启动期校验）。默认 1 秒。
+    /// </summary>
+    public TimeSpan BatchMarkFlushInterval { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>
     /// 轮询间隔 — OutboxProcessor 的轮询周期。
     /// <para>
     /// ✅ <b>热读声明（T1.2，2026-10-11 优化实施轮）</b>：经 DI 注册（<c>AddPalOutbox</c>）时，
@@ -39,7 +65,9 @@ public sealed class OutboxOptions
     /// <c>LeaseOwner</c>/<c>MaxRetryCount</c> 一直为每 tick 热读取。
     /// </para>
     /// <para>
-    /// ⚠️ <b>自适应排空（同轮）</b>：上一轮租到满批时下一轮<b>不等本间隔</b>、仅让步 1ms 即续批
+    /// ⚠️ <b>自适应排空（同轮）</b>：上一轮租到满批时下一轮<b>不等本间隔</b>、仅
+    /// <c>Task.Yield()</c> 让出执行权即续批（2026-10-21 勘正：原写「让步 1ms」，实际
+    /// 的 <c>Task.Delay(1)</c> 实测约 11.46ms，已改为 Yield）
     ///（积压排空吞吐从 batchSize/(tick+interval) 提升到 batchSize/tick）；未满批才按本间隔轮询。
     /// 本值因此是「空/浅队列的检测节奏」而非「最大吞吐节奏」——调大它不再压低积压排空速度。
     /// </para>
@@ -103,18 +131,21 @@ public sealed class OutboxOptions
 
     /// <summary>
     /// 发布确认流水线窗口（T3.1，2026-10-11 优化实施轮）——分区内同时处于 in-flight 的
-    /// 发布确认数上限。<b>默认 1 = 串行逐条确认（既有行为逐字不变）</b>；<c>&gt;1</c> 启用
-    /// FIFO 流水线：broker 确认往返不再逐条串行相乘（收益量级见 performance.md 投递吞吐段：
-    /// RTT 主导场景为窗口量级）。
+    /// 发布确认数上限。<b>选项默认 1</b>（<see cref="OutboxDeliveryMode.Serial"/> 下即
+    /// 串行逐条确认）；<see cref="OutboxDeliveryMode.Auto"/>（默认）且 broker 声明
+    /// <c>SupportsConcurrentPublish</c> 时由投递策略提升到至少 16（显式大于 16 的值参与取大）。
+    /// <c>&gt;1</c> 启用流水线：broker 确认往返不再逐条串行相乘（收益量级见
+    /// performance.md 投递吞吐段：RTT 主导场景为窗口量级）。
     /// <para>
-    /// ⚠️ 语义边界：①分区内<b>标记顺序仍按启动序</b>（RabbitMQ 单 channel 帧序由
-    /// <c>_confirmSemaphore</c> 天然保序；Kafka producer 队列保序，但<b>重试乱序须启用
-    /// enable.idempotence 才有保证</b>）；消费方应具备 Inbox 幂等，乱序窗口随本值增大。
-    /// ②失败路径（退避重试/死信）与串行形态逐项一致。③broker 线程安全前提与
+    /// ⚠️ 语义边界：①发布按分区序启动，<b>出窗处理按完成序</b>（2026-10-21 起）——
+    /// 单条慢投递只占自己的窗口槽，不阻塞已完成消息的标记与新发布启动；标记顺序不再
+    /// 与启动序一致，消费方应具备 Inbox 幂等（乱序窗口随本值增大）。②失败路径
+    /// （退避重试/死信）与串行形态逐项一致。③broker 线程安全前提与
     /// <see cref="MaxDegreeOfParallelism"/> 同（Kafka producer 天然多路 / RabbitMQ.Client 7.x
-    /// 共享 channel 并发发布已核实）。④与 <see cref="MaxDegreeOfParallelism"/> 正交：
-    /// 后者分 worker（各自串行窗口），本值在每个 worker 的分区内生效。启动期经
-    /// <c>ValidateOnStart</c> 校验 ≥ 1。
+    /// 共享 channel 并发发布已核实；Kafka 重试乱序须启用 enable.idempotence，框架在调用方
+    /// 未显式配置 acks/retries/in-flight 时默认开启）。④与
+    /// <see cref="MaxDegreeOfParallelism"/> 正交：后者分 worker（各自串行窗口），本值在
+    /// 每个 worker 的分区内生效。启动期经 <c>ValidateOnStart</c> 校验 ≥ 1。
     /// </para>
     /// </summary>
     public int MaxInFlightPublishes { get; set; } = 1;
@@ -122,8 +153,11 @@ public sealed class OutboxOptions
     /// <summary>
     /// 终态标记批量化阈值（R4/P0-2，ADR-027，2026-10-14 性能实施轮）——成功路径的
     /// MarkProcessed 累积到本值后经 <c>IBatchMarkOutboxStore.MarkProcessedBatchAsync</c>
-    /// 单语句批量写（按 RetryCount 分组，组数 = 批内去重重试计数数）。<b>默认 1 = 逐条
-    /// 标记（既有行为逐字不变）</b>；<c>&gt;1</c> 启用批量：标记往返从每消息 1 次降为
+    /// 单语句批量写（按 RetryCount 分组，组数 = 批内去重重试计数数）。<b>选项默认 1</b>
+    /// （<see cref="OutboxDeliveryMode.Serial"/> 下即逐条标记）；<see cref="OutboxDeliveryMode.Auto"/>
+    /// （默认）且 store 实现 <c>IBatchMarkOutboxStore</c> 时由投递策略提升到
+    /// <c>min(BatchSize, 400)</c>（<see cref="BatchSize"/> 默认 100，即有效值 100），
+    /// 显式设置更大的值参与取大。<c>&gt;1</c> 启用批量：标记往返从每消息 1 次降为
     /// 每批（组）1 次——远程 DB 上与 T3.1 流水线化同为主吞吐杠杆（T0.2 量具实测逐条
     /// 确认串行化占投递耗时 80% @RTT20ms）。
     /// <para>
@@ -132,8 +166,11 @@ public sealed class OutboxOptions
     /// 消费方应具备 Inbox 幂等，与 <see cref="MaxInFlightPublishes"/> 同族声明）；②需
     /// store 实现 <c>IBatchMarkOutboxStore</c>（Dapper/EF Core/InMemory/PalORM 四栈实现，
     /// PalORM 2026-10-16 补齐——until 编码三方言探针实证，见 ADR-027）；③失败路径（死信/重试释放）仍逐条即时标记不变；
-    /// ④分区内标记批序 = 租约序（保序声明同 T3.1）。启动期经 <c>ValidateOnStart</c>
-    /// 校验 ≥ 1。单语句组内行数上限 400（SQLite 参数上限 999 防御，实现内分块）。
+    /// ④分区内标记批序 = 出窗完成序（2026-10-21 起；窗口 16 时首条慢发布的消息标记
+    /// 落在其余 15 条之后，原「租约序」声明失实）；⑤Auto 提升后的重复窗口上界由
+    /// <see cref="BatchMarkFlushInterval"/> 加在途发布时长界定，不随本值线性放大。
+    /// 启动期经 <c>ValidateOnStart</c> 校验 ≥ 1。单语句组内行数上限 400
+    /// （SQLite 参数上限 999 防御，实现内分块）。
     /// </para>
     /// </summary>
     public int BatchMarkThreshold { get; set; } = 1;
@@ -143,6 +180,16 @@ public sealed class OutboxOptions
 public sealed class InboxOptions
 {
     public string DefaultConsumerName { get; set; } = "default";
+
+    /// <summary>
+    /// 处理租约时长（默认 5 分钟）。
+    /// <para>
+    /// <b>配置契约</b>：必须大于最慢 handler 的执行时长。单次处理超过本值后，同一
+    /// (ConsumerName, MessageId) 可被第二个消费者重新认领并并发执行——副作用的重复发生
+    /// 不会自动去重。InboxProcessor 在 handler 时长达到本值时记录
+    /// <c>InboxHandlerLeaseExceeded</c>（1006）告警；调整本值以覆盖最长 handler。
+    /// </para>
+    /// </summary>
     public TimeSpan ProcessingTimeout { get; set; } = TimeSpan.FromMinutes(5);
 }
 
@@ -166,6 +213,17 @@ public sealed class SagaProcessorOptions
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(30);
     public int TimeoutScanBatchSize { get; set; } = 256;
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// 启用到期时间过滤（2026-10-19 M1；<b>2026-10-21 起默认 true</b>）：只租约
+    /// <c>NextCheckAt &lt;= now</c> 或 <c>NextCheckAt IS NULL</c> 的活跃 Saga。
+    /// 活动 Saga 的 NextCheckAt 恒有值——有带 Timeout 的已开始步骤时为真实到期时刻，
+    /// 否则为哨兵 <see cref="SagaState.NoPendingTimeout"/>；NULL 只来自迁移前存量行，
+    /// 到期谓词把它视为到期，首次扫描后由 <c>SagaProcessor</c> 回填（无待检查超时写哨兵），
+    /// 因此无需先跑独立回填即可开启。置 false 恢复全量活跃扫描。
+    /// 自定义 store 未实现 <see cref="IDueTimeSagaStore{TState}"/> 时自动回落全量路径。
+    /// </summary>
+    public bool EnableDueTimeFilter { get; set; } = true;
 
     /// <summary>
     /// 租约持有者标识 — 用于区分多实例部署中的不同节点。默认为 {机器名}:{随机ID}。

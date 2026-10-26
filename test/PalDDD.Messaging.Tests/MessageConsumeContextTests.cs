@@ -117,10 +117,10 @@ public sealed class MessageConsumeContextTests
 
         var alloc = GC.GetAllocatedBytesForCurrentThread() - baseline;
 
-        // 预算构成（新码实测标定，2026-10-16）：单上下文对象 5 个引用字段 ≈ 56B/迭代。
-        // 旧码（+ 空 Dictionary ≈ 80B ≈ 136B/迭代）在本预算下红——锁定的回归敏感点即
-        // 相关消息消费路径空字典构造的重引入。
-        await Assert.That(alloc).IsLessThanOrEqualTo(70L * iterations);
+        // 预算构成（新码实测标定，2026-10-21）：单上下文对象 6 个引用字段（含 MessageId）
+        // ≈ 72B/迭代。旧码（+ 空 Dictionary ≈ 80B ≈ 136B/迭代）仍在本预算下红——锁定的
+        // 回归敏感点即相关消息消费路径空字典构造的重引入。
+        await Assert.That(alloc).IsLessThanOrEqualTo(76L * iterations);
     }
 
     [Test]
@@ -218,6 +218,6 @@ public sealed class MessageConsumeContextTests
         var alloc = MeasureAllocation(static () => _ = MessageConsumeContext.FromHeaders(headers: null));
 
         // 允许微量 GC 噪声（< 100B 总计）；旧码的空 Dictionary ~80B × 10k 迭代在此预算下红
-        await Assert.That(alloc <= 100).IsTrue();
+        await Assert.That(alloc).IsLessThanOrEqualTo(100);
     }
 }

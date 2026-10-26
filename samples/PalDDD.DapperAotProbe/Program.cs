@@ -7,6 +7,7 @@
 //   dotnet run --project samples/PalDDD.DapperAotProbe -c Release          # SQLite（:memory:）
 //   dotnet run --project ... -c Release -- --provider Pg                   # 外部 PG
 //   dotnet run --project ... -c Release -- --provider MySql                # 外部 MySQL
+//   dotnet run --project ... -c Release -- --provider Pg --outbox-migration # 10 万行 Outbox 回填/索引 A-B
 //   dotnet publish -r win-x64 /p:PublishAot=true 后从仓库根实跑二进制        # NativeAOT 实测
 // 外部库凭据解析顺序：PALDDD_TEST_PG / PALDDD_TEST_MYSQL 环境变量 →
 //   appsettings.test.local.json → appsettings.test.json（密码不打印——P0 #1）。
@@ -37,6 +38,7 @@ for (int i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--provider") provider = args[i + 1];
 }
+var migrationProbe = args.Contains("--outbox-migration", StringComparer.Ordinal);
 Console.WriteLine($"═══ Dapper AOT 探针 · provider={provider} ═══");
 
 var checks = new List<(string Name, bool Pass)>();
@@ -82,13 +84,21 @@ if (external)
 await conn.ExecuteAsync(ddl).ConfigureAwait(false);
 Console.WriteLine("schema created");
 
-// ═══ 六组件全链路 ═══
-await ProbeOutboxAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeEventLogAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeIdempotencyAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeSagaAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeCheckpointAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeInboxAsync(conn, dbType, Check).ConfigureAwait(false);
+// ═══ 六组件全链路 / Outbox 迁移量测 ═══
+if (migrationProbe)
+{
+    await OutboxMigrationProbe.RunAsync(conn, dbType, Check).ConfigureAwait(false);
+}
+else
+{
+    await ProbeOutboxAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeEventLogAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeIdempotencyAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeSagaAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeReleaseAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeCheckpointAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeInboxAsync(conn, dbType, Check).ConfigureAwait(false);
+}
 
 // ═══ 外部库清理 ═══
 if (external)
@@ -119,16 +129,32 @@ static async Task ProbeOutboxAsync(DbConnection conn, DapperDbType dbType, Actio
     };
     await store.AddMessageAsync(msg);
     check("outbox add (byte[] blob)", true);
+    check("outbox next_attempt set on add", msg.NextAttemptAt is not null);
 
     var leased = await store.LeasePendingMessagesAsync(10, "probe-owner",
         TimeSpan.FromMinutes(2), new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
     check("outbox lease acquired 1", leased.Count == 1);
+    check("outbox availability folded into lease",
+        leased.Count == 1 && leased[0].NextAttemptAt == leased[0].LockedUntil);
     check("outbox payload round-trip", leased.Count == 1 && leased[0].Payload.SequenceEqual(payload));
 
     await store.MarkProcessedAsync(leased[0], TimeProvider.System.GetUtcNow());
     var pending = await store.GetPendingMessagesAsync(10,
         new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
     check("outbox processed terminal", pending.Count == 0);
+
+    var batch = Enumerable.Range(0, 20)
+        .Select(i => new OutboxMessage
+        {
+            Type = $"probe.batch.{i}",
+            Payload = [1],
+            ContentType = "application/json",
+            SchemaVersion = 1,
+            Status = OutboxStatus.Pending,
+            CreatedAt = TimeProvider.System.GetUtcNow(),
+        }).ToList();
+    var batchAdded = await store.AddMessagesAsync(batch, CancellationToken.None).ConfigureAwait(false);
+    check("outbox batch 20 (mysql fallback for >16 without local_infile)", batchAdded == 20);
 }
 
 // ═══ ③ EventLog：AppendAsync（byte[] Payload/Metadata）→ ReadStreamAsync 往返 ═══
@@ -150,6 +176,53 @@ static async Task ProbeEventLogAsync(DbConnection conn, DapperDbType dbType, Act
     check("eventlog append+read", read is not null);
     check("eventlog payload round-trip", read is not null && read.Payload.Span.SequenceEqual(payload));
     check("eventlog metadata round-trip", read is not null && read.Metadata.Span.SequenceEqual(metadata));
+
+    // 2026-10-20：多条守卫追加路径（PG INSERT..SELECT 原子版本判定；其它方言走既有批路径）
+    var batchStream = $"probe-batch-{PalUlid.New().ToString()[..8]}";
+    EventData NewEvent() => new(PalUlid.New(), "probe.event.v1", 1, "application/json",
+        payload, metadata, EventAuditMetadata.Empty);
+    var firstBatch = await log.AppendAsync(batchStream, ExpectedStreamVersion.NoStream,
+        [NewEvent(), NewEvent(), NewEvent()], CancellationToken.None).ConfigureAwait(false);
+    check("eventlog batch no-stream versions",
+        firstBatch.FirstStreamVersion == 0 && firstBatch.LastStreamVersion == 2);
+
+    var exactBatch = await log.AppendAsync(batchStream, ExpectedStreamVersion.Exact(2),
+        [NewEvent(), NewEvent()], CancellationToken.None).ConfigureAwait(false);
+    check("eventlog batch exact versions",
+        exactBatch.FirstStreamVersion == 3 && exactBatch.LastStreamVersion == 4);
+
+    var staleRejected = false;
+    try
+    {
+        await log.AppendAsync(batchStream, ExpectedStreamVersion.Exact(1),
+            [NewEvent(), NewEvent()], CancellationToken.None).ConfigureAwait(false);
+    }
+    catch (EventStreamConcurrencyException)
+    {
+        staleRejected = true;
+    }
+    check("eventlog batch stale exact rejected", staleRejected);
+
+    var batchRead = 0;
+    await foreach (var _ in log.ReadStreamAsync(batchStream,
+        cancellationToken: CancellationToken.None).ConfigureAwait(false))
+        batchRead++;
+    check("eventlog batch read 5", batchRead == 5);
+
+    // 2026-10-20：PG 原子批路径上限回归——4,500 行超过 4,000 上限，回落预检 + 分块
+    var capStream = $"probe-cap-{PalUlid.New().ToString()[..8]}";
+    var capBatch = new EventData[4_500];
+    for (var i = 0; i < capBatch.Length; i++)
+        capBatch[i] = NewEvent();
+    var capResult = await log.AppendAsync(capStream, ExpectedStreamVersion.NoStream, capBatch,
+        CancellationToken.None).ConfigureAwait(false);
+    check("eventlog batch cap 4500 versions",
+        capResult.FirstStreamVersion == 0 && capResult.LastStreamVersion == 4_499);
+    var capRead = 0;
+    await foreach (var _ in log.ReadStreamAsync(capStream,
+        cancellationToken: CancellationToken.None).ConfigureAwait(false))
+        capRead++;
+    check("eventlog batch cap read 4500", capRead == 4_500);
 }
 
 // ═══ ④ Idempotency：TryStart → MarkCompleted（byte[] response）→ GetAsync 往返 ═══
@@ -192,6 +265,62 @@ static async Task ProbeSagaAsync(DbConnection conn, DapperDbType dbType, Action<
     check("saga loaded", loaded is not null);
     check("saga state round-trip", loaded?.CurrentState == "ProbeInitial"
         && loaded?.CustomerId == "probe-customer");
+
+    // 收尾为终态，避免污染后续 release 探针的活跃集合。
+    state.Status = SagaStatus.Completed;
+    state.CurrentState = "ProbeCompleted";
+    state.CompletedAt = TimeProvider.System.GetUtcNow();
+    await store.SaveChangesAsync(state, CancellationToken.None).ConfigureAwait(false);
+}
+
+// ═══ ⑤b Saga 批释放：3 参/4 参显式 @idN 列表（PG 42601 回归守卫）═══
+static async Task ProbeReleaseAsync(DbConnection conn, DapperDbType dbType, Action<string, bool> check)
+{
+    var store = new DapperSagaStateStore<ProbeSagaState>(conn,
+        jsonTypeInfo: DapperAotProbeJsonContext.Default.ProbeSagaState,
+        dbType: dbType);
+    var now = TimeProvider.System.GetUtcNow();
+    for (var i = 0; i < 5; i++)
+    {
+        await store.SaveChangesAsync(new ProbeSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "ProbeRelease",
+            Status = SagaStatus.Active,
+            CreatedAt = now.AddSeconds(i),
+            CustomerId = $"release-{i}",
+        }, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    var leased = await store.LeaseActiveSagasAsync(
+        "probe-release", TimeSpan.FromMinutes(2), 10, CancellationToken.None).ConfigureAwait(false);
+    check("saga release lease 5", leased.Count == 5);
+
+    var released4 = await store.ReleaseLeasesAsync(
+        "probe-release", leased, now.AddSeconds(-1), CancellationToken.None).ConfigureAwait(false);
+    check("saga release 4-arg", released4 == 5);
+
+    var leasedAgain = await store.LeaseActiveSagasAsync(
+        "probe-release", TimeSpan.FromMinutes(2), 10, CancellationToken.None).ConfigureAwait(false);
+    var released3 = await store.ReleaseLeasesAsync(
+        "probe-release", leasedAgain, CancellationToken.None).ConfigureAwait(false);
+    check("saga release 3-arg", released3 == 5);
+
+    var forSave = await store.LeaseActiveSagasAsync(
+        "probe-save", TimeSpan.FromMinutes(2), 10, CancellationToken.None).ConfigureAwait(false);
+    check("saga savemany lease 5", forSave.Count == 5);
+    foreach (var saga in forSave)
+    {
+        saga.Status = SagaStatus.Completed;
+        saga.CurrentState = "ProbeBatchSaved";
+        saga.CompletedAt = now;
+    }
+    var results = await store.SaveManyAsync(forSave, CancellationToken.None).ConfigureAwait(false);
+    check("saga savemany all rows", results.Count == 5 && results.All(r => r == 1));
+    var saved = await store.GetByIdAsync(forSave[0].SagaId, CancellationToken.None).ConfigureAwait(false);
+    check("saga savemany persisted", saved?.Status == SagaStatus.Completed
+        && saved.CurrentState == "ProbeBatchSaved"
+        && saved.CompletedAt.HasValue);
 }
 
 // ═══ ⑤ ProjectionCheckpoint:枚举参数 int 化回归守卫(CI #94 根因——2026-09-14 增段)═══

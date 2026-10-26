@@ -42,6 +42,18 @@ git config --local --get core.hooksPath   # 期望输出：.githooks
 
 > ⚠️ **Docker 前提**：`test/PalDDD.PalORM.Tests` 与 `test/PalDDD.Integration.Tests` 的方言族测试经 Testcontainers 拉取 PG/MySQL 镜像；未运行 Docker 时这些测试**跳过而非失败**（3.1.0 起由硬失败改为跳过，给出可读原因；安全前提是外部数据库隐式回退路径已删除）。首次 clone 请先启动 Docker，或先只跑不依赖容器的项目（`PalDDD.Core.Tests`/`PalDDD.Transactions.Tests`/`PalDDD.Serialization.Tests` 等）。
 
+### 本地真库（wslc，无 Docker 时的替代）
+
+本机没有 Docker 时可用 wslc 容器跑方言探针。连接地址必须写 `127.0.0.1`（写 `localhost` 会进入 Testcontainers 分支）：
+
+```bash
+PALDDD_TEST_PG="Host=127.0.0.1;Port=5432;Database=palddd_probe;Username=postgres;Password=postgres" \
+PALDDD_TEST_MYSQL="Server=127.0.0.1;Port=3306;Database=palddd_probe;User ID=root;Password=root" \
+dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/DialectProbeTests/*"
+```
+
+容器 Exited 后用 `~/.zcode/scripts/wslc-start-containers.cmd` 拉起。改动 `src/**/Stores/`、`SqlTemplates.cs`、`*.sql` 后建议至少跑一次 PG/MySQL 探针（pre-push 会打印提示，不阻断）。
+
 ```bash
 dotnet restore PalDDD.slnx
 dotnet build PalDDD.slnx --no-restore
@@ -69,22 +81,22 @@ dotnet list PalDDD.slnx package --outdated
 任何生产代码改动至少运行：
 
 ```bash
-# MTP 禁用 slnx 批量（握手 → exit 5），逐测试项目循环：
-for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore; done
+# slnx 批量测试可直接运行（2026-10-21 实测 exit 0；用例数以当次输出为准）：
+dotnet test PalDDD.slnx --no-restore
 dotnet build PalDDD.slnx --no-restore
 ```
 
 > MTP 原生模式已通过 `global.json` 的 `test.runner=Microsoft.Testing.Platform` 启用，`dotnet test` 无需额外参数即可发现并运行测试。
 
-公共 API 快照由 `PalDDD.Core.Tests` 覆盖。新增或调整核心包 public API 后，先确认变更合理，再更新快照：
+公共 API 快照由 `PalDDD.Integration.Tests` 的 `PublicApiSnapshotTests` 覆盖（2026-09-25 从 Core.Tests 迁入）。新增或调整核心包 public API 后，先确认变更合理，再更新快照：
 
 ```bash
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests/PalDDD.Core.Tests.csproj --no-restore
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Integration.Tests/PalDDD.Integration.Tests.csproj -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 ```
 
-### 断言强度检查（替代 Stryker 突变测试）
+### 断言强度检查（与 Stryker 变异测试互补）
 
-仓库不包含 `stryker-config.json`：Stryker.NET 当前不支持 TUnit/MTP，无法在本仓库运行。突变测试职责已由 `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests）替代（断言强度棘轮，基线上限 200——`08ba7d6`（Dapper 栈补齐 IIdempotencyStore）由 190 上调至 200，真实存量见该测试运行输出的 `isNotNullCount + zeroAssertMethods` 合计，只减不增；MIG-003 由 bash 脚本下沉，旧基线 166 为 python 配对漏检口径）。
+`AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests）提供每次 PR/本地的快速断言强度棘轮（基线上限 200——`08ba7d6`（Dapper 栈补齐 IIdempotencyStore）由 190 上调至 200，真实存量见该测试运行输出的 `isNotNullCount + zeroAssertMethods` 合计，只减不增；MIG-003 由 bash 脚本下沉，旧基线 166 为 python 配对漏检口径）。Stryker 5.0.0 已支持 TUnit/MTP（`--test-runner mtp`），两个 curated 基线位于 `test/PalDDD.Compression.Tests` 与 `test/PalDDD.Transactions.Tests`，由 `.github/workflows/mutation.yml` 每周一 + 手动触发；本棘轮继续作为每次 PR 的快速补充。
 
 - **运行**：
   ```bash
@@ -107,7 +119,8 @@ jobs:
         with:
           dotnet-version: '11.0.x'
       - run: dotnet restore PalDDD.slnx
-      # MTP 手写协议：逐测试项目 dotnet test（一次只跑一个项目）；
+      # CI 需要并行、逐项目失败注解与覆盖率，故保持逐项目 dotnet test；
+      # 本地提交前可直接 dotnet test PalDDD.slnx（2026-10-21 实测 exit 0）。
       # 无 Docker 时方言族测试自动跳过，不会误连外部库
       - run: |
           for p in $(find test -name '*.Tests.csproj' | sort); do dotnet test "$p" --no-restore; done
@@ -115,7 +128,7 @@ jobs:
 
 要点：
 
-- **Actions 引用一律钉 40 位 commit SHA**：实际 workflow 中 `uses:` 形如 `owner/repo@<40 位 SHA> # vX.Y.Z`，可变 major 标签（`@v4`）被 `config-policy` 检查 C 拒绝；Dependabot 的 `github-actions` 生态负责按周更新 SHA 与注释。下方示例为简写，实际以 `.github/workflows/ci.yml` 为准。
+- **Actions 引用一律钉 40 位 commit SHA**：实际 workflow 中 `uses:` 形如 `owner/repo@<40 位 SHA> # vX.Y.Z`，可变 major 标签（`@v4`）被 `config-policy` 检查 C 拒绝；Actions 升位随人工核新轮同提交更新 SHA 与注释（Dependabot 已于 2026-10-26 移除）。下方示例为简写，实际以 `.github/workflows/ci.yml` 为准。
 - Testcontainers 自动拉起容器并暴露随机端口，无需预置 service container；仅需 runner 支持 Docker daemon。
 - Windows runner 不支持 Testcontainers，集成测试 CI 必须在 `ubuntu-latest` 上运行。
 - 单元测试（不依赖 Docker）仍可跨平台运行，可拆为独立 job 在 PR 触发；集成测试建议 nightly / 合并到 main 时触发以缩短 PR 周转。
@@ -197,7 +210,7 @@ Dapper.AOT 拦截器把参数值**直传驱动**，与经典路径的容忍行�
 4. 在 `AddPalJsonSerialization` 中调用 `catalog.Add(...)`。
 5. 添加序列化 round-trip 测试。
 
-`Name` 只允许小写字母、数字、`.` 和 `-`。不要使用 CLR 类型名、空白、下划线、大写或路径分隔符作为 wire name；source generator 会用 `PALMSG004` 快速失败。`Name` 还必须以 `.v{SchemaVersion}` 结尾，例如 `orders.order-submitted.v2` 必须声明 `SchemaVersion = 2`，否则报告 `PALMSG005`。
+`Name` 只允许小写字母、数字、`.` 和 `-`。不要使用 CLR 类型名、空白、下划线、大写或路径分隔符作为 wire name；source generator 会用 `PALMSG004` 快速失败。版本后缀可选：省略表示跨版本稳定的 wire name（`MessageEvolutionBuilder` 要求相邻版本共享同一 wire name）；若写成 `.v{n}`，例如 `orders.order-submitted.v2`，则必须声明 `SchemaVersion = 2`，否则报告 `PALMSG005`。领域事件的 `IDomainEvent.EventName` 仍由 `PDDD010` 强制 `.v{n}`。
 
 **源生成器诊断 ID 汇总**（PDDD001-015 属 Roslyn 分析器，此处登记三大 source generator 的诊断系列）：
 

@@ -12,7 +12,7 @@ using PalDDD.Projections;
 namespace PalDDD.Dapper;
 
 /// <summary>Dapper 投影 checkpoint 存储 — 实现 <see cref="IProjectionCheckpointStore"/>。</summary>
-public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore, IResumableProjectionCheckpointStore
+public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore, IResumableProjectionCheckpointStore, IProjectionLeaseRenewalStore
 {
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;
@@ -33,6 +33,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         DbTransaction? transaction = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
+        DapperConnectionGuard.Validate(connection, dbType);
         _connection = connection;
         _transaction = transaction;
         _insertSql = dbType == DapperDbType.MySql ? InsertMySql : InsertDefault;
@@ -75,6 +76,13 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
         var leaseUntil = startedAt + processingTimeout;
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
+
+        // 2026-10-21：PG/SQLite 走单语句 UPSERT + RETURNING。新建、失败重试、租约过期接管
+        // 三种“取得执行权”的情形由一条语句判定并落库，零行即 Completed 或租约未过期。
+        // 原路径为 INSERT（冲突后）+ 回读 + CAS 更新，冲突侧 3 次往返。
+        if (_dbType is DapperDbType.PostgreSql or DapperDbType.Sqlite)
+            return await TryStartAtomicAsync(
+                projectionName, sourceName, position, startedAt, leaseUntil, ct).ConfigureAwait(false);
 
         // 三十八轮 P1 回归修复：MySQL 路径 InsertMySql 为普通 INSERT——唯一约束冲突抛
         // MySqlException(1062)，捕获后 inserted=0 转下方 existing 回查分支（Completed 判断/
@@ -139,6 +147,65 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         existing.MarkProcessing(startedAt, processingTimeout);
         return existing;
     }
+
+    /// <summary>
+    /// PG/SQLite 原子取得检查点执行权：INSERT 与条件 UPDATE 合一，返回 revision 即成功。
+    /// 条件与逐语句路径逐条等价：Completed（1）不再翻转；Processing（0）仅在租约过期时接管；
+    /// Failed（2）可重试。
+    /// </summary>
+    private async ValueTask<ProjectionCheckpoint?> TryStartAtomicAsync(
+        string projectionName,
+        string sourceName,
+        string position,
+        DateTimeOffset startedAt,
+        DateTimeOffset leaseUntil,
+        CancellationToken ct)
+    {
+        var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var revision = await connection.QueryFirstOrDefaultAsync<long?>(
+            UpsertProcessing,
+            new
+            {
+                projectionName,
+                sourceName,
+                position,
+                startedAt = ToTimeParam(startedAt),
+                leaseUntil = ToTimeParam(leaseUntil),
+                processing = (int)ProjectionCheckpointStatus.Processing,
+                completed = (int)ProjectionCheckpointStatus.Completed
+            },
+            Tx).ConfigureAwait(false);
+
+        return revision is { } startedRevision
+            ? ProjectionCheckpoint.Rehydrate(
+                projectionName,
+                sourceName,
+                position,
+                ProjectionCheckpointStatus.Processing,
+                startedAt,
+                leaseUntil,
+                startedRevision,
+                error: null)
+            : null;
+    }
+
+    /// <summary>PG/SQLite 原子取得执行权 SQL（revision 返回即本次成功）。</summary>
+    private const string UpsertProcessing = """
+        INSERT INTO projection_checkpoints (
+            projection_name, source_name, position, status, updated_at, lease_until, revision, error)
+        VALUES (@projectionName, @sourceName, @position, @processing, @startedAt, @leaseUntil, 1, NULL)
+        ON CONFLICT (projection_name, source_name, position) DO UPDATE
+        SET status = @processing,
+            updated_at = @startedAt,
+            lease_until = @leaseUntil,
+            revision = projection_checkpoints.revision + 1,
+            error = NULL
+        WHERE projection_checkpoints.status <> @completed
+          AND (projection_checkpoints.status <> @processing
+               OR projection_checkpoints.lease_until IS NULL
+               OR projection_checkpoints.lease_until <= @startedAt)
+        RETURNING revision
+        """;
 
     public async ValueTask MarkCompletedAsync(
         ProjectionCheckpoint checkpoint,
@@ -235,27 +302,84 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             DapperDbType.MySql => "SIGNED", // MySQL CAST 目标类型为 SIGNED/UNSIGNED（无裸 INTEGER）
             _ => "INTEGER",
         };
-        var sql = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END) AS FirstIncomplete, MAX(CAST(position AS {castType})) AS MaxPosition FROM projection_checkpoints WHERE projection_name = @projectionName AND source_name = @sourceName";
+        // R11 F4：SQLite/MySQL 的 CAST 对 "99abc" 是截断（99）而非报错，单纯聚合会把
+        // 脏位置当数值并返回 max+1，续读跳过 6..99。增加 round-trip 守卫：CAST 结果
+        // 再转文本必须与原文逐字相同；任一不匹配即按接口契约回退全量（返回 null）。
+        // PG 的 CAST 本身抛 22P02，由下方 catch 兜底，守卫用常量 0。
+        var textType = _dbType == DapperDbType.MySql ? "CHAR" : "TEXT";
+        var invalidPositionsExpr = _dbType == DapperDbType.PostgreSql
+            ? "CAST(0 AS BIGINT)"
+            : $"COALESCE(SUM(CASE WHEN CAST(CAST(position AS {castType}) AS {textType}) <> position THEN 1 ELSE 0 END), 0)";
+        var sql = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END) AS FirstIncomplete, MAX(CAST(position AS {castType})) AS MaxPosition, {invalidPositionsExpr} AS InvalidPositions FROM projection_checkpoints WHERE projection_name = @projectionName AND source_name = @sourceName";
         try
         {
-#pragma warning disable S2077 // sql 由方言常量 castType 构造，值侧参数化
+#pragma warning disable S2077 // sql 由方言常量 castType/textType 构造，值侧参数化
             var row = await connection.QueryFirstOrDefaultAsync<ResumeRow>(
                 sql, new { projectionName, sourceName }, Tx).ConfigureAwait(false);
 #pragma warning restore S2077
             if (row is null)
                 return null; // 理论不可达（聚合恒返一行）——防御性按无行处理
+            if (row.InvalidPositions > 0)
+                return null; // 非数值/非规范 Position——数值契约外，回退全量
             var resume = row.FirstIncomplete
                 ?? (row.MaxPosition is { } max ? max + 1 : (long?)null);
             return resume is { } value
                 ? value.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : null;
         }
-        catch (DbException)
+        catch (DbException ex) when (IsPositionCastFailure(ex))
         {
-            // PG 对非数值 Position 串 CAST 抛错（22007 族）——数值契约外的脏数据，
-            // 续读是优化面：回退全量回放（语义兜底恒安全）
+            // R11 F4 + R13 F14：只有 PG 的「非数值 Position → CAST」失败（22P02/22007）
+            // 才按脏数据回退全量。原实现 catch 全部 DbException——连接中断/超时/死锁
+            // 被误分类成「无可续读位置」并触发全量回放（与 EF 栈已收窄的口径分叉）。
             return null;
         }
+    }
+
+    /// <summary>R13 F14：Position CAST 失败判定（与 EF 的 IsPositionCastFailure 同口径）。</summary>
+    internal static bool IsPositionCastFailure(DbException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return exception.SqlState is "22P02" or "22007";
+    }
+
+    /// <summary>R12 C-02：心跳续租——revision + Processing 守卫，只更新租约/更新时间。</summary>
+    public async ValueTask<bool> RenewLeaseAsync(
+        ProjectionCheckpoint checkpoint,
+        DateTimeOffset now,
+        TimeSpan processingTimeout,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+        // MA0015：异常 paramName 指向入参 checkpoint（字段来自它），不指向字段本身。
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.ProjectionName, nameof(checkpoint));
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.SourceName, nameof(checkpoint));
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.Position, nameof(checkpoint));
+
+        var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var affected = await connection.ExecuteAsync(
+            """
+            UPDATE projection_checkpoints
+            SET lease_until = @leaseUntil, updated_at = @now
+            WHERE projection_name = @projectionName AND source_name = @sourceName AND position = @position
+              AND revision = @revision AND status = @processing
+            """,
+            new
+            {
+                leaseUntil = ToTimeParam(now + processingTimeout),
+                now = ToTimeParam(now),
+                projectionName = checkpoint.ProjectionName,
+                sourceName = checkpoint.SourceName,
+                position = checkpoint.Position,
+                revision = checkpoint.Revision,
+                processing = (int)ProjectionCheckpointStatus.Processing,
+            },
+            Tx).ConfigureAwait(false);
+        if (affected == 0)
+            return false;
+        return true;
     }
 
     /// <summary>续读聚合行（Dapper 物化 DTO）。</summary>
@@ -265,6 +389,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
     {
         public long? FirstIncomplete { get; set; }
         public long? MaxPosition { get; set; }
+        public long InvalidPositions { get; set; }
     }
 
 

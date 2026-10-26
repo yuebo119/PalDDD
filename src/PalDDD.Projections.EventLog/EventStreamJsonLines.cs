@@ -2,6 +2,7 @@
 // 📜 EventStreamJsonLines — RecordedEvent 流 JSON Lines 导出/导入
 // ─────────────────────────────────────────────────────────────
 using PalDDD.EventLog;
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using PalUlid = ByteAether.Ulid.Ulid;
@@ -47,11 +48,33 @@ public static class EventStreamJsonLines
         ArgumentNullException.ThrowIfNull(output);
 
         // ITM-218 修复（三十二轮）：导出迭代补 ConfigureAwait(false)——库代码续体不应回捕调用方上下文
+        // 2026-10-20 性能轮：单实例 Utf8JsonWriter + 单块 ArrayBufferWriter 复用（不是池化——
+        // 每次 ExportAsync 固定分配 64KB，属单次导出内的复用），按 64KB 批量写流；
+        // 原实现每事件新建 ArrayBufferWriter + Utf8JsonWriter + ToArray，三次分配/次。
+        var buffer = new ArrayBufferWriter<byte>(64 * 1024);
+        using var json = new Utf8JsonWriter(buffer, new JsonWriterOptions { SkipValidation = true });
         await foreach (var evt in events.WithCancellation(ct).ConfigureAwait(false))
         {
-            var line = SerializeEventLine(evt);
-            await output.WriteAsync(line, ct).ConfigureAwait(false);
+            // 每个根对象前复位 writer 状态（Flush 后 writer 仍保留上一对象的位置/深度状态，
+            // 直接在原状态上写第二个根对象会产出非法行）；Reset 不清理 buffer，跨事件累积。
+            var lineStart = buffer.WrittenCount;
+            json.Reset(buffer);
+            WriteEvent(json, evt);
+            await json.FlushAsync(ct).ConfigureAwait(false);
+            buffer.Write("\n"u8);
+            // 2026-10-21 评审 F2：导出侧与导入侧应用同一字节上限。原实现只限导入，
+            // 13MB payload 以 base64 膨胀为约 17.3MB 单行——导出成功、导入失败。
+            if (buffer.WrittenCount - lineStart - 1 > MaxLineBytes)
+                throw new EventReplayException(
+                    $"Event export failed: a single JSON line exceeds the {MaxLineBytes}-byte limit (base64 payloads expand by 4/3). Export aborted before writing the oversized line.");
+            if (buffer.WrittenCount >= 64 * 1024)
+            {
+                await output.WriteAsync(buffer.WrittenMemory, ct).ConfigureAwait(false);
+                buffer.Clear();
+            }
         }
+        if (buffer.WrittenCount > 0)
+            await output.WriteAsync(buffer.WrittenMemory, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -67,89 +90,124 @@ public static class EventStreamJsonLines
         return ImportAsyncCore(input, ct);
     }
 
-    /// <summary>单行最大字符数——ITM-218 修复：无上限 ReadLineAsync 可被超长无换行输入耗尽内存。</summary>
-    public const int MaxLineChars = 16 * 1024 * 1024; // 16M 字符/行（UTF-16 约 32MB 内存；v72 勘正单位口径）
+    /// <summary>单行最大字节数（导入与导出共用）——ITM-218 修复超长无换行输入的内存耗尽；
+    /// 2026-10-21 评审 F2 明确单位为 UTF-8 字节并补导出侧上限。</summary>
+    public const int MaxLineBytes = 16 * 1024 * 1024;
+
+    /// <summary>旧名称（语义失实：实现一直按字节计）。保留为字节上限的别名，供已编译消费方过渡。</summary>
+    [Obsolete("Renamed to MaxLineBytes — the value is a UTF-8 byte limit, not a character count.")]
+    public const int MaxLineChars = MaxLineBytes;
 
     private static async IAsyncEnumerable<EventData> ImportAsyncCore(
         Stream input,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        using var reader = new StreamReader(input, leaveOpen: true);
-
+        // 2026-10-20 性能轮：UTF-8 字节直读——原 StreamReader(char) + StringBuilder + string
+        // + JsonDocument.Parse(string) 每行至少三次整行拷贝（UTF-8→UTF-16→UTF-8）与一次
+        // string 分配。本实现按字节找 '\n'，Utf8JsonReader 直接在字节上解析；行缓冲复用，
+        // 峰值仍是 O(单行)。
+        var readBuffer = new byte[8192];
+        var line = new byte[8192];
+        var lineLength = 0;
         var lineNumber = 0L;
-        // 三十五轮 D2 修复：分块读行替换 ReadLineAsync——原实现先把整行物化为 string 再做
-        // MaxLineChars 检查，超长无换行输入在检查生效前已完成巨型分配（防 OOM 声明失效）。
-        // 本循环遇 '\n' 即止、累积超过限值即刻抛出：分配上界 = MaxLineChars + 8K 读取块。
-        var buf = new char[8192];
-        var line = new System.Text.StringBuilder();
-        int bufLen = 0, bufPos = 0;
-        bool eof = false;
+        int bufferLength = 0, bufferPosition = 0;
 
-        while (!eof)
+        while (true)
         {
-            line.Clear();
-            bool sawNewline = false;
-            while (!sawNewline)
+            if (bufferPosition >= bufferLength)
             {
-                if (bufPos >= bufLen)
+                bufferLength = await input.ReadAsync(readBuffer.AsMemory(0, readBuffer.Length), ct).ConfigureAwait(false);
+                bufferPosition = 0;
+                if (bufferLength == 0)
                 {
-                    bufLen = await reader.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false);
-                    bufPos = 0;
-                    if (bufLen == 0) { eof = true; break; }
+                    if (lineLength == 0)
+                        yield break;
+                    lineNumber++;
+                    if (!IsAllWhitespace(line.AsSpan(0, lineLength)))
+                    {
+                        EventData? tail;
+                        try
+                        {
+                            tail = DeserializeEventLine(line.AsSpan(0, lineLength));
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            throw new EventReplayException(
+                                $"Event import failed at line {lineNumber}: line is not a valid exported event record.", ex);
+                        }
+                        if (tail is not null)
+                            yield return tail;
+                    }
+                    yield break;
                 }
-                var nl = Array.IndexOf(buf, '\n', bufPos, bufLen - bufPos);
-                if (nl >= 0)
-                {
-                    line.Append(buf, bufPos, nl - bufPos);
-                    bufPos = nl + 1;  // 跳过 '\n'
-                    sawNewline = true;
-                }
-                else
-                {
-                    line.Append(buf, bufPos, bufLen - bufPos);
-                    bufPos = bufLen;
-                }
-                if (line.Length > MaxLineChars)
+            }
+
+            var newline = Array.IndexOf(readBuffer, (byte)'\n', bufferPosition, bufferLength - bufferPosition);
+            var chunkEnd = newline >= 0 ? newline : bufferLength;
+            var chunkLength = chunkEnd - bufferPosition;
+            if (chunkLength > 0)
+            {
+                if (lineLength + chunkLength > MaxLineBytes)
                     throw new EventReplayException(
-                        $"Event import failed at line {lineNumber + 1}: line exceeds {MaxLineChars} character limit.");
+                        $"Event import failed at line {lineNumber + 1}: line exceeds {MaxLineBytes} byte limit.");
+                EnsureLineCapacity(ref line, lineLength + chunkLength);
+                Buffer.BlockCopy(readBuffer, bufferPosition, line, lineLength, chunkLength);
+                lineLength += chunkLength;
             }
-            if (eof && line.Length == 0) break;  // 尾部无多余行
+
+            if (newline < 0)
+            {
+                bufferPosition = bufferLength;
+                continue;
+            }
+
+            bufferPosition = newline + 1;
             // 对齐 ReadLineAsync 语义：剥离 CRLF 的 '\r'
-            if (line.Length > 0 && line[line.Length - 1] == '\r') line.Length--;
+            if (lineLength > 0 && line[lineLength - 1] == (byte)'\r')
+                lineLength--;
 
-            lineNumber++; // 空行也计入——行号须对齐文件物理行，坏行才定位得准
-            if (line.Length == 0)
-                continue;
-            // 对齐原 IsNullOrWhiteSpace 容忍语义：全空白行跳过（零分配扫描）
-            var allWhitespace = true;
-            for (var i = 0; i < line.Length; i++)
-                if (!char.IsWhiteSpace(line[i])) { allWhitespace = false; break; }
-            if (allWhitespace)
-                continue;
-
-            EventData? evt;
-            try
+            lineNumber++;
+            if (lineLength > 0 && !IsAllWhitespace(line.AsSpan(0, lineLength)))
             {
-                evt = DeserializeEventLine(line.ToString());
+                EventData? evt;
+                try
+                {
+                    evt = DeserializeEventLine(line.AsSpan(0, lineLength));
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new EventReplayException(
+                        $"Event import failed at line {lineNumber}: line is not a valid exported event record.", ex);
+                }
+                if (evt is not null)
+                    yield return evt;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                throw new EventReplayException(
-                    $"Event import failed at line {lineNumber}: line is not a valid exported event record.", ex);
-            }
-
-            if (evt is not null)
-                yield return evt;
+            lineLength = 0;
         }
+    }
+
+    private static void EnsureLineCapacity(ref byte[] line, int required)
+    {
+        if (line.Length >= required)
+            return;
+        var next = Math.Min(MaxLineBytes, Math.Max(required, line.Length * 2));
+        Array.Resize(ref line, next);
+    }
+
+    private static bool IsAllWhitespace(ReadOnlySpan<byte> line)
+    {
+        foreach (var value in line)
+        {
+            if (value is not ((byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n'))
+                return false;
+        }
+        return true;
     }
 
     // ── 序列化辅助 ──
 
-    private static ReadOnlyMemory<byte> SerializeEventLine(RecordedEvent evt)
+    private static void WriteEvent(Utf8JsonWriter json, RecordedEvent evt)
     {
-        var buffer = new System.Buffers.ArrayBufferWriter<byte>(512);
-        using var json = new Utf8JsonWriter(buffer);
-
         json.WriteStartObject();
         json.WriteString("eventId", evt.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         json.WriteString("eventName", evt.EventName);
@@ -178,23 +236,19 @@ public static class EventStreamJsonLines
         if (!string.IsNullOrEmpty(evt.Audit.TraceState))
             json.WriteString("traceState", evt.Audit.TraceState);
         json.WriteEndObject();
-        json.Flush();
-
-        buffer.GetSpan(1)[0] = (byte)'\n';
-        buffer.Advance(1);
-        return buffer.WrittenSpan.ToArray();
     }
 
-    private static EventData? DeserializeEventLine(string line)
+    private static EventData? DeserializeEventLine(ReadOnlySpan<byte> line)
     {
-        // JsonDocument.Parse + TryGetProperty/GetProperty 仅按已知字段名读取——未知字段
-        //（含 v25 补导出的 recordedAt 及未来新增导出字段）被自然跳过，不会抛异常
-        using var doc = JsonDocument.Parse(line);
+        // Utf8JsonReader 直接在 UTF-8 字节上解析，不经过 string/UTF-16 转码；JsonDocument
+        // 仅提供按已知字段名读取的结构视图（未知字段自然跳过，兼容未来新增导出字段）。
+        var reader = new Utf8JsonReader(line);
+        using var doc = JsonDocument.ParseValue(ref reader);
         var root = doc.RootElement;
 
         var metadata = root.TryGetProperty("metadata", out var m)
             ? m.GetBytesFromBase64()
-            : ReadOnlyMemory<byte>.Empty;
+            : [];
 
         // P1 修复：读回审计与追踪元数据
         var actorId = root.TryGetProperty("actorId", out var a) ? a.GetString() : null;
@@ -214,7 +268,7 @@ public static class EventStreamJsonLines
             ? EventAuditMetadata.Empty
             : new EventAuditMetadata(actorId, reason, correlationId, causationId, traceParent, traceState);
 
-        return new EventData(
+        return EventData.FromOwned(
             PalUlid.Parse(root.GetProperty("eventId").GetString()!),
             root.GetProperty("eventName").GetString()!,
             root.GetProperty("schemaVersion").GetInt32(),

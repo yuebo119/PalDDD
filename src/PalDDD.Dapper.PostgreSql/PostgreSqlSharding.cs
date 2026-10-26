@@ -235,8 +235,10 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
     public NpgsqlDataSource GetShard(IShardingStrategy strategy, Guid key)
         => GetShard(strategy.GetShardId(key));
 
-    /// <summary>获取所有分片数据源</summary>
-    public IReadOnlyList<NpgsqlDataSource> AllShards => _shards;
+    /// <summary>获取所有分片数据源（只读包装，不暴露内部数组本体）。</summary>
+    /// <remarks>2026-10-21 评审 F17：原属性直接返回 <c>_shards</c>，调用方强转写入 null 后
+    /// <c>GetShard</c> 返回 null、<c>DisposeAsync</c> 抛 NullReferenceException 且原连接池泄漏。</remarks>
+    public IReadOnlyList<NpgsqlDataSource> AllShards => Array.AsReadOnly(_shards);
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types",
         Justification = "逐 shard 释放需隔离任意异常，确保首 shard 失败不中断其余连接池释放；首个异常循环结束后上抛。")]

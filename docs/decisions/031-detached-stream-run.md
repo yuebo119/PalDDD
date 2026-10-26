@@ -1,6 +1,6 @@
 # ADR 031：断线续跑（运行注册表 + 有界回放缓冲 + 附着/取消端点）
 
-> 状态：**已采纳（2026-10-18 完整实施轮，D1-D6 全部落地；D7/D8 边界声明随实现成文）**
+> 状态：**已采纳（2026-10-18 完整实施轮，D1-D6 全部落地；2026-10-19 补强轮：遥测 + POST 启动形态 + AOT 烟测）**
 > 日期：2026-10-18
 > 关联：ADR-030（流式读形态——本 ADR 复活其分期节收窄的 per-stream Channel 项，形态收窄为单写者单附着）、EventBus 移除判决（本方案不恢复广播总线，docs/pitfalls.md D6）、ADR-006（EventLog 追加写语义边界）、docs/performance.md「流式读链路首测/收敛读数」、samples/PalDDD.AgentSample（断线续跑段已落地）
 
@@ -23,7 +23,7 @@ ADR-030 收窄 per-stream Channel 缓冲的理由是「扇出/迟附三形态未
 
 **D3 run 生命周期四态与三条硬边界**：`Running → (Completed | Failed | Cancelled)`，终态不可迁移。硬边界：`MaxRunDuration`（默认 10 分钟）、`MaxItems`（默认 100,000）、`DetachGrace`（默认 5 分钟无附着即取消）。宽限期是「不白烧 token」语义的落点——用户关页永不回来时，run 在宽限期后自行终止。
 
-**D4 附着语义**。`GET {pattern}/{runId}/stream`，遵守 `Last-Event-ID`：先回放缓冲中位置之后的项，再转 live。三态答复：未知或已过期 run → 404；位置早于缓冲起点 → 200 + 首帧 `event: gap`；run 已终态且在 `RetentionAfterCompletion` 窗口内 → 回放剩余缓冲后以 `event: done` 收尾。
+**D4 附着语义**。`GET {pattern}/{runId}/stream`，遵守 `Last-Event-ID`：先回放缓冲中位置之后的项，再转 live。三态答复：未知或已过期 run → 404；位置早于缓冲起点 → 200 + 首帧 `event: gap`；run 已终态且在 `RetentionAfterCompletion` 窗口内 → 回放剩余缓冲后以 `event: done` 收尾（窗口为尽力而为：总跟踪数达到 2×`MaxConcurrentRuns` 时最旧终态 run 提前逐出）。
 
 **D5 取消端点**。`POST {pattern}/{runId}/cancel`，幂等（终态 run 返回 204 不报错）。取消令牌是 run 自己的 `CancellationTokenSource`（不是 `RequestAborted`），handler 的 finally 照常执行，D6 审计与 EventLog 追加不受影响。
 
@@ -43,7 +43,7 @@ ADR-030 收窄 per-stream Channel 缓冲的理由是「扇出/迟附三形态未
 | Outbox | run 向外发布事件 | 不变 |
 | Idempotency | 工具调用副作用去重 | 不变 |
 
-## API 设计（草案）
+## API 设计（定稿；2026-10-19 补强后）
 
 ```csharp
 // PalDDD.Hosting.AspNetCore（新文件 DetachedStreamEndpoints.cs）
@@ -58,7 +58,7 @@ public sealed class DetachedStreamOptions
     public bool RejectNewAttach { get; set; } = false;
 }
 
-// 启动即附着（单次往返）；响应头 X-Run-Id 供后续重连
+// 启动即附着（单次往返）：GET 形态 + POST 形态（JSON body）；响应头 X-Run-Id 供后续重连
 public static IEndpointConventionBuilder MapDetachedStreamQuery<TQuery, TItem>(
     this IEndpointRouteBuilder endpoints, string pattern,
     Func<HttpContext, TQuery> bindQuery,
@@ -68,12 +68,19 @@ public static IEndpointConventionBuilder MapDetachedStreamQuery<TQuery, TItem>(
     TimeSpan? keepAliveInterval = null)
     where TQuery : CQRS.IStreamQuery<TItem>;
 
-// 重连附着（遵守 Last-Event-ID）
-public static IEndpointConventionBuilder MapStreamRunAttach<TItem>(
+public static IEndpointConventionBuilder MapDetachedStreamQuery<TQuery, TItem>(
     this IEndpointRouteBuilder endpoints, string pattern,
+    JsonTypeInfo<TQuery> queryJsonTypeInfo,
     JsonTypeInfo<TItem> itemJsonTypeInfo,
     Func<TItem, string>? eventSelector = null,
     Func<TItem, string>? idSelector = null,
+    TimeSpan? keepAliveInterval = null)
+    where TQuery : CQRS.IStreamQuery<TItem>;
+
+// 重连附着（遵守 Last-Event-ID；event/id 已在写入时固化，不接收选择器）
+public static IEndpointConventionBuilder MapStreamRunAttach<TItem>(
+    this IEndpointRouteBuilder endpoints, string pattern,
+    JsonTypeInfo<TItem> itemJsonTypeInfo,
     TimeSpan? keepAliveInterval = null);
 
 // 显式取消（幂等）
@@ -142,6 +149,17 @@ Phase 1 = D1-D6 全部（注册表 + 三端点 + 选项 + 测试 + 样本 + 文�
 
 > **`DetachGrace` 的 HTTP 级验证取舍**：其语义由注册表级测试锁定（`DetachGrace_WithoutAttach_CancelsRun`）；HTTP 层「客户端断开 → 服务端观测 `RequestAborted`」依赖 TCP 半关闭时序，测试环境不稳定，不重复断言（避免用不稳定网络信号做语义判定）。
 
+### 实施附记（2026-10-19 补强轮）
+
+三项能力补全 + 一处文档勘正：
+
+1. **遥测**：注册表泵开启 `Stream Query` Activity（tag 为查询/元素类型名），首个产出项记 `first-item` 事件（TTFT = 事件时间戳 − span 起点），终态计入既有五个 `paldd.stream.*` 计数器（取消独立于失败，与 MapStreamQuery 同口径）；新增 `paldd.stream.attached`（成功附着数，含首次/重连/接管）与 `paldd.stream.gap`（gap 帧写出次数）。run 未附着时仍计 started：产出由注册表泵驱动，与客户端是否在看无关。
+2. **POST 启动形态**：`MapDetachedStreamQuery` 增 `JsonTypeInfo<TQuery>` 重载，反序列化段复用 `ReadJsonBodyOrWriteErrorAsync`（415/畸形 JSON/空 body 与 MapStreamQuery POST 逐字一致）。GET/POST 共用 `StartAndAttachAsync` 单一编排，验证、容量、附着错误路径不重复。
+3. **AOT 烟测**：AotSample §8 在 PublishAot 产物中真起 Kestrel，覆盖 POST 启动 → 终态回放附着 → 幂等取消 204，纳入 CI `aot-verify`。
+4. **文档勘正**：本 ADR 原 API 草案列了 `MapStreamRunAttach` 的 eventSelector/idSelector 参数，实际实现不接收（event/id 在写入时固化）；`formatFrame` 也从未进入断线续跑端点。已按实现修正，并移入已知约束。
+
+验证：Hosting 面板 88/88（新增遥测 4 件 + POST 3 件）；AotSample 普通运行全过（含 §8 四项断言）；AOT 发布由 CI `aot-verify` 执行。
+
 ## 复活触发器（本决策失效条件）
 
 1. 出现多消费者/扇出真实需求 → 多附着与投递语义另立 ADR，不在本 ADR 上扩展；
@@ -152,6 +170,6 @@ Phase 1 = D1-D6 全部（注册表 + 三端点 + 选项 + 测试 + 样本 + 文�
 ## 已知约束（随实现进 usage.md）
 
 - 进程内状态：重启丢进行中 run；多实例部署需会话亲和（粘性路由）或把 run 固定到单实例。
-- 内存上界 ≈ `MaxConcurrentRuns × MaxBufferedItems × 平均项大小`：token 项约百字节量级时，1000 run × 1024 项 ≈ 100MB 上界，部署须按实际项大小调参。
-- 附着回放不重跑 event/id 选择器（写入时固化）；`formatFrame` 委托不参与缓冲——若需自定义帧回放，选择器形态需在 Phase 2 扩展。
+- 内存上界 ≈ `2 × MaxConcurrentRuns × MaxBufferedItems × 平均项大小`：运行中与保留终态各至多 `MaxConcurrentRuns`；总跟踪数达到 2×上限时最旧的终态 run 被提前逐出（`RetentionAfterCompletion` 为尽力而为）。token 项约百字节量级时，1000 run × 1024 项 ≈ 200MB 上界，部署须按实际项大小调参。
+- 附着回放不重跑 event/id 选择器（写入时固化）；断线续跑端点**不暴露** `formatFrame` 参数——需要自定义整帧的消费方使用 `MapStreamQuery`（ADR-030），或等待 Phase 2 为注册表扩展帧形态。
 - 本 ADR 未实施前现状不变：断线即取消，客户端整轮重开。

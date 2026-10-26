@@ -1,4 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using PalDDD.Core.Logging;
 using PalDDD.Messaging;
 using PalDDD.Serialization;
@@ -665,6 +667,330 @@ public sealed class OutboxBatchProcessorTests
             => throw new InvalidOperationException("Subscribe is not used in this test.");
     }
 
+    /// <summary>
+    /// 契约盘点 2026-10-21：handler 时长达到 ProcessingTimeout 时必须发出
+    /// InboxHandlerLeaseExceeded 告警（默认 5 分钟下的并发重复执行风险不再静默）。
+    /// ProcessingTimeout=Zero 让判定确定性成立（任意时长都达到阈值）。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_HandlerExceedingProcessingTimeout_EmitsLeaseWarning(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var options = new InboxOptions { ProcessingTimeout = TimeSpan.Zero };
+        var logger = new CapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(options),
+            logger,
+            TimeProvider.System);
+
+        var handled = 0;
+        var processed = await processor.TryProcessAsync(
+            "consumer",
+            "lease-warning-1",
+            (string _, CancellationToken _) => { handled++; return ValueTask.CompletedTask; },
+            "payload",
+            cancellationToken);
+
+        await Assert.That(processed).IsTrue();
+        await Assert.That(handled).IsEqualTo(1);
+        await Assert.That(logger.WarningCount).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// 契约盘点 R6：批量路径同样必须发出 InboxHandlerLeaseExceeded（1006）。
+    /// ProcessingTimeout=Zero 让判定确定性成立；一批两条只聚合一条告警（避免日志放大）。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_BatchHandlerExceedingProcessingTimeout_EmitsLeaseWarning(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var options = new InboxOptions { ProcessingTimeout = TimeSpan.Zero };
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(options),
+            logger,
+            TimeProvider.System);
+
+        var processed = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("batch-lease-1", "a"), ("batch-lease-2", "b")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(2);
+        await Assert.That(logger.Count(PalLogEventIds.InboxHandlerLeaseExceeded)).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// 契约盘点 R6：store 未实现 IBatchInboxStore 时，回落逐条必须在首次批量调用给出一次
+    /// Information 提示（此前完全静默，PalORM/EF 消费者无从发现批量优化未生效）；回落语义
+    /// 本身保持逐条计数。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_BatchStoreWithoutCapability_LogsFallbackOnce(CancellationToken cancellationToken)
+    {
+        var store = new NonBatchInboxStore(new InMemoryInboxStore());
+        var options = new InboxOptions { ProcessingTimeout = TimeSpan.FromMinutes(5) };
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(options),
+            logger,
+            TimeProvider.System);
+
+        var first = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("fallback-1", "a"), ("fallback-2", "b")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+        var second = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("fallback-3", "c")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(first).IsEqualTo(2);
+        await Assert.That(second).IsEqualTo(1);
+        await Assert.That(logger.Messages.Count(static m => m.Contains("IBatchInboxStore", StringComparison.Ordinal))).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// R9 审计 D1：批量路径的标记失败必须与逐条路径同口径——发 1004、span 结果为
+    /// processed-pending-confirmation，且不得把该批报告为 InboxBatchProcessed（1005）。
+    /// 修复前：Error 无 EventId + 1005 仍发出。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_BatchMarkFailed_EmitsMarkFailedEventWithoutBatchProcessed(CancellationToken cancellationToken)
+    {
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        using var listener = new RecordingActivityListener();
+        var processor = new InboxProcessor(
+            new BatchMarkInboxStore(static () => throw new InvalidOperationException("simulated batch mark failure")),
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
+            logger,
+            TimeProvider.System);
+
+        var processed = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("mark-fail-1", "a"), ("mark-fail-2", "b")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(2);
+        await Assert.That(logger.Count(PalLogEventIds.InboxMessageProcessedMarkFailed)).IsEqualTo(1);
+        await Assert.That(logger.Count(PalLogEventIds.InboxBatchProcessed)).IsEqualTo(0);
+        var activity = listener.StoppedActivities.First(a =>
+            a.OperationName == "Inbox Process" &&
+            string.Equals(a.GetTagItem("pal.inbox.result") as string, "processed-pending-confirmation", StringComparison.Ordinal));
+        await Assert.That(activity.GetTagItem("pal.inbox.consumer")).IsEqualTo("consumer");
+    }
+
+    /// <summary>
+    /// R9 审计 D1 的第二分支：部分未命中（租约被抢/令牌不匹配）同样记 1004、
+    /// span 结果为 processed-pending-confirmation，且不得报告 1005。修复前该分支是
+    /// 无 EventId 的 Warning + 1005。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_BatchMarkPartiallyMissed_EmitsMarkFailedEventWithoutBatchProcessed(CancellationToken cancellationToken)
+    {
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        using var listener = new RecordingActivityListener();
+        var processor = new InboxProcessor(
+            new BatchMarkInboxStore(static () => 1),
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
+            logger,
+            TimeProvider.System);
+
+        var processed = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("partial-1", "a"), ("partial-2", "b")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(2);
+        await Assert.That(logger.Count(PalLogEventIds.InboxMessageProcessedMarkFailed)).IsEqualTo(1);
+        await Assert.That(logger.Count(PalLogEventIds.InboxBatchProcessed)).IsEqualTo(0);
+        var activity = listener.StoppedActivities.First(a =>
+            a.OperationName == "Inbox Process" &&
+            string.Equals(a.GetTagItem("pal.inbox.result") as string, "processed-pending-confirmation", StringComparison.Ordinal));
+        await Assert.That(activity.GetTagItem("pal.inbox.consumer")).IsEqualTo("consumer");
+    }
+
+    /// <summary>
+    /// R9 审计 D2：批量 handler 失败必须发 1003（单条路径一直有）；按批聚合成一条，
+    /// 与 1006 的批量口径一致，避免每批 N 条日志放大。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_BatchHandlerFailure_EmitsInboxMessageFailed(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
+            logger,
+            TimeProvider.System);
+
+        await Assert.ThrowsAsync<AggregateException>(async () =>
+            await processor.TryProcessBatchAsync(
+                "consumer",
+                [("handler-fail-1", "a"), ("handler-fail-2", "b")],
+                static (string _, CancellationToken _) => throw new InvalidOperationException("boom"),
+                cancellationToken));
+
+        await Assert.That(logger.Count(PalLogEventIds.InboxMessageFailed)).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// R9 审计附录：skipped 必须按去重后的消息 ID 计算。同一批内重复 MessageId 在
+    /// TryStartProcessingManyAsync 前已由 processor 去重，不能计为"被跳过"。
+    /// </summary>
+    [Test]
+    [NotInParallel]
+    public async Task InboxProcessor_BatchDuplicateMessageIds_DoesNotCountDuplicatesAsSkipped(CancellationToken cancellationToken)
+    {
+        using var skipped = new RecordingMeterListener("paldd.inbox.skipped");
+        var store = new InMemoryInboxStore();
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
+            logger,
+            TimeProvider.System);
+
+        var processed = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("dup-1", "a"), ("dup-1", "a")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(1);
+        await Assert.That(skipped.Measurements.IsEmpty).IsTrue();
+    }
+
+    /// <summary>
+    /// 契约盘点 R7：组件级注册自带 IPalLogger&lt;T&gt; 门面。单独 AddPalOutbox（不调
+    /// AddPalCoreStack/AddPalPipelineBehaviors）时，宿主解析 IHostedService 不得抛
+    /// 「Unable to resolve service for type IPalLogger&lt;OutboxProcessor&gt;」。
+    /// AddLogging 是宿主职责（提供 ILogger&lt;T&gt;）。
+    /// </summary>
+    [Test]
+    public async Task AddPalOutbox_Standalone_ResolvesHostedProcessor()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalOutbox();
+        await using var provider = services.BuildServiceProvider();
+
+        var hosted = provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>().ToList();
+
+        await Assert.That(hosted.Any(static h => h.GetType().Name == "OutboxProcessor")).IsTrue();
+        await Assert.That(provider.GetService<IPalLogger<OutboxProcessor>>()).IsNotNull();
+    }
+
+    /// <summary>
+    /// 契约盘点 R7：AddPalInbox 单独使用时 InboxProcessor 可解析（此前缺 IPalLogger&lt;InboxProcessor&gt;）。
+    /// </summary>
+    [Test]
+    public async Task AddPalInbox_Standalone_ResolvesProcessor()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IInboxStore, InMemoryInboxStore>();
+        services.AddPalInbox();
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        await Assert.That(scope.ServiceProvider.GetService<InboxProcessor>()).IsNotNull();
+    }
+
+    /// <summary>
+    /// 契约盘点 R7：AddPalSaga 单独使用时 SagaProcessor&lt;TState&gt; 可解析（此前缺
+    /// IPalLogger&lt;SagaProcessor&lt;TState&gt;&gt;）。
+    /// </summary>
+    [Test]
+    public async Task AddPalSaga_Standalone_ResolvesHostedProcessor()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalSaga<OrderSagaState, OrderFulfillmentSaga>();
+        await using var provider = services.BuildServiceProvider();
+
+        var hosted = provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>().ToList();
+
+        await Assert.That(hosted.Any(static h => h.GetType().Name.StartsWith("SagaProcessor", StringComparison.Ordinal))).IsTrue();
+    }
+
+    /// <summary>只声明 IInboxStore 的转发包装——模拟 PalORM/EF 的批量能力缺口。</summary>
+    private sealed class NonBatchInboxStore(IInboxStore inner) : IInboxStore
+    {
+        public ValueTask<InboxMessage?> TryStartProcessingAsync(
+            string consumerName, string messageId, DateTimeOffset now, TimeSpan processingTimeout, CancellationToken ct)
+            => inner.TryStartProcessingAsync(consumerName, messageId, now, processingTimeout, ct);
+
+        public ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
+            => inner.MarkProcessedAsync(message, processedAt, ct);
+
+        public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
+            => inner.MarkFailedAsync(message, failureReason, ct);
+    }
+
+    /// <summary>批量能力齐备、完成标记结果可控——锁定批量标记失败/部分命中的可观测口径（R9 D1）。</summary>
+    private sealed class BatchMarkInboxStore(Func<int> markProcessedMany) : IInboxStore, IBatchInboxStore
+    {
+        public ValueTask<InboxMessage?> TryStartProcessingAsync(
+            string consumerName, string messageId, DateTimeOffset now, TimeSpan processingTimeout, CancellationToken ct)
+            => ValueTask.FromResult<InboxMessage?>(NewMessage(consumerName, messageId, now));
+
+        public ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
+            => ValueTask.CompletedTask;
+
+        public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
+            => ValueTask.CompletedTask;
+
+        public ValueTask<IReadOnlyList<InboxMessage>> TryStartProcessingManyAsync(
+            string consumerName, IReadOnlyList<string> messageIds, DateTimeOffset now,
+            TimeSpan processingTimeout, CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>(
+                messageIds.Select(messageId => NewMessage(consumerName, messageId, now)).ToList());
+
+        public ValueTask<int> MarkProcessedManyAsync(
+            string consumerName, IReadOnlyList<InboxMessage> messages, DateTimeOffset processedAt, CancellationToken ct)
+            => ValueTask.FromResult(markProcessedMany());
+
+        private static InboxMessage NewMessage(string consumerName, string messageId, DateTimeOffset now) => new()
+        {
+            MessageId = messageId,
+            ConsumerName = consumerName,
+            Status = InboxStatus.Processing,
+            ReceivedAt = now,
+            ProcessingStartedAt = now,
+        };
+    }
+
+    /// <summary>记录 EventId 的日志间谍（结构化重载按 id 记录，普通重载记 0）。</summary>
+    private sealed class EventIdCapturingLogger<T> : IPalLogger<T>
+    {
+        public List<(int EventId, string Message)> Entries { get; } = [];
+
+        public IEnumerable<string> Messages => Entries.Select(static e => e.Message);
+
+        public int Count(int eventId) => Entries.Count(e => e.EventId == eventId);
+
+        public void Debug(string message) => Entries.Add((0, message));
+        public void Information(string message) => Entries.Add((0, message));
+        public void Warning(string message) => Entries.Add((0, message));
+        public void Error(Exception ex, string message) => Entries.Add((0, message));
+        public bool IsEnabled(LogLevel level) => true;
+
+        public void Debug(EventId eventId, string message, params object?[] args) => Entries.Add((eventId.Id, message));
+        public void Information(EventId eventId, string message, params object?[] args) => Entries.Add((eventId.Id, message));
+        public void Warning(EventId eventId, string message, params object?[] args) => Entries.Add((eventId.Id, message));
+        public void Error(Exception ex, EventId eventId, string message, params object?[] args) => Entries.Add((eventId.Id, message));
+    }
+
     private sealed class CapturingLogger<T> : IPalLogger<T>
     {
         public int WarningCount { get; private set; }
@@ -840,6 +1166,9 @@ public sealed class MessageCatalogTests
     }
 }
 
+// 活动监听是进程级共享面：批量路径与逐条路径共用 "Inbox Process" 操作名，
+// 并行执行会让一个测试的 listener 捕获另一个测试的活动（状态描述串味）。
+[TUnit.Core.NotInParallel]
 public sealed class InboxProcessorTests
 {
     [Test]
@@ -872,6 +1201,269 @@ public sealed class InboxProcessorTests
         await Assert.That(activity.GetTagItem("pal.inbox.consumer")).IsEqualTo("orders");
         // ITM-229: pal.inbox.message_id removed (high cardinality) — consumer tag already asserted above
         await Assert.That(activity.GetTagItem("pal.inbox.result")).IsEqualTo("processed");
+    }
+
+    [Test]
+    public async Task TryProcessBatchAsync_ClaimsProcessesAndMarksInBatch(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions
+            {
+                DefaultConsumerName = "orders",
+                ProcessingTimeout = TimeSpan.FromMinutes(5)
+            }),
+            NullPalLogger<InboxProcessor>.Instance,
+            TimeProvider.System);
+
+        var handled = new List<string>();
+        List<(string, string)> batch = [("m1", "one"), ("m2", "two"), ("m1", "duplicate")];
+
+        var processed = await processor.TryProcessBatchAsync(
+            "orders",
+            batch,
+            (message, _) =>
+            {
+                handled.Add(message);
+                return ValueTask.CompletedTask;
+            },
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(2);
+        await Assert.That(string.Join(",", handled.OrderBy(static x => x, StringComparer.Ordinal)))
+            .IsEqualTo("one,two");
+
+        var again = await store.TryStartProcessingManyAsync(
+            "orders", ["m1", "m2"], TimeProvider.System.GetUtcNow(),
+            TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(again).IsEmpty();
+    }
+
+    [Test]
+    public async Task TryProcessBatchAsync_EmitsSkippedTagForAlreadyProcessedMessage(CancellationToken cancellationToken)
+    {
+        // 2026-10-21 R8 锁定：批量路径的 Inbox Process span 在批内存在跳过条目时
+        // 带 pal.inbox.skipped（跳过量），与 usage.md 的 span 契约对齐。
+        using var listener = new RecordingActivityListener();
+        var store = new InMemoryInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions
+            {
+                DefaultConsumerName = "orders",
+                ProcessingTimeout = TimeSpan.FromMinutes(5)
+            }),
+            NullPalLogger<InboxProcessor>.Instance,
+            TimeProvider.System);
+
+        await processor.TryProcessAsync(
+            "orders",
+            "id-a",
+            static (_, _) => ValueTask.CompletedTask,
+            "payload",
+            cancellationToken);
+
+        List<(string, string)> batch = [("id-a", "already"), ("id-b", "fresh")];
+        var processed = await processor.TryProcessBatchAsync(
+            "orders",
+            batch,
+            static (_, _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(1);
+        var activity = listener.StoppedActivities.First(a =>
+            a.OperationName == "Inbox Process" && a.GetTagItem("pal.inbox.skipped") is not null);
+        await Assert.That(activity.GetTagItem("pal.inbox.skipped")).IsEqualTo(1);
+        await Assert.That(activity.GetTagItem("pal.inbox.result")).IsEqualTo("processed");
+    }
+
+    [Test]
+    public async Task TryProcessAsync_MarkProcessedFailure_EmitsPendingConfirmationValue(CancellationToken cancellationToken)
+    {
+        // 2026-10-21 R8 锁定：handler 已成功但完成标记失败时，结果值固定为
+        // processed-pending-confirmation（ITM-180：不得降级为可重试失败，否则重试
+        // 会重放副作用），usage.md 的 span 契约必须包含该值。
+        using var listener = new RecordingActivityListener();
+        var store = new MarkProcessedFailingInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions
+            {
+                DefaultConsumerName = "orders",
+                ProcessingTimeout = TimeSpan.FromMinutes(5)
+            }),
+            NullPalLogger<InboxProcessor>.Instance,
+            TimeProvider.System);
+
+        var processed = await processor.TryProcessAsync(
+            "orders",
+            "message-1",
+            static (_, _) => ValueTask.CompletedTask,
+            "payload",
+            cancellationToken);
+
+        await Assert.That(processed).IsTrue();
+        var activity = listener.StoppedActivities.First(a =>
+            a.OperationName == "Inbox Process" &&
+            string.Equals(a.GetTagItem("pal.inbox.result") as string, "processed-pending-confirmation", StringComparison.Ordinal));
+        await Assert.That(activity.GetTagItem("pal.inbox.consumer")).IsEqualTo("orders");
+    }
+
+    [Test]
+    public async Task TryProcessBatchAsync_HandlerFailureMarksFailedAndContinues(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions
+            {
+                DefaultConsumerName = "orders",
+                ProcessingTimeout = TimeSpan.FromMinutes(5)
+            }),
+            NullPalLogger<InboxProcessor>.Instance,
+            TimeProvider.System);
+
+        var attempted = new List<string>();
+        List<(string, string)> batch = [("f1", "fail"), ("f2", "ok")];
+
+        await Assert.That(async () => await processor.TryProcessBatchAsync(
+            "orders",
+            batch,
+            (message, _) =>
+            {
+                attempted.Add(message);
+                if (string.Equals(message, "fail", StringComparison.Ordinal))
+                    throw new InvalidOperationException("boom");
+                return ValueTask.CompletedTask;
+            },
+            cancellationToken)).Throws<AggregateException>();
+
+        await Assert.That(string.Join(",", attempted)).IsEqualTo("fail,ok");
+
+        var again = await store.TryStartProcessingManyAsync(
+            "orders", ["f1", "f2"], TimeProvider.System.GetUtcNow(),
+            TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(again).Count().IsEqualTo(1);
+        await Assert.That(again[0].MessageId).IsEqualTo("f1");
+    }
+
+    [Test]
+    public async Task TryProcessBatchAsync_CancellationMarksAlreadySucceededMessages(CancellationToken cancellationToken)
+    {
+        // R11 F6 回归锁：批内后段 handler 抛 OCE 时，前段成功项必须在抛出前批量落库；
+        // 原实现直接 throw，成功项滞留 Processing 至租约到期并再次执行副作用。
+        var store = new InMemoryInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions
+            {
+                DefaultConsumerName = "orders",
+                ProcessingTimeout = TimeSpan.FromMinutes(5)
+            }),
+            NullPalLogger<InboxProcessor>.Instance,
+            TimeProvider.System);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        List<(string, string)> batch = [("ok", "ok"), ("cancel", "cancel")];
+        var calls = new List<string>();
+
+        await Assert.That(async () => await processor.TryProcessBatchAsync(
+            "orders",
+            batch,
+            (message, ct) =>
+            {
+                calls.Add(message);
+                if (string.Equals(message, "cancel", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                    ct.ThrowIfCancellationRequested();
+                }
+                return ValueTask.CompletedTask;
+            },
+            cts.Token)).Throws<OperationCanceledException>();
+
+        await Assert.That(string.Join(",", calls)).IsEqualTo("ok,cancel");
+
+        // 成功项已标 Processed：再次处理必须幂等返回 false 且不再调用 handler。
+        var replayed = false;
+        var again = await processor.TryProcessAsync(
+            "orders", "ok",
+            (_, _) => { replayed = true; return ValueTask.CompletedTask; },
+            "ok",
+            CancellationToken.None);
+        await Assert.That(again).IsFalse();
+        await Assert.That(replayed).IsFalse();
+    }
+
+    [Test]
+    public async Task InboxBatchConsumer_ProcessesBrokerBatchAndSkipsReplays(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var options = new InboxOptions
+        {
+            DefaultConsumerName = "orders",
+            ProcessingTimeout = TimeSpan.FromMinutes(5)
+        };
+        var services = new ServiceCollection();
+        services.AddSingleton<IInboxStore>(store);
+        services.AddSingleton<IOptionsMonitor<InboxOptions>>(new FixedOptionsMonitor<InboxOptions>(options));
+        services.AddSingleton<IPalLogger<InboxProcessor>>(NullPalLogger<InboxProcessor>.Instance);
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<InboxProcessor>();
+        using var provider = services.BuildServiceProvider();
+
+        var broker = new BatchingProbeBroker();
+        var consumer = new InboxBatchConsumer<string>(
+            broker,
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            new FixedOptionsMonitor<InboxOptions>(options));
+
+        var handled = new List<string>();
+        var handledGate = new object();
+        var firstThree = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fourth = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var subscription = await consumer.StartAsync(
+            (message, _) =>
+            {
+                lock (handledGate)
+                {
+                    handled.Add(message);
+                    if (handled.Count == 3)
+                        firstThree.TrySetResult();
+                    if (string.Equals(message, "four", StringComparison.Ordinal))
+                        fourth.TrySetResult();
+                }
+                return ValueTask.CompletedTask;
+            },
+            maxBatchSize: 8,
+            maxDelay: TimeSpan.FromMilliseconds(20),
+            ct: cancellationToken);
+
+        await broker.PushAsync("one", "id-1", cancellationToken);
+        await broker.PushAsync("two", "id-2", cancellationToken);
+        await broker.PushAsync("three", "id-3", cancellationToken);
+        await firstThree.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+        // 重投前三条 + 一条新消息：同一批内前三条被 Inbox 认领拒绝，只有新消息进入 handler。
+        await broker.PushAsync("one", "id-1", cancellationToken);
+        await broker.PushAsync("two", "id-2", cancellationToken);
+        await broker.PushAsync("three", "id-3", cancellationToken);
+        await broker.PushAsync("four", "id-4", cancellationToken);
+        await fourth.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+        string joined;
+        lock (handledGate)
+        {
+            joined = string.Join(",", handled.OrderBy(static x => x, StringComparer.Ordinal));
+        }
+        await Assert.That(joined).IsEqualTo("four,one,three,two");
+
+        var replay = await store.TryStartProcessingManyAsync(
+            "orders", ["id-1", "id-2", "id-3", "id-4"], TimeProvider.System.GetUtcNow(),
+            TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(replay).IsEmpty();
     }
 
     [Test]
@@ -1201,6 +1793,32 @@ public sealed class InboxProcessorTests
             => throw new InvalidOperationException("The handler should not fail in this test.");
     }
 
+    /// <summary>handler 成功但 MarkProcessed 失败的存储——驱动 pending-confirmation 路径。</summary>
+    private sealed class MarkProcessedFailingInboxStore : IInboxStore
+    {
+        public ValueTask<InboxMessage?> TryStartProcessingAsync(
+            string consumerName,
+            string messageId,
+            DateTimeOffset now,
+            TimeSpan processingTimeout,
+            CancellationToken ct)
+            => ValueTask.FromResult<InboxMessage?>(new InboxMessage
+            {
+                ConsumerName = consumerName,
+                MessageId = messageId,
+                Status = InboxStatus.Processing,
+                ReceivedAt = now,
+                ProcessingStartedAt = now,
+                Attempts = 1
+            });
+
+        public ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
+            => throw new InvalidOperationException("MarkProcessed failed after a successful handler.");
+
+        public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
+            => throw new InvalidOperationException("The handler succeeded; MarkFailed must not be called.");
+    }
+
     private sealed class FailingAwareInboxStore : IInboxStore
     {
         private InboxMessage? _message;
@@ -1245,6 +1863,53 @@ public sealed class InboxProcessorTests
         public void Warning(string message) { }
         public void Error(Exception ex, string message) { }
         public bool IsEnabled(LogLevel level) => level != LogLevel.Information || informationEnabled;
+    }
+
+    /// <summary>可推送带消息 ID 的订阅探针——驱动 InboxBatchConsumer 的真实组批泵路径。</summary>
+    private sealed class BatchingProbeBroker : IMessageBroker
+    {
+        private Func<string, MessageConsumeContext?, CancellationToken, ValueTask>? _handler;
+
+        public ValueTask<IAsyncDisposable> SubscribeAsync<T>(
+            Func<T, MessageConsumeContext?, CancellationToken, ValueTask> handler,
+            CancellationToken ct = default)
+        {
+            if (typeof(T) != typeof(string))
+                throw new InvalidOperationException($"BatchingProbeBroker cannot subscribe {typeof(T).Name}.");
+            _handler = (Func<string, MessageConsumeContext?, CancellationToken, ValueTask>)(object)handler;
+            return new ValueTask<IAsyncDisposable>(NoopSubscription.Instance);
+        }
+
+        public ValueTask<IAsyncDisposable> SubscribeAsync<T>(
+            Func<T, CancellationToken, ValueTask> handler,
+            CancellationToken ct = default)
+            => SubscribeAsync<T>((message, _, token) => handler(message, token), ct);
+
+        public async ValueTask PushAsync(string message, string messageId, CancellationToken ct)
+        {
+            var handler = _handler ?? throw new InvalidOperationException("No subscription registered.");
+            await handler(
+                message,
+                MessageConsumeContext.FromHeaders(null, null, messageId),
+                ct).ConfigureAwait(false);
+        }
+
+        public ValueTask PublishAsync<T>(T message, CancellationToken ct = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask PublishAsync(
+            object message,
+            MessageDescriptor descriptor,
+            PalUlid messageId,
+            CancellationToken ct = default)
+            => ValueTask.CompletedTask;
+    }
+
+    private sealed class NoopSubscription : IAsyncDisposable
+    {
+        public static readonly NoopSubscription Instance = new();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
 
@@ -1474,10 +2139,135 @@ public sealed class SagaTimeoutProcessorTests
         await Assert.That(state.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
     }
 
+    [Test]
+    public async Task CheckTimeoutsAsync_CancellationDuringBatch_FlushesEarlierCompensatedTerminal()
+    {
+        // R11 F7 回归锁：批内第二个 saga 补偿抛 OCE 时，第一个已补偿 saga 的终态必须
+        // 在抛出前落库；原实现直接 throw，循环后的 flush 不可达。
+        var first = new OrderSagaState { CurrentState = "Waiting" };
+        first.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        first.ExecutedStepKeys.Add("Waiting|OrderPlacedSagaEvent");
+        var second = new OrderSagaState { CurrentState = "Waiting", Error = "cancel" };
+        second.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        second.ExecutedStepKeys.Add("Waiting|OrderPlacedSagaEvent");
+        var store = new RecordingSagaStateStore([first, second]);
+        var processor = new SagaTimeoutProcessor<OrderSagaState>(
+            store,
+            new CancelOnSecondCompensationSaga(),
+            NullPalLogger<SagaTimeoutProcessor<OrderSagaState>>.Instance,
+            new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions()),
+            TimeProvider.System);
+
+        await Assert.That(async () => await processor.CheckTimeoutsAsync(CancellationToken.None))
+            .Throws<OperationCanceledException>();
+
+        await Assert.That(store.SavedTerminals.Any(s => s.SagaId == first.SagaId && s.Status == SagaStatus.Compensated)).IsTrue();
+        // 第二个 saga 的 OCE 路径只落租约释放（Active），不得被误标补偿终态。
+        await Assert.That(store.SavedTerminals.Any(s => s.SagaId == second.SagaId && s.Status == SagaStatus.Compensated)).IsFalse();
+    }
+
+    [Test]
+    public async Task ProcessEventAsync_TimeoutMaxValue_DoesNotOverflowAndWritesSentinel()
+    {
+        // R13 F2 回归锁：Timeout=TimeSpan.MaxValue（"永不过期"写法）通过注册期校验，
+        // 但 startedAt + Timeout 溢出会抛 AOOR，步骤永不执行；修复后按"永不到期"处理，
+        // NextCheckAt 写哨兵（MySQL DATETIME(6) 可存）。
+        var state = new OrderSagaState { CurrentState = "Waiting" };
+
+        var result = await new MaxValueTimeoutSaga().ProcessEventAsync(state, new OrderPlacedSagaEvent());
+
+        await Assert.That(result.ExecutedStepKeys).Contains("Waiting|OrderPlacedSagaEvent");
+        await Assert.That(result.NextCheckAt).IsEqualTo(SagaState.NoPendingTimeout);
+    }
+
+    private sealed class MaxValueTimeoutSaga : Saga<OrderSagaState>
+    {
+        public MaxValueTimeoutSaga()
+        {
+            When("Waiting", typeof(OrderPlacedSagaEvent), new SagaStep(
+                "WaitForPayment",
+                (state, evt, ct) => ValueTask.FromResult(state),
+                null,
+                TimeSpan.MaxValue));
+        }
+    }
+
+    [Test]
+    public async Task CheckTimeoutsAsync_BackfillSaveThrowsOce_StillFlushesCompensatedTerminal()
+    {
+        // R13 F3 回归锁：回填 SaveManyAsync 抛 OCE（DB 超时映射）时，已补偿 saga 的终态
+        // 与租约释放必须仍然落库；原实现让 OCE 从 FlushBackfillAsync 逃逸，跳过后置冲刷。
+        var state = new OrderSagaState { CurrentState = "Waiting" };
+        state.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        state.ExecutedStepKeys.Add("Waiting|OrderPlacedSagaEvent");
+        var store = new BackfillOceSagaStateStore([state]);
+        var processor = new SagaTimeoutProcessor<OrderSagaState>(
+            store,
+            new TimedOutSaga(),
+            NullPalLogger<SagaTimeoutProcessor<OrderSagaState>>.Instance,
+            new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions()),
+            TimeProvider.System);
+
+        await processor.CheckTimeoutsAsync(CancellationToken.None);
+
+        await Assert.That(store.SavedTerminals.Any(s => s.SagaId == state.SagaId && s.Status == SagaStatus.Compensated)).IsTrue();
+    }
+
+    /// <summary>R13 F3：带到期过滤与批量能力的存储；SaveManyAsync 首次（回填）抛 OCE。</summary>
+    private sealed class BackfillOceSagaStateStore(IReadOnlyList<OrderSagaState> states)
+        : ISagaBatchStateStore<OrderSagaState>, IDueTimeSagaStore<OrderSagaState>, ISagaLeaseBatchStore<OrderSagaState>
+    {
+        private bool _thrown;
+
+        public List<(PalUlid SagaId, SagaStatus Status)> SavedTerminals { get; } = [];
+
+        public ValueTask<IReadOnlyList<OrderSagaState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
+            => ValueTask.FromResult(states);
+
+        public ValueTask<IReadOnlyList<OrderSagaState>> LeaseActiveSagasAsync(
+            string owner, TimeSpan leaseDuration, int batchSize, CancellationToken ct)
+            => ValueTask.FromResult(states);
+
+        public ValueTask<IReadOnlyList<OrderSagaState>> LeaseDueSagasAsync(
+            string owner, TimeSpan leaseDuration, int batchSize, DateTimeOffset now, CancellationToken ct)
+            => ValueTask.FromResult(states);
+
+        public ValueTask<OrderSagaState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
+            => ValueTask.FromResult<OrderSagaState?>(null);
+
+        public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
+        {
+            SavedTerminals.Add((state.SagaId, state.Status));
+            return ValueTask.FromResult(1);
+        }
+
+        public ValueTask<int> AdvanceNextCheckAtAsync(string owner, IReadOnlyList<OrderSagaState> sagas, CancellationToken ct)
+            => ValueTask.FromResult(sagas.Count);
+
+        public ValueTask<IReadOnlyList<int>> SaveManyAsync(IReadOnlyList<OrderSagaState> sagas, CancellationToken ct)
+        {
+            if (!_thrown)
+            {
+                _thrown = true;
+                throw new OperationCanceledException("simulated DB timeout mapped to OCE");
+            }
+
+            foreach (var saga in sagas)
+                SavedTerminals.Add((saga.SagaId, saga.Status));
+            return ValueTask.FromResult<IReadOnlyList<int>>(sagas.Select(static _ => 1).ToArray());
+        }
+
+        public ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<OrderSagaState> sagas, CancellationToken ct)
+            => ValueTask.FromResult(sagas.Count);
+    }
+
     private sealed class RecordingSagaStateStore(IReadOnlyList<OrderSagaState>? states = null)
         : ISagaStateStore<OrderSagaState>
     {
         public int BatchSize { get; private set; }
+
+        /// <summary>R11 F7：落库时刻的终态快照（对象后续会被复用，不能只存引用）。</summary>
+        public List<(PalUlid SagaId, SagaStatus Status)> SavedTerminals { get; } = [];
 
         public ValueTask<IReadOnlyList<OrderSagaState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
         {
@@ -1499,9 +2289,32 @@ public sealed class SagaTimeoutProcessorTests
             => ValueTask.FromResult<OrderSagaState?>(null);
 
         public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
+        {
+            lock (SavedTerminals)
+                SavedTerminals.Add((state.SagaId, state.Status));
             // P3 对齐八轮：SaveChangesAsync 返回受影响行数——录制替身模拟"保存成功"返回 1；
             // 返回 0 会被 SagaProcessor 解释为乐观锁冲突，只记 Warning 并跳过指标
-            => ValueTask.FromResult(1);
+            return ValueTask.FromResult(1);
+        }
+    }
+
+    /// <summary>R11 F7：第二个 saga（Error=="cancel"）补偿时抛 OCE，第一个正常补偿。</summary>
+    private sealed class CancelOnSecondCompensationSaga : Saga<OrderSagaState>
+    {
+        public CancelOnSecondCompensationSaga()
+        {
+            When("Waiting", typeof(OrderPlacedSagaEvent), new SagaStep(
+                "WaitForPayment",
+                (state, evt, ct) => ValueTask.FromResult(state),
+                (state, ct) =>
+                {
+                    if (state.Error == "cancel")
+                        throw new OperationCanceledException("shutdown during compensation");
+                    state.CurrentState = "Compensated_First";
+                    return ValueTask.CompletedTask;
+                },
+                TimeSpan.FromSeconds(1)));
+        }
     }
 
     private sealed class TimedOutSaga : Saga<OrderSagaState>
@@ -1588,7 +2401,7 @@ public sealed class SagaStepTests
             };
             return step.PerItemTimeout;
         }).Throws<ArgumentOutOfRangeException>();
-        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.Message).Contains("PerItemTimeout");
     }
 
     [Test]
@@ -1897,5 +2710,42 @@ public sealed class InboxMessageTests
         await Assert.That(msg.MessageId).IsEqualTo("msg-001");
         await Assert.That(msg.ProcessedAt).IsNotNull();
         await Assert.That(msg.ProcessedAt!.Value.Year).IsEqualTo(2026);
+    }
+}
+
+/// <summary>R13 F17：轮询基类的间隔上限（Task.Delay 约 49.7 天）。</summary>
+public sealed class PeriodicBackgroundProcessorTests
+{
+    [Test]
+    public async Task PollIntervalBeyondTimerLimit_DoesNotFaultTheService()
+    {
+        // Task.Delay(TimeSpan) 的计时器上限约 uint.MaxValue-1 毫秒（49.7 天）；
+        // PollInterval=60 天时旧实现抛 AOOR，位于仅 catch OCE 的 try 外，ExecuteTask
+        // fault——.NET 6+ BackgroundService 默认 StopHost 会停掉整个宿主。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        await using var provider = services.BuildServiceProvider();
+        var processor = new ProbeProcessor(
+            provider.GetRequiredService<IServiceScopeFactory>(), TimeSpan.FromDays(60));
+
+        await processor.StartAsync(CancellationToken.None);
+        using var timeoutCts = new CancellationTokenSource();
+        var completed = await Task.WhenAny(
+            processor.ExecuteTask!, Task.Delay(TimeSpan.FromMilliseconds(300), timeoutCts.Token));
+        await timeoutCts.CancelAsync();
+
+        await Assert.That(ReferenceEquals(completed, processor.ExecuteTask)).IsFalse();
+        await Assert.That(processor.ExecuteTask!.IsFaulted).IsFalse();
+
+        await processor.StopAsync(CancellationToken.None);
+        processor.Dispose();
+    }
+
+    private sealed class ProbeProcessor(IServiceScopeFactory scopeFactory, TimeSpan interval)
+        : PeriodicBackgroundProcessor(scopeFactory, interval)
+    {
+        protected override ValueTask ExecuteTickAsync(CancellationToken ct) => ValueTask.CompletedTask;
+
+        protected override void OnTickFailed(Exception ex) => throw new InvalidOperationException("tick failed", ex);
     }
 }

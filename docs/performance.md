@@ -6,7 +6,7 @@
 
 ## 当前结论（2026-10-08 首轮；2026-10-18 口径校正见下）
 
-**2026-10-18 当前口径**：**37 个基准类**（Framework 5 + App 2 + Feature 5 + Infra 7 + Persistence 4 + SagaLane 1 + Concurrency 2 + Remote 5 + Delivery 3 + Comparison 2 + Stream 1），入口以 `bench/PalDDD.Benchmarks/Program.cs` 为单一真源；`--smoke` 6/6 分配预算已接入 CI `perf-smoke`（每次提交）；BDN 0.16.0-preview.2 已恢复默认 Switcher 入口（2026-10-17），显式 InProcess 路径保留；EPSL v1.6 系统对账与修复见 `docs/review/review-2026-10-18-epsl-system.md`。下面 2026-10-08 段保留首轮口径（22 类），不回溯改写。
+**2026-10-21 当前口径**：**38 个基准类**（Framework 5 + App 2 + Feature 5 + Infra 7 + Persistence 4 + SagaLane 1 + Concurrency 2 + Remote 5 + Delivery 4 + Comparison 2 + Stream 1），入口以 `bench/PalDDD.Benchmarks/Program.cs` 为单一真源；`--smoke` 6/6 分配预算已接入 CI `perf-smoke`（每次提交）；BDN 0.16.0-preview.2 已恢复默认 Switcher 入口（2026-10-17），显式 InProcess 路径保留；EPSL v1.6 系统对账与修复见 `docs/review/review-2026-10-18-epsl-system.md`（当前系统版本 v1.7，2026-10-19 全局升位）。**2026-10-23 增**：车道、profile 与每类采样档的单一真源是 `bench/bench-registry.json`；`--profile standard|full|remote-smoke|remote-full` 的命令与预算见 `perf-budgets.md` §2.1，优化归因与前后对照见 `docs/review/perf-system-optimization-2026-10-23.md`。下面 2026-10-08 段保留首轮口径（22 类），不回溯改写。
 
 2026-10-08 性能测试系统优化后，**22 个基准类（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 2）全部具备正式报告入口**：`--framework` / `--app` / `--infra` / `--concurrency` / `--persist-pg` / `--persist-mysql` / `--persist` / `--persist-medium` / `--saga` / `--compression` 以模式级 ManualConfig（`Job.MediumRun` + InProcessEmitToolchain + MemoryDiagnoser）绕过 net11-rc moniker 限制（当时 BDN 0.15.8 默认 Switcher 入口不可用；2026-10-17 升 0.16.0-preview.2 后已恢复；根因与 jobs-union 双 job 坑详见 `bench/PalDDD.Benchmarks/Program.cs` 头注——类级 `[ShortRunJob]` 已全部移除，同 `--persist` 五十四轮先例）。`--smoke` 新增分配预算断言（Success/FromValue ≤1、Failed ≤50、RaiseEvent ≤140 B/op，超限退出码 1；变异验红实证：预算压至 1 时 RaiseEvent 判 ⛔ 退出码 1；R1 轮 2026-10-14 增 Start* 遥测入口 ≤1 B/op 两条——断言落 bench 进程：测试宿主订阅全局 ActivitySource 使 HasListeners 恒真，旧码 int tag 装箱 24.000/24.002 B/op 判红、守卫前置后 0 过）。
 
@@ -100,6 +100,8 @@ Inbox 口径注：三方法为 1-op / 3-op / 2-op 捆绑（重复拒绝必然含
 | Hosting.ExceptionMiddleware_Passthrough | 441.4 ns | 9.72 ns | 1.41 KB |
 | Hosting.MapCommand_Endpoint_Invoke（JSON 反序列化+分发+响应序列化） | 2,543.3 ns | 11.56 ns | 3.51 KB |
 
+> **MapCommand 基准修复（2026-10-23）**：该基准的请求作用域漏注册 `HostingCommandHandler`。端点把 `ctx.RequestServices` 交给 `Dispatcher.SendAsync` 复用作用域后，`ExecutePipelineAsync` 用该 provider 解析处理器，导致全程抛 `InvalidOperationException`（BDN 记 NA），2026-10-08 的 2,543.3 ns 基线自此不可复现。补注册后复测 **2,431.3 ns / 3.33 KB**（Error 2.1%，对 Terminal_Only 比率 5.72）。
+>
 > 五车道注（2026-10-08）：① Specification 内存路径**零分配 ~1.7ns**——Expression.Compile 在规约构造期一次完成，IsSatisfiedBy 走缓存委托调用；README「AOT 已知限制③」的内存路径由此量化为非热区。② 演化链式（V1→V3 两跳）仅比单跳 +3%/+64B——成本在反/序列化对而非转换器跳数，多级演化的边际开销可忽略。③ 端到端 InMemory 链 470ns/968B 给出「框架开销层」单命令全链路基线（分发+序列化+Outbox 落入；不含 DB I/O——真库形态见各持久化车道）。④ 异常中间件直通 +29ns（+7%）/请求；MapCommand 端点全周期 2.5μs/3.5KB（含 JSON 双向，Error 0.5%）。⑤ 演化契约实录：升级步必须同 wire name + 递增 schemaVersion（管线校验「stable wire name」——首跑用 .v1/.v2 命名被拒，属 API 契约的基准侧实录）。
 
 ## 横向对比与绝对 QPS（2026-10-09 新维度轮：`--compare` / `--qps`）
@@ -537,6 +539,8 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 > **T1.2 端到端定论：积压排空 56×（5,072ms → 90ms，RatioSD 8%）**——旧形态下 5.07s 中 4.5s 是纯批间睡眠，批处理净工作仅 ~80ms（9 批 × ~9ms）；自适应形态吞吐上限被真实工作接管。RTT=20 档的 25.5s 中 20s 是逐条发布确认的串行等待（1000 × 20ms）——**T3.1 流水线化的理论收益上限即此（~4.6×）**；RTT=0 档的 ~90μs/msg 净工作即 **T2.1 批量标记的收益锚**（现标记段为逐条 UPDATE）。首跑实录：medium 采样撞 InProcess 单基准 5 分钟上限（与 coverage×strict 同族的车道级不兼容，多秒级 op 专属），改专用采样档后双类 exit 0 零守卫违规。
 
+> **2026-10-19 更新（ADR-033，自动投递策略）**：`OutboxOptions.DeliveryMode` 默认 `Auto`。broker 声明 `SupportsConcurrentPublish` 时窗口自动提升到至少 16；store 实现 `IBatchMarkOutboxStore` 时标记阈值至少 16，并由 `BatchMarkFlushInterval`（默认 1 秒）加时间上界；内置四栈的即时写库使 `SaveChangesAsync` 空调用被跳过。本节此前的“默认 1”数据仍作为串行基线；Auto 模式的组合收益需要在 `--delivery-pg` / `--delivery-mysql` 上重跑 A/B，未重跑前不把 13× 与 6.4× 直接相乘。`Serial` 可逐字复现旧行为。
+
 **T3.1 发布确认流水线化（`OutboxOptions.MaxInFlightPublishes`，默认 1 = 串行逐字不变；>1 启用 FIFO 窗口，标记顺序保启动序，失败语义逐项镜像串行路径，锁定测试三件三连绿）——量具 A/B 定论（窗口 16）**：
 
 | RTT（假 broker 确认延迟） | 窗口 1（串行基线） | 窗口 16（流水线） | 收益 |
@@ -629,6 +633,20 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **B1 复活前提第一项判定**（决策文档开放决策点 1「远端 DB 标记往返实测占发布延迟 >5%」）：DB 主导形态（broker 确认延迟低于阈值）下前提成立且远超阈值，占比 84.3%（PG）/ 83.8%（MySQL），端到端 6.2~6.4×；阈值解析式 share(r) = M / (base + 1000r + M) > 5% 给出 **PG r < ~11.8ms/条、MySQL r < ~35.0ms/条**（[推断]：以实测 M 与 base 代入，非独立实测点）。broker 确认延迟超过阈值后标记段退化为二阶成本（本机最小非零 broker 延迟格实测无可测差异，与该解析一致）。前提另两项（消费侧 Inbox 幂等可审计 + 时间界冲刷而非纯计数界）未满足，且「重复窗口放大最高 99×」的反驳与延迟形态无关，**B1 维持不做**；新数据的价值是把收益从量级估算升级为分形态实测，并给出部署判据：broker 确认延迟与 DB 往返同量级或更低时（本地/同机房 broker、跨机房 DB），`BatchMarkThreshold` 16~64 的 opt-in 收益显著。
 
+**ADR-033 Auto 组合 A/B（2026-10-19，`--delivery-auto-pg` / `--delivery-auto-mysql`）**：真库 + 假 broker，排空 1000 条积压；Serial = 窗口 1/逐条标记/对象发布，Auto = 窗口 16/批量标记 16（1 秒时间界）/raw publish。采样档 3 迭代/2 预热/1 launch（InProcess；RTT=20 的 Serial 约 27~29s/op，5 op 控制在 5 分钟上限内）。环境：.NET 11 rc.2、BDN 0.16 preview、Ryzen 9 8945HX、wslc pg186/mysql84。RttMs 为假 broker 确认延迟；本机 RTT=1 实际约 15.6ms，RTT=20 实际约 25~28ms/条（Windows 定时器粒度）。
+
+| 方言 | RttMs | Serial | Auto | 均值加速比 | 中位加速比 | 分配 Serial→Auto |
+|---|---:|---:|---:|---:|---:|---:|
+| PG | 0 | 2,778.4 ms | 202.8 ms | **13.70×** | 11.99× | 3.77→1.94 MB（−48.5%） |
+| PG | 1 | 7,117.0 ms | 765.7 ms | **9.29×** | **13.53×** | 3.98→2.39 MB（−40.0%） |
+| PG | 20 | 24,639.3 ms | 1,733.1 ms | **14.22×** | **14.36×** | 3.98→2.39 MB（−40.0%） |
+| MySQL | 0 | 6,448.0 ms | 587.6 ms | **10.97×** | 10.97× | 5.13→2.16 MB（−57.9%） |
+| MySQL | 1 | 9,550.8 ms | 802.8 ms | **11.90×** | 11.43× | 5.33→2.61 MB（−51.0%） |
+| MySQL | 20 | 28,061.3 ms | 1,857.5 ms | **15.11×** | 15.11× | 5.34→2.61 MB（−51.1%） |
+
+读法：①**组合收益 9.3~15.1×，不是 13× × 6.4× ≈ 83×**——发布窗口、批量标记与 raw 在同一段排空里重叠，窗口主导 RTT>0 的形态，标记与 raw 主导 RTT=0 的形态；乘法叠加不成立。②RTT=0 时窗口没有可重叠的往返，13.7×（PG）/11.0×（MySQL）来自“1000 次标记往返收为约 62 次 + 跳过反序列化/再序列化”。③RTT=1 格 PG 的 Auto Error 34%，均值受一次 1.4s 的离群拉高；按中位数 13.53× 读，与 RTT=20 的 14.36× 同带；MySQL 该格 Error 4.9%，均值可用。④分配下降 40%~58%，与 raw 路径消除二次载荷分配、批量标记减少命令/参数对象的机理一致。⑤本表是单机同日口径，不与 2026-10-16 的跨日绝对计时混用；跨机部署只引用比值区间。
+
+
 ## 流式读链路首测（2026-10-18，ADR-030 Phase 2 收窄论证的 bench 证据轮，`--stream`）
 
 > 口径（框架开销层，同 Hosting/EndToEnd lane）：DefaultHttpContext 直调 RequestDelegate + 内存 PipeWriter/丢弃流，无网络栈、无真实 DB I/O；medium 档（15 迭代 × 2 launch / 10 预热，InProcessEmit）。引用须带此口径——生产每帧成本由网络写与 provider 延迟主导。新增 `StreamReadBenchmarks`（11 lane：framing 微 lane ×5 + flush 全路径 ×2 + 端点全周期 ×3，16 异步项/请求）。
@@ -718,6 +736,28 @@ P1 后框架可控成本占比与残余分配归属各做一次专门测量，�
 - FTS 定义约 9.6~10 KB 分配来自映射表、FTS5 虚表与三个触发器的 DDL 文本加外层定义对象；这是 schema 初始化操作，不属于请求热路径。把它做成硬预算会奖励缓存而非正确性，故不设 B/op 门禁。
 - 引用计时数字前按 `perf-budgets.md` §2 的 <5%/>15% 自评规则判断。
 
+## EPSL 全量运行经验与编排器（2026-10-19）
+
+本轮把 EPSL 从“检查件 + 手工逐条命令”推进到可重复编排，并记录一条重要环境边界。
+
+**编排器**：`scripts/eps-run.cs`
+
+```bash
+dotnet run scripts/eps-run.cs -- --quick        # eps-perf-check + --smoke
+dotnet run scripts/eps-run.cs -- --full         # 预检 + 构建 + 17 条本地车道 + 汇总
+dotnet run scripts/eps-run.cs -- --lane infra   # 单车道
+dotnet run scripts/eps-run.cs -- --list
+```
+
+- 全量要求工作树干净（脏则拒绝，`--allow-dirty` 可显式放行），预检打印 HEAD / 分支 / dotnet 版本 / 其他 dotnet 进程数，并在 `bench/logs/.eps-run.lock` 上加独占锁。
+- 每条车道独立进程运行，日志写 `bench/logs/eps-run-<timestamp>/<lane>.log`；`summary.md` 记录结果、耗时、尝试次数；日志保留最近 20 份。
+- 车道失败默认重试 1 次（30 秒间隔）；仍红才判失败。重试是经验性补偿，不隐藏第一次失败，summary 记录 attempts。
+- 默认跳过 PG/MySQL 四条真库车道；`--include-remote` 显式纳入，无 Docker 且无 `PALDDD_BENCH_*_CONN` 时记 SKIP，不算失败。
+
+**并发干扰的实证**：2026-10-19 全量运行期间有另一会话同时构建/测试 Pal.DDD。`--infra` 三次分别死在 SagaState / Compression / Configuration，日志无异常、失败类随机漂移；全部单类独立运行通过，干净环境（无并发构建）复跑 7/7 通过。结论：BDN `InProcessEmitToolchain` 对并发负载敏感，失败先按环境态复测，不得直接改预算或判代码回归。编排器的预检/独占/重试就是这条经验的机械化载体。
+
+**本次复跑读数**：17 条本地车道全部通过（含 `--sqlgen` 11 基准 23 秒）；16 个测试项目 1717 用例 0 失败 76 跳过；分析器开启构建 0 警告 0 错误；`eps-perf-check` 37/37 类且全部接入 `Program.cs`。真库车道未跑（本机无 Docker）。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
@@ -758,6 +798,232 @@ P1 后框架可控成本占比与残余分配归属各做一次专门测量，�
 | `EntityCreationBenchmarks` | `BenchmarkDotNet.Artifacts/results/PalDDD.Benchmarks.EntityCreationBenchmarks-report-github.md` | `Create`：3.8377 ns / 56 B；`GetHashCode_Compute`：17.6934 ns / 56 B |
 | `ValidationBenchmarks` | `BenchmarkDotNet.Artifacts/results/PalDDD.Benchmarks.ValidationBenchmarks-report-github.md` | `Success`：0 ns / 0 B；`Failed_SingleError`：9.8009 ns / 32 B |
 | `SmartEnumBenchmarks` | `BenchmarkDotNet.Artifacts/results/PalDDD.Benchmarks.SmartEnumBenchmarks-report-github.md` | 当前历史产物为 NA，不可作为性能结论（根因 2026-10-08 已修——继承静态方法不触发派生 cctor，见上文；现行数字见 MediumRun InProcess 基线表） |
+
+## 2026-10-22 性能轮：往返账本驱动的四项优化
+
+**口径声明**：往返数与回放吞吐来自代码推导（逐条链路数出实际语句数 × RTT）；出站唤醒延迟为实测
+（`--wakeup-probe`，见下文）；分配类结论引用既有实测（`perf-budgets.md` 与各轮 BDN 报告）。
+按 EPSL 纪律，未实测的派生量标「推导」，不构成性能承诺。
+
+### 往返账本（推导，除唤醒延迟为实测）
+
+| 链路 | 优化前 | 优化后 |
+| --- | --- | --- |
+| 出站投递（PG，批 100） | 2 次往返/批 + 0–500ms 唤醒延迟 | 2 次往返/批 + 唤醒/调度 p50 0.013ms（实测，另加租约与发布网络） |
+| 入站单条（PG，重复消息） | 2 次往返 | 1 次 |
+| 入站单条（PG，可重试失败） | 3 次往返 | 1 次 |
+| 入站批量（PG，400 条） | 2 次往返/批 | 2 次往返/批（不变） |
+| 入站批量（MySQL，400 条，含重投） | 3 次/批；可重入失败行每行 2–3 次（约 800 次） | **2 次/批**（令牌列 + 单语句 UPSERT） |
+| 投影回放（批 100 / 批 1000，10ms RTT） | 约 600μs/事件 | 检查点调用 4,000 → 400 次/100k 事件（实测），按 RTT 折算约 60μs/事件 |
+| EventLog 单条追加（PG） | 1 次往返 | 1 次往返（不变） |
+
+### 落地项
+
+1. **Outbox 唤醒信号**（公共接口 `IOutboxWakeUpSignal`）：四栈 Store 写入成功后通知，
+   `OutboxProcessor` 的空闲等待改为「信号或轮询间隔先到者」，被唤醒但租到 0 条时 20ms
+   自愈重试；未注册信号时退化为原 `Task.Delay` 形态。
+2. **Dapper Inbox 单条认领单语句化**（PG/SQLite）：与批量路径共用 UPSERT + RETURNING，
+   重复与可重试失败由 2/3 次往返收敛为 1 次，并消掉回读与 CAS 之间的 TOCTOU 窗口。
+3. **回放批宽与续读裁剪**：`CheckpointBatchSize` 默认 100 → 1000；续读命中时跳过组首
+   `GetAsync` 探测；组首裁剪改「先量前缀再一次 RemoveRange」（避免批宽放大后的 O(n²) 搬移）。
+4. **消费上下文去闭包**：`FromHeaders`/RabbitMQ 路径直接持有头序列本体，`Headers` 惰性解码；
+   实例尺寸不变（`FromHeaders_NullHeadersWithFallback_NoDictionaryAllocation` 预算保持）。
+5. **MySQL 批量认领 2N 次往返 → 2 次**：新增可空列 `claim_token`（ULID），批量认领改为
+   「单语句 UPSERT + 按令牌回读」，400 行块固定 2 次往返；原形态在可重入失败行上每行 2 到 3 次
+   （400 行重投约 800 次）。令牌是本路径唯一可靠的归属身份（MySQL 无 `UPDATE ... RETURNING`，
+   时间戳身份在同一 now 的并发认领下会误认，R14 F4 实证）。DDL 与行为见
+   `docs/migration/inbox-claim-token.md`；真库（MySQL 8.4.11）SQL 级探针验证了同刻不重复认领、
+   租约过期可接管、Processed 永不认领；C# 端到端由 CI `dialect-probe` 覆盖。
+
+### 实测：出站唤醒信号（2026-10-22，`--wakeup-probe`）
+
+量具：`bench/PalDDD.Benchmarks/OutboxWakeUpProbe.cs`。InMemory store + `NullMessageBroker` +
+真实 `OutboxProcessor`/`OutboxBatchProcessor` 全链路，`PollInterval` 设 5 分钟使信号成为唯一
+唤醒源；500 次「写入 → 被标记已发布」采样，另测 100 条突发写入的 tick 合并。
+
+| 指标 | 实测（同机，两次运行区间） |
+|---|---|
+| 最小 / p50 / p95 / p99 / 均值 | 0.004–0.006 / **0.006–0.013** / 0.012–0.036 / 0.035–0.067 / 0.053–0.084 ms |
+| 100 条突发写入的 tick 数 | **2–3**（逐条重构形态为 100） |
+
+口径说明：本数字是框架内的唤醒与调度下限，不含数据库租约/标记往返与 broker 网络（那两项属
+部署量纲，见 `--delivery-pg`/`--delivery-mysql` 车道）。μs 级指标受进程调度抖动影响，
+按量级引用而不是按小数点后三位引用。旧形态（纯 `Task.Delay(500ms)` 轮询）的期望等待是 250ms、
+最坏 500ms，属结构性事实而非估计。突发测试同时证明信号没有把批处理打散：写入合并后一批仍由
+少量 tick 排空，吞吐不会因唤醒而退化。
+
+复现：
+
+```bash
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
+# WAKEUP sample=500 min=0.006ms p50=0.013ms p95=0.036ms p99=0.067ms mean=0.084ms
+# WAKEUP burst=100 ticks=2
+# WAKEUP PASS
+```
+
+**信号覆盖边界**（不要假定更强）：Dapper/PalORM/InMemory 三栈的 `AddMessageAsync`/
+`AddMessagesAsync` 写入成功后通知；EF 栈由 `OutboxDomainEventInterceptor` 在
+`SavedChanges(Async)` 通知（覆盖领域事件路径）。以下路径仍走轮询：EF 上下文上直接
+`OutboxMessages.Add` 且未挂拦截器、运维 `RequeueDeadAsync`（各栈均不通知，重投后最多等一个
+`PollInterval`）、以及其它进程的写入。信号是加速通道，不是投递保证。
+
+### 实测：回放批宽（2026-10-22，`--m2-probe`）
+
+量具扩展为 1 / 100 / 1000 三档（100k 事件，InMemory 检查点，统计 `TryStartAsync` 与
+`MarkCompletedAsync` 调用次数，每次调用对应真实 store 的至少一次数据库往返）：
+
+| CheckpointBatchSize | 检查点调用次数 | 每事件调用数 | 进程内墙钟 |
+|---|---|---|---|
+| 1 | 200,000 | 2.00 | 115ms |
+| 100 | 4,000 | 0.04 | 35ms |
+| 1000 | 400 | 0.004 | 38ms |
+
+口径说明：调用次数是往返数的下界代理，收益只在有 RTT 的部署上兑现——InMemory 下每次调用几乎
+免费，因此 1000 档的墙钟与 100 档持平（甚至略高，组更大带来的批内遍历略多）。10ms RTT 下
+1000 档相对 100 档少 3,600 次往返，约省 36 秒/10 万事件（换算值）。批宽 100→1000 也使崩溃
+重放窗口从 100 条变 1000 条（既有契约要求 handler 幂等）。
+
+顺带修了量具自身的两处腐烂（TOOL 车道长期无人跑）：`CountingStore` 未实现
+`IResumableProjectionCheckpointStore`（R14 的批模式 fail-fast 后整条车道抛异常）、batch=100
+的调用上限仍沿用 F7 之前的口径（每类 1,000 次，F7 后结构真值为 2,000 次）。
+
+### 未落地（逐项量化后不做，附复活条件）
+
+判据统一：低于 5% 线不做（EPSL 与 perf-ledger 纪律）。分配类项按「gen0 短命对象的摊薄成本
+约 0.1–0.2 ns/字节量级」估算 CPU 占比 [推断]；这些对象的存活期都在毫秒内，不进 gen1/2。
+
+- **EventLog 单条追加参数对象池化**（约 2–4KB/次）：全部为短命对象，1 万次/秒时约 0.1% CPU；
+  收益与「改动落在最关键的 events 写路径」的风险不匹配。复活条件：append 吞吐 SLO 超过
+  5 万次/秒，或 GC 暂停成为可观测瓶颈。
+- **出站完成管道去 `ContinueWith`**（约 150B/条：一个 continuation Task 加状态元组装箱）：
+  同量级，窗口默认 16 而消息体量远大于此。复活条件同上（单机 >5 万条/秒发布）。
+- **RabbitMQ 每投递 linked CTS**（约 200–300B/条加一次释放）：相对 100μs 级网络发布可忽略，
+  且与取消/关停语义耦合。复活条件：broker 侧确认 `ea.CancellationToken` 不会独立取消后，
+  可改为订阅级共享令牌。
+- **Saga 新建行批量插入**：框架内两处 `SaveManyAsync` 调用（SagaTimeoutProcessor 的回填与
+  终态冲刷）只处理已租约的既有行（Version ≥ 1），`Version == 0` 分支无框架调用方；收益只对
+  「外部批量新建 Saga」成立。复活条件：出现批量创建 Saga 的调用形态。
+- **`NullInboxStore`（去重开关）**：不用 Inbox 的消费方本就可以不调用 `InboxProcessor`，
+  新增开关不减少任何既有路径的成本，只会扩大「关掉幂等」的误用面。
+- **Saga 快照增量编码**：属快照格式演进的设计变更，需 ADR；只在步骤数 >32 的长流程上有感。
+- **回放心跳惰性化**：每批约 3 笔分配加一次计时器注册，占批成本不足 0.1%（批宽 1000 下更小）。
+
+## 2026-10-23 性能系统优化（车道注册表 / profile / 采样档）
+
+> 归因、候选、被否方案与裁决点见 `docs/review/perf-system-optimization-2026-10-23.md`。单一真源：`bench/bench-registry.json`；覆盖门禁：`scripts/perf-registry-check.cs`。
+> 环境：Windows 10 x64，Ryzen 9 8945HX（32 逻辑核），.NET SDK 11.0.100-rc.2.26504.105，BDN 0.16.0-preview.2；full 测量 HEAD `c3ac700`（工作树干净），standard 测量 HEAD `79b0a9a`；随后 `f340d1f` 的依赖升级（PalORM 6.7.0 / TUnit 1.76.0 / FsCheck 3.6.0）未重跑全量，引用本段数字须带 HEAD 标签。真库走 wslc pgbench/mysql84。
+
+**口径**：`alloc` 只做分配判定，计时不引用；`auto`/`fixed`/`fixed-short`/`medium-lite`/`tiny` 是趋势档；参考数字只来自 `medium`（原 MediumRun）与 `strict`。跨档不比较绝对值。
+
+本地 `--full`（16 条执行车道，173 case；`persist-medium` 为聚焦别名，不在 full 重复跑子集）实测：
+
+| 车道 | 优化前 | 实测 | 变化 | mode | 退出码 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| smoke | 1 | 1 | 0 | n/a | 0 |
+| app | 287 | 56 | -80% | auto + fixed | 0 |
+| framework | 751 | 71 | -91% | auto | 0 |
+| verify-persist | 2 | 2 | 0 | n/a | 0 |
+| infra | 811 | 45 | -94% | auto + medium | 0 |
+| coverage | 626 | 75 | -88% | auto + fixed | 0 |
+| concurrency | 525 | 126 | -76% | fixed-short | 0 |
+| saga | 42 | 10 | -76% | auto | 0 |
+| compression | 389 | 42 | -89% | auto（本轮 full） | 0 |
+| persist | 30 | 52 | +73% | medium | 0 |
+| persist-mark | 25 | 27 | +8% | medium | 0 |
+| stream | 462 | 139 | -70% | fixed | 0 |
+| delivery | 911 | 964 | +6% | medium-lite | 0 |
+| qps | 59 | 57 | -3% | 固定 harness | 0 |
+| compare | 173 | 18 | -90% | auto | 0 |
+| sqlgen | 23 | 12 | -48% | alloc | 0 |
+| persist-medium | 16 | 0 | 去重 | 聚焦别名 | n/a |
+| 合计 | 5,132 | 1,699 | -67% | | 17 PASS / 0 FAIL |
+
+`compression` 在 full 实测用 auto（42 秒），但 `Brotli_Compress_16KB` 的 Error/Mean 为 137%（统计无效，分配 304 B 稳定）。C2 校准把该车道切到 fixed：137 秒，Brotli 13.5%、其余 <10.5%，分配逐字节不变。最终配置的 full 组合为 `1,699 - 42 + 137 = 1,794` 秒（29.9 分钟，仍低于 30 分钟冲刺线与 45 分钟目标）。`persist` 从 30 秒升到 52 秒不是回归：旧 `--persist` 用裸 InProcess job，新车道用 `medium` 恢复参考趋势口径；`delivery` 的 +53 秒来自 RTT=1 的 Windows 定时器粒度（同轮内比值仍有效），采样未变。
+
+常规档 `standard`（9 条：smoke/app/framework/infra/coverage/concurrency/saga/persist/stream）实测 **592 秒（9.9 分钟）**，低于 600 秒预算。`persist-mark` 已移出 standard（保留 full 与 `--lane persist-mark`），因为 full 实测 standard 全量曾为 602 秒，超出 10 分钟 2 秒。`eps-run` 在 profile 实测超过 `targetsSeconds` 时打印 WARN 并写入 summary（不阻断）；standard 的 8 秒余量因此在每轮日志可见，静态预算门禁仍由 `perf-registry-check` 执行。
+
+远程 `--profile remote-full`（真库健康，PG 55432 / MySQL 3306，`palddd_bench_full`）：
+
+| 车道 | 优化前（健康外推） | 实测 | mode | 退出码 |
+| --- | ---: | ---: | --- | ---: |
+| persist-pg | 1,263 | 466 | medium-lite | 0 |
+| persist-mysql | 约 3,360（56 分钟） | 1,406 | medium-lite | 0 |
+| delivery-pg | 577 | 515 | medium-lite | 0 |
+| delivery-mysql | 707 | 818 | medium-lite | 0 |
+| 远程合计 | 约 5,907 | 3,205 | | 5 PASS / 0 FAIL |
+
+`--full --include-remote` 健康组合为 `1,699 + 3,205 = 4,904` 秒（81.7 分钟）；按最终 fixed compression 组合为 `1,794 + 3,205 = 4,999` 秒（83.3 分钟），均低于 90 分钟目标。`remote-smoke` 实测 PG 32 秒、MySQL 122 秒，均低于 5 分钟预算。
+
+远程快速失败（两栈各 10 秒上限）：PG 错库名 1 秒、缺表 1 秒、错密码 1 秒、不可达 2 秒；MySQL 错库名 1 秒、错密码 1 秒、不可达 2 秒。错库名报库名守卫，缺表报缺失表与 DDL 路径，错密码报 `28P01`/`Access denied`，均不打印凭据。
+
+分配与统计有效性：
+
+- smoke 6/6 预算不变；每帧流式零分配契约保持（Frame_Default 0 B、Frame_Enriched 0 B、SerializeAndFrame 0 B）。
+- 关键分配逐字节一致：SqlGen 128/120/176/9960/9632/0 B，Compression 304/16440/744/16656 B，Dispatcher 160/360/32 B，Serialization 112/208 B，Inbox 600/528 B，Outbox 64,640/6,680 B。Projection 固定档 13,202 B（基线 13,203 B）。
+- 端点总计 6,008/8,549 B 与基线 5,992/8,448 B 因采样而异，属请求级终态机与基准替身，不纳入每帧契约。
+- SqlGen 的计时为 alloc 档，不引用；其分配值是判定层。Compression 的 fixed 档最大 Error 13.5%，落在 5–15% 环境敏感带。
+
+被否与撤销项：
+
+- 投递夹具复位（首轮 seed、后续 UPDATE 复位）：实测 896 秒 vs 基线 906 秒（-1%），分段后 setup 残差 86→119 秒，无收益；已撤销，保留原 delete+seed 夹具。远程夹具复位未测。
+- 投递整类 3/2 采样：541 秒但 RTT=0 格 Error 100%–343%，统计无效；保持 5/3/1。
+- 投递快慢格拆分（快 5/3、慢 3/2，同 class 两次参数过滤）：928 秒 vs 964 秒（-3.7%），慢格 RTT=1 的 Error 20%–34%、快格部分 22%–110%；多秒 op 的 Jitting/预热与 Windows 定时器粒度主导，采样节省未兑现；撤销，保留单次 medium-lite。
+- `persist` 固定档：29 秒（medium 52 秒），但 Dapper AddSingle 39.3%、EF AddSingle 29.3%、Dapper 幂等 25.8%、PalORM AddSingle 15.9%，4 项越过 15% 线；保留 `medium`。
+- `stream` fixed-short：93 秒（fixed 139 秒），但 PerFrame_ZeroCopy_WithFlush 24.9%；该方法是已定案的零拷贝对照，不新增无效计时项；保留 `fixed`。
+- `coverage` fixed-short：116 秒，反而比 auto 的 93 秒慢；保留 auto。
+- 并发 `tiny`：112 秒（fixed-short 126 秒），但 7 项 Error >15%，最高 96.8%；保留 fixed-short。
+- MySQL persist 定向 tiny（最慢两类）：1,430 秒 vs 1,406 秒，网络方差盖过采样节省，无收益；撤销覆盖，保留 medium-lite。
+- 并行：默认不采用（InProcess 对并发负载敏感，历史随机 exit 1）；本轮未试。
+- 增量跳过：v1 不实现；full 已 ≤30 分钟。
+
+## 2026-10-24 产品性能探针（#45/#46）
+
+> 真库 wslc pgbench（55432）/ mysql84（3306），库 `palddd_bench_full`；入口 `--saga-advance-probe-pg|mysql`、`--saga-rotate-probe-pg|mysql`。只改 bench，不改 `src/`。
+
+### #45 Saga 批量 NextCheckAt
+
+| 方言 | 行数 | 语句数 | 耗时 | 执行计划 |
+| --- | ---: | ---: | ---: | --- |
+| PG | 256 | 1（源码 300 行/块） | 45.3 ms | Update -> Hash Join -> Seq Scan(leased_by) + Values Scan(256)；256 行夹具，`xactDelta=0` 是统计可见性延迟 |
+| MySQL | 256 | 1 | 84.9 ms | Update -> Filter -> Single-row index lookup using PRIMARY(saga_id) loops=256；`Com_update` 未即时增量 |
+
+结论：256 行一次 `AdvanceNextCheckAtAsync` 只发 1 条多行 UPDATE；MySQL 走主键索引。PG 的 256 行夹具走 Hash Join/Seq Scan 是小表计划，不代表 10k 生产表；如需大表计划应另建 10k 夹具。无产品改动。
+
+### #46 Saga 轮转 10k 活跃
+
+| 方言 | active | batch | ticks | seen | max/tick | p50 | p99 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| PG | 10,000 | 256 | 40 | 10,000 | 256 | 13.2 ms | 54.7 ms |
+| MySQL | 10,000 | 256 | 40 | 10,000 | 256 | 18.4 ms | 42.1 ms |
+
+结论：每 tick 租约后以 `checkedAt` 释放写游标，10k 活跃在 40 tick 内全部至少被租一次，无饥饿；旧形态释放清 NULL 会让前 256 行永远重租。无产品改动。
+
+### #43 幂等 StartOrGet 冲突路径（2026-10-24）
+
+`DapperIdempotencyStore`（非 PG/SQLite 方言）与 `PalOrmIdempotencyStore` 的 `StartOrGetAsync` 在 INSERT 冲突后原先走「四列分类读 + 二次整行读」共 3 条语句，现在只做一次整行读并按 Completed/Processing/Failed/过期分支返回，共 2 条；`TryStartAsync` 的 B5 四列轻量读保持不变（直调方仍不拉 `response_payload`）。
+
+| 方言/路径 | Completed 均值 | Processing 均值 | 语句数 |
+| --- | ---: | ---: | ---: |
+| MySQL Dapper（改动前） | 1.529 ms | 1.504 ms | 3 |
+| MySQL Dapper（改动后） | **0.796 ms** | **0.796 ms** | **2** |
+| PG Dapper（原子 UPSERT，未改） | 2.174→3.075 ms（环境波动） | 2.666→3.608 ms（环境波动） | 1–2 |
+
+口径：`--idempotency-startorq-probe-pg|mysql`，各 100 次，预置一条 Completed 与一条 Processing 记录，结果必须为 Existing；PG 路径代码未动，前后差异属环境波动。PalORM 同形态改动由 SQLite 测试覆盖（138 通过 / 54 跳过 / 0 失败），远程 PalORM 未单独复测。
+
+### #41 Saga 租约 payload 成本（2026-10-24，bench-only）
+
+10,000 活跃行、256/批、每行 `saga_data` 4,342 B（基准档）与空 payload 对照，各档跑两遍取第二遍；「只传输」= 不传 `JsonTypeInfo`（`Materialize` 走零反序列化兜底），「传输+解析」= 传源生成 `JsonTypeInfo`。每档一轮 40 tick 覆盖全部 10k。
+
+| 方言 | 4KB 只传输 p50 | 4KB 传输+解析 p50 | 空只传输 p50 | 空传输+解析 p50 | 4KB 增量（传输/解析） |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| PG | 16.2 ms | 18.7 ms | 15.5 ms | 17.3 ms | +0.7 / +2.4 ms per 256 行 |
+| MySQL（第 2 轮） | 30.0 ms | 32.8 ms | 24.8 ms | 19.9 ms | +2.8 ms 解析；传输增量被 p50 噪声盖住 |
+
+MySQL 第 1 轮大档解析增量 +6.2 ms、小档 p50 反低于传输档，两轮区间约 +2.7~6.2 ms/tick（p99 单轮 383 ms，受 InnoDB 检查点/网络抖动影响）。按行折算：4KB payload 约 12 µs/行（PG）、11~24 µs/行（MySQL）；10k 全量一轮增加约 0.12~0.25 s。
+
+裁决：#41 不做结构迁移（拆列/侧表）。理由：payload 成本相对「租约 + 处理器执行」低一个量级，迁移要动三栈 schema/备份/跨栈读取契约；当前无消费方平均 payload 分布与 saga 扫描 CPU 占比证据。触发条件：消费方平均 `saga_data` >1 KB 且 saga 扫描占处理器 CPU >5%，用 `--saga-payload-probe-pg|mysql` 复测后再立项。
+
+> 探针注意：typed 物化的 `SagaId` 取自 `saga_data` JSON，不是行主键；种子 JSON 必须写入与行相同的 `SagaId`，否则 `ReleaseLeasesAsync` 的 `WHERE saga_id IN (...)` 匹配 0 行，第二轮租不到新行（首跑实测踩到）。
 
 ## 未完成项
 

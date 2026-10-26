@@ -93,8 +93,12 @@ harness 形态可参考，见 performance.md）。
   （默认 0 = 不预热）注册 `PalOrmPreWarmHostedService<TProvider>`——启动期逐条灌暖物理连接
   （上游 XML：远程建连实测 ~8.5 ms/条），连接进 ADO.NET **进程级共享池**（按连接串键控，
   预热 options 与 DI 工厂共用同池）。失败降级启动（记 Warning 不炸 host）。
-- **关键配套——`MinPoolSize`**：只预热不设池下限，空闲修剪器会把暖连接清空（上游 6.5.0
+- **关键配套——`MinPoolSize`**：只预热不设池下限，空闲修剪器会把暖连接清空（上游 6.6.0
   XML 明示契约），预热与 `DbOptions.MinPoolSize`（或连接串 `Min Pool Size`）必须成对配置。
+- **会话池（PalORM 6.6.0，默认关闭）**：`AddPalOrm*` 的 `useSessionPool: true` 让 Scoped
+  `DataSession` 从 `IDataSessionFactory<TProvider>` 租出/归还，省下每请求会话构造税并让
+  复用槽、读连接跨请求存活；它池化的是会话包装，物理连接仍由 ADO.NET 驱动池管理，
+  与上文的连接预热互补，不替代 `MinPoolSize`。
 - **Dapper 栈**：无库内预热入口，直接用驱动连接串（Npgsql / MySqlConnector 的
   `Min Pool Size` + `Max Pool Size`）达成同款效果；进程级池语义同上。
 - **适用边界**：收益集中在**冷启动首请求尾延迟**（免首批建连串行化）；常驻进程稳态无收益

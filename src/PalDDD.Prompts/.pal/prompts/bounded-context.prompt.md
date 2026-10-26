@@ -47,7 +47,9 @@ services.AddPalJsonSerialization(catalog =>
 
 // 持久化 — 选择 Dapper（真 AOT，源生成 SQL）或 EF Core（非 AOT 适配器层）
 services.AddPalDapperTransactions(DapperDbType.PostgreSql, connectionString);
-// 或 services.AddPalOutboxUnitOfWork<OrderDbContext>();
+// 或 EF Core：OrderDbContext 继承方言 Outbox 基类并挂拦截器
+//   services.AddDbContext<OrderDbContext>((sp, o) => o.UseNpgsql(cs).UsePalOutboxInterceptor(sp));
+//   services.AddPalOutboxUnitOfWorkForContext<OrderDbContext>();
 
 // Outbox + Inbox + Saga
 services.AddPalOutbox();

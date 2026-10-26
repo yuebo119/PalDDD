@@ -3,7 +3,6 @@ namespace PalDDD.Integration.Tests;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using PalDDD.Transactions;
-using System.Collections.ObjectModel;
 using System.Globalization;
 using PalUlid = ByteAether.Ulid.Ulid;
 
@@ -62,6 +61,99 @@ public sealed class SagaStateEfCoreTests
         await Assert.That(bySagaId[1].CurrentState).IsEqualTo("FirstActive");  // 后插入
         // 实际返回也应按此序
         await Assert.That(activeList[0].CurrentState).IsEqualTo(bySagaId[0].CurrentState);
+    }
+
+    [Test]
+    public async Task LeaseDueSagasAsync_Sqlite_OrdersByNextCheckAt(CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new TestSagaStateDbContext(CreateSqliteOptions(connection));
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+
+        var oldCreatedLateDue = CreateState("OldCreatedLateDue", FixedNow);
+        oldCreatedLateDue.NextCheckAt = FixedNow.AddMinutes(-1);
+        var newCreatedEarlyDue = CreateState("NewCreatedEarlyDue", FixedNow.AddMinutes(1));
+        newCreatedEarlyDue.NextCheckAt = FixedNow.AddMinutes(-5);
+
+        db.SagaStates.Add(oldCreatedLateDue);
+        await db.SaveChangesAsync(cancellationToken);
+        db.SagaStates.Add(newCreatedEarlyDue);
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var due = await db.LeaseDueSagasAsync(
+            "due-owner", TimeSpan.FromMinutes(1), batchSize: 1, FixedNow, cancellationToken);
+
+        await Assert.That(due.Count).IsEqualTo(1);
+        await Assert.That(due[0].CurrentState).IsEqualTo("NewCreatedEarlyDue");
+    }
+
+    [Test]
+    public async Task BatchAdvanceNextCheckAndSaveMany_Sqlite_CommitOnceAndPersist(CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new TestSagaStateDbContext(CreateSqliteOptions(connection));
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+
+        db.SagaStates.Add(CreateState("First", FixedNow));
+        db.SagaStates.Add(CreateState("Second", FixedNow.AddMinutes(1)));
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var leased = await db.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        var leasedList = leased.ToList();
+        await Assert.That(leasedList.Count).IsEqualTo(2);
+        var nextCheck = FixedNow.AddMinutes(5);
+        foreach (var state in leasedList)
+            state.NextCheckAt = nextCheck;
+
+        var advanced = await db.AdvanceNextCheckAtAsync("owner-A", leasedList, cancellationToken);
+        await Assert.That(advanced).IsEqualTo(2);
+
+        await db.Entry(leasedList[0]).ReloadAsync(cancellationToken);
+        await Assert.That(leasedList[0].NextCheckAt).IsEqualTo(nextCheck);
+
+        foreach (var state in leasedList)
+        {
+            state.Status = SagaStatus.Completed;
+            state.CurrentState = "Completed";
+        }
+        var results = await db.SaveManyAsync(leasedList, cancellationToken);
+        await Assert.That(results.Count).IsEqualTo(2);
+        await Assert.That(results[0]).IsEqualTo(1);
+        await Assert.That(results[1]).IsEqualTo(1);
+
+        db.ChangeTracker.Clear();
+        var final = await db.GetByIdAsync(leasedList[0].SagaId, cancellationToken);
+        await Assert.That(final!.Status).IsEqualTo(SagaStatus.Completed);
+    }
+
+    [Test]
+    public async Task SagaScanCursor_Sqlite_RotatesReleasedBatchToBack(CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new TestSagaStateDbContext(CreateSqliteOptions(connection));
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+
+        db.SagaStates.Add(CreateState("First", FixedNow));
+        db.SagaStates.Add(CreateState("Second", FixedNow.AddSeconds(1)));
+        db.SagaStates.Add(CreateState("Third", FixedNow.AddSeconds(2)));
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var first = await db.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(first.Count).IsEqualTo(1);
+
+        var released = await db.ReleaseLeasesAsync(
+            "owner-A", first, FixedNow.AddSeconds(-1), cancellationToken);
+        await Assert.That(released).IsEqualTo(1);
+
+        var second = await db.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(second.Count).IsEqualTo(1);
+        await Assert.That(second[0].SagaId).IsNotEqualTo(first[0].SagaId);
     }
 
     [Test]
@@ -374,7 +466,7 @@ public sealed class SagaStateEfCoreTests
         DateTimeOffset createdAt,
         SagaStatus status = SagaStatus.Active,
         Dictionary<string, DateTimeOffset>? stepStartedAt = null,
-        Collection<string>? executedStepKeys = null)
+        List<string>? executedStepKeys = null)
         => new()
         {
             CurrentState = currentState,

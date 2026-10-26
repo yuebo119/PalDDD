@@ -12,7 +12,7 @@
 |---|---|---|---|
 | **AOT 等级** | ✅ **库级真 AOT** | ✅ **调用点级 AOT**(封装 API 面实测) | ❌ **实验性基础设施** |
 | 机制 | PalORM.SourceGen 编译期生成 Row DTO 物化 + 编译期 SQL,零运行时反射 | Dapper.AOT 1.1.0 拦截器:34 个调用点编译期重定向到生成代码 | precompiled queries + compiled model:发布期静态扫描 LINQ 生成拦截器(**微软自述高度实验**) |
-| 生产就绪 | ✅ CI 每次 NativeAOT publish + 运行断言 | ✅ SQLite / PG 18.4 / MySQL 8.4.11 真库 NativeAOT 二进制实跑 13/13 ×3 | ❌ 官方警告"not yet suited for production";发布仍报大量 trim 警告 |
+| 生产就绪 | ✅ CI 每次 NativeAOT publish + 运行断言 | ✅ SQLite / PG 18.6 / MySQL 8.4.11 真库 NativeAOT 二进制实跑 33/33 ×3（2026-10-21 补批量 EventLog 与 Inbox 唯一冲突路径） | ❌ 官方警告"not yet suited for production";发布仍报大量 trim 警告 |
 | 反射残留 | 零 | 库内经典路径保留但调用点不可达(46 条上游警告与生成代码正交,见下文边界) | 表达式树编译被拦截器消除,但零警告目标未达成(#33478) |
 | 行为差异 | 无 | SQL 执行层 ct 不可中断(连接超时兜底);接口签名与连接层 ct 保留 | —(本仓未启用 AOT) |
 | 本仓声明 | `IsAotCompatible=true` | `IsAotCompatible=true` + `[module:DapperAot]` 已启用 | `IsAotCompatible=false`(诚实) |
@@ -32,6 +32,7 @@
 - snake_case 列名由生成器 `NormalizedEquals` 规范化匹配,不依赖全局 `MatchNamesWithUnderscores`。
 - byte[] blob 参数经 `DynamicParameters` + `DbType.Binary`(绕开上游 List expansion 对 byte[] 的误展开,见实验报告坑 3)。
 - JIT 项目**零配置零感知**:拦截器生成的就是普通 C# 代码,JIT 下行为一致且更快(省首调 jitter 与策略缓存);"不需要 AOT 的项目"无需任何选择。
+- **2026-10-21 批量路径 AOT 勘正**:PG `AppendSingleRow` 与 MySQL `PositionRange` 原为 private 嵌套类型,Dapper.AOT 生成代码不可见,批量 EventLog 调用点静默回落 Reflection.Emit(NativeAOT 下 `PlatformNotSupportedException`);改 internal 后拦截器生效。`DapperSqlErrorClassifier` 同步把 PG/MySQL/SQLite 的鸭子类型反射改为强类型判定(三驱动已是本包 PrivateAssets 实现依赖),避免裁剪后属性不可见把唯一冲突误判为非冲突。三方言 NativeAOT 探针 33/33。
 
 **边界(消费者必读)**:
 
@@ -39,6 +40,7 @@
 2. **库级不干净**:Dapper.dll 自带 46 条方法级 trim/AOT 警告(IL2104/IL3053,`--singlewarn` 展开实证),全部落在经典反射路径,包级以 NoWarn 抑制——这是上游程序集属性,不是本仓调用点问题。
 3. **ct 收缩**:Dapper 经典直接重载无 ct 参数(CommandDefinition 被 DAP057 拒绝),SQL 执行层不可中断;上游 `Command<T>` 管道已支持 ct 只差调用点入口,未来上游补齐后可恢复。
 4. 消费者**无法**运行时/项目级切换"经典 vs AOT"——拦截在包编译期定死;也不需要切换(语义一致)。
+5. **自定义参数类型不被拦截(2026-10-21 实测)**——`QueryAsync<T>(sql, someDto, ...)` 的参数类型若不是匿名类型或 `DynamicParameters`,Dapper.AOT 1.1.0 不生成拦截器,调用静默回落到经典反射绑定(NativeAOT 下运行时炸)。以 `EmitCompilerGeneratedFiles=true` 核对生成文件确认:`private` 嵌套 DTO 与 `internal` 嵌套 DTO 结果相同(零拦截器、零诊断)。结论:参数只能用匿名类型或 `DynamicParameters`,不要引入参数 DTO 以"省分配"。
 
 ## EF Core 栈:实验性基础设施(本仓未启用)
 

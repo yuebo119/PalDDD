@@ -62,7 +62,7 @@ services.AddPalEventHandler<OrderCreated, OrderCreatedHandler>();
 - 使用 `Activator.CreateInstance` 动态创建 handler。
 - 使用 `MakeGenericType` 在运行时拼接泛型 handler。
 - 使用 request attribute 隐式声明事务策略。
-- **AOT 发布下使用开放泛型管道行为注册** `services.AddPalPipelineBehaviors()`（无类型参数的重载）。该重载注册开放泛型 `IPipelineBehavior<,>`，运行时解析 + 值类型响应（`Unit`/`int`/`Guid`）会触发 DI 的 `AotCannotCreateGenericValueType`（`NotSupportedException`，无配置可关闭）。改用闭合注册：`AddPalPipelineBehaviors<TRequest, TResponse>()`（显式闭合）或直接使用 `AddPalCommandHandler<T...>()` / `AddPalQueryHandler<T...>()`（自动闭合）。
+- **AOT 发布下使用开放泛型管道行为注册** `services.AddPalPipelineBehaviors()`（无类型参数的重载）。该重载注册开放泛型 `IPipelineBehavior<,>`，运行时解析 + 值类型响应（`Unit`/`int`/`Guid`）会触发 DI 的 `AotCannotCreateGenericValueType`（`NotSupportedException`，无配置可关闭）。改用闭合注册：`AddPalPipelineBehaviors<TRequest, TResponse>()`（显式闭合）或直接使用 `AddPalCommandHandler<T...>()` / `AddPalQueryHandler<T...>()`（自动闭合）。**`AddPalCoreStack()` 内部调用开放版，因此同样不可用于 AOT**——AOT 应用改用 `AddPalDDD()` + 闭合 handler 注册。
 
 `PalDDD.CQRS` 只保留 request/handler/dispatcher/pipeline 核心能力。事务由应用层或外层持久化适配层显式处理，避免 CQRS 包依赖 repository 抽象，也避免 attribute 驱动的隐藏策略。
 
@@ -97,7 +97,7 @@ public sealed partial class OrderStatus : SmartEnum<OrderStatus, int>
 
 ### 消息
 
-`[GenerateMessage]` 用于标记可生成消息目录辅助代码的类型。消息必须声明稳定 wire name；`SchemaVersion` 必须大于等于 1，且同一编译单元中的 wire name 不能重复。稳定 wire name 只允许小写字母、数字、`.` 和 `-`，并且必须以 `.v{SchemaVersion}` 结尾。违反这些规则时，源码生成器会报告 `PALMSG001`-`PALMSG005` 编译期错误；消息类型若声明在泛型类型内（含自身带类型参数）报告 `PALMSG006`；可访问性低于 internal 报告 `PALMSG007`。
+`[GenerateMessage]` 用于标记可生成消息目录辅助代码的类型。消息必须声明稳定 wire name；`SchemaVersion` 必须大于等于 1，且同一编译单元中的 `(wire name, SchemaVersion)` 不能重复。稳定 wire name 只允许小写字母、数字、`.` 和 `-`；版本后缀可选——省略时表示跨版本稳定的 wire name（演化管线要求相邻版本同名），若写成 `.v{n}` 则必须与 `SchemaVersion` 一致（`PALMSG005`）；领域事件的 `IDomainEvent.EventName` 仍由 `PDDD010` 强制 `.v{n}` 后缀。违反这些规则时，源码生成器会报告 `PALMSG001`-`PALMSG005` 编译期错误；消息类型若声明在泛型类型内（含自身带类型参数）报告 `PALMSG006`；可访问性低于 internal 报告 `PALMSG007`。
 
 领域事件类型必须是 `sealed`，否则 analyzer 会报告 `PDDD012`；领域事件也必须声明 `[GenerateMessage]`，否则 analyzer 会报告 `PDDD005`。这些规则保证 Outbox、broker、EventLog replay 和 schema evolution 不依赖可继承事件层级、CLR 类型名或运行时反射推断消息契约。
 领域事件的 message name 必须是稳定小写 wire name，否则 analyzer 会报告 `PDDD009`。
@@ -176,7 +176,7 @@ PalORM 是推荐的持久化路径——完整链路 Native AOT 支持，取代 
 
 ## Dapper 适配层 — 调用点级 AOT（2026-09-13 实测通过）
 
-Dapper.AOT 1.1.0 全量启用（`[module:DapperAot]` + 34 调用点 `CommandDefinition`→直接重载 + 声明式 TypeHandler 接管运行时注册）。SQLite / PostgreSQL 18.4 / MySQL 8.4.11 真库 NativeAOT 二进制实测各 13/13（四组件全 CRUD + blob 往返）。
+Dapper.AOT 1.1.0 全量启用（`[module:DapperAot]` + 34 调用点 `CommandDefinition`→直接重载 + 声明式 TypeHandler 接管运行时注册）。SQLite / PostgreSQL 18.6 / MySQL 8.4.11 真库 NativeAOT 二进制实测各 33/33（Outbox/EventLog/Idempotency/Saga/Checkpoint/Inbox 六组件，含 PG/MySQL 批量 EventLog 路径；2026-10-21 修复批量行类型可访问性与唯一冲突分类器反射后复测）。
 
 **能力边界**：封装 API 面（六接口 × 34 调用点）AOT 实测通过；Dapper.dll 库级非 AOT 干净（上游 46 条警告，全部落在经典反射路径，与拦截器生成代码正交）——绕过封装直用 Dapper 原生 API（`CommandDefinition`/`dynamic`/运行时 `AddTypeHandler`）在 AOT 下不受支持。行为变化：SQL 执行层 ct 不可中断（直接重载无 ct 参数，连接超时兜底）。
 

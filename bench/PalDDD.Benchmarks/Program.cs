@@ -6,7 +6,9 @@ using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
 using BenchmarkDotNet.Toolchains.InProcess.Emit;
 using PalDDD.Core;
+using Perfolizer.Horology;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 if (args is ["--smoke"])
 {
@@ -14,283 +16,425 @@ if (args is ["--smoke"])
 }
 
 // 2026-10-09 新维度轮①：--qps——绝对 QPS 并行量具（非 BDN，1/4/8 线程 × dispatch/chain
-// 两场景，每格 3s 实测聚合 ops/sec；口径趋势级，同日同机可比）。
+// 两场景，每格 3s 实测聚合 ops/sec；口径趋势级，同日同机可比）。不依赖注册表，保持秒级可用。
 if (args is ["--qps"])
 {
     return QpsHarness.Run();
 }
 
-// 2026-10-09 新维度轮②：--compare——横向对比（MediatR 12.5.0 同进程同 harness 四点对照；
-// CAP 发布对比经 PALDDD_BENCH_CAP 环境变量 opt-in，见 CapComparisonBenchmarks 头注）。
-if (args.Contains("--compare", StringComparer.OrdinalIgnoreCase))
+var registry = BenchRegistry.Current;
+
+if (args.Contains("--list-lanes", StringComparer.OrdinalIgnoreCase))
 {
-    var medium = ModeConfig(args);
-    BenchmarkRunner.Run<MediatRComparisonBenchmarks>(medium);
+    PrintRegistryLanes(registry);
+    return 0;
+}
+
+var runners = new Dictionary<string, Action<IConfig>>(StringComparer.Ordinal)
+{
+    ["EntityDomainEventBenchmarks"] = c => BenchmarkRunner.Run<EntityDomainEventBenchmarks>(c),
+    ["ValueObjectBenchmarks"] = c => BenchmarkRunner.Run<ValueObjectBenchmarks>(c),
+    ["SmartEnumBenchmarks"] = c => BenchmarkRunner.Run<SmartEnumBenchmarks>(c),
+    ["ValidationBenchmarks"] = c => BenchmarkRunner.Run<ValidationBenchmarks>(c),
+    ["EntityCreationBenchmarks"] = c => BenchmarkRunner.Run<EntityCreationBenchmarks>(c),
+    ["DispatcherBenchmarks"] = c => BenchmarkRunner.Run<DispatcherBenchmarks>(c),
+    ["SerializationBenchmarks"] = c => BenchmarkRunner.Run<SerializationBenchmarks>(c),
+    ["OutboxThroughputBenchmarks"] = c => BenchmarkRunner.Run<OutboxThroughputBenchmarks>(c),
+    ["InboxThroughputBenchmarks"] = c => BenchmarkRunner.Run<InboxThroughputBenchmarks>(c),
+    ["EventLogBenchmarks"] = c => BenchmarkRunner.Run<EventLogBenchmarks>(c),
+    ["SagaStateBenchmarks"] = c => BenchmarkRunner.Run<SagaStateBenchmarks>(c),
+    ["ConfigurationBenchmarks"] = c => BenchmarkRunner.Run<ConfigurationBenchmarks>(c),
+    ["CompressionBenchmarks"] = c => BenchmarkRunner.Run<CompressionBenchmarks>(c),
+    ["SqlGenBenchmarks"] = c => BenchmarkRunner.Run<SqlGenBenchmarks>(c),
+    ["ProjectionBenchmarks"] = c => BenchmarkRunner.Run<ProjectionBenchmarks>(c),
+    ["MessageEvolutionBenchmarks"] = c => BenchmarkRunner.Run<MessageEvolutionBenchmarks>(c),
+    ["SpecificationBenchmarks"] = c => BenchmarkRunner.Run<SpecificationBenchmarks>(c),
+    ["EndToEndChainBenchmarks"] = c => BenchmarkRunner.Run<EndToEndChainBenchmarks>(c),
+    ["HostingBenchmarks"] = c => BenchmarkRunner.Run<HostingBenchmarks>(c),
+    ["OutboxConcurrencyInMemoryBenchmarks"] = c => BenchmarkRunner.Run<OutboxConcurrencyInMemoryBenchmarks>(c),
+    ["OutboxConcurrencyDapperSqliteBenchmarks"] = c => BenchmarkRunner.Run<OutboxConcurrencyDapperSqliteBenchmarks>(c),
+    ["SagaLaneBenchmarks"] = c => BenchmarkRunner.Run<SagaLaneBenchmarks>(c),
+    ["StreamReadBenchmarks"] = c => BenchmarkRunner.Run<StreamReadBenchmarks>(c),
+    ["DapperPersistenceBenchmarks"] = c => BenchmarkRunner.Run<DapperPersistenceBenchmarks>(c),
+    ["PalOrmPersistenceBenchmarks"] = c => BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(c),
+    ["EfCorePersistenceBenchmarks"] = c => BenchmarkRunner.Run<EfCorePersistenceBenchmarks>(c),
+    ["OutboxMarkPathBenchmarks"] = c => BenchmarkRunner.Run<OutboxMarkPathBenchmarks>(c),
+    ["OutboxDeliveryDrainBenchmarks"] = c => BenchmarkRunner.Run<OutboxDeliveryDrainBenchmarks>(c),
+    ["OutboxDeliveryCadenceBenchmarks"] = c => BenchmarkRunner.Run<OutboxDeliveryCadenceBenchmarks>(c),
+    ["OutboxDeliveryRemoteDrainBenchmarks"] = c => BenchmarkRunner.Run<OutboxDeliveryRemoteDrainBenchmarks>(c),
+    ["OutboxDeliveryRemoteAutoDrainBenchmarks"] = c => BenchmarkRunner.Run<OutboxDeliveryRemoteAutoDrainBenchmarks>(c),
+    ["MediatRComparisonBenchmarks"] = c => BenchmarkRunner.Run<MediatRComparisonBenchmarks>(c),
+    ["CapComparisonBenchmarks"] = c => BenchmarkRunner.Run<CapComparisonBenchmarks>(c),
+    ["DapperRemoteOutboxThroughputBenchmarks"] = c => BenchmarkRunner.Run<DapperRemoteOutboxThroughputBenchmarks>(c),
+    ["DapperRemoteOutboxConcurrencyBenchmarks"] = c => BenchmarkRunner.Run<DapperRemoteOutboxConcurrencyBenchmarks>(c),
+    ["PalOrmRemoteOutboxBenchmarks"] = c => BenchmarkRunner.Run<PalOrmRemoteOutboxBenchmarks>(c),
+    ["PgDialectFeaturesBenchmarks"] = c => BenchmarkRunner.Run<PgDialectFeaturesBenchmarks>(c),
+    ["MySqlSkipLockedShapeBenchmarks"] = c => BenchmarkRunner.Run<MySqlSkipLockedShapeBenchmarks>(c),
+};
+
+if (TryValue(args, "--profile", out var profile))
+    return await RunProfileAsync(profile, args, registry, runners);
+
+if (TryValue(args, "--lane", out var laneName))
+    return await RunLaneByNameAsync(laneName, args, registry, runners);
+
+// 2026-10-09 新维度轮②：--compare——横向对比（MediatR 12.5.0 同进程同 harness；
+// CAP 发布对比经 PALDDD_BENCH_CAP 环境变量 opt-in）。--lane compare 与旧旗标同路。
+if (args.Contains("--compare", StringComparer.OrdinalIgnoreCase))
+    return RunCompare(args);
+
+if (args.Contains("--verify-persist", StringComparer.OrdinalIgnoreCase))
+    return await PersistenceVerifyRunner.RunAsync();
+
+// ─── 车道别名（保留旧旗标，内部统一走注册表采样档）───
+if (args.Contains("--persist-medium", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("persist-medium", args, registry, runners);
+
+if (args.Contains("--persist-mark", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("persist-mark", args, registry, runners);
+
+if (args.Contains("--persist", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("persist", args, registry, runners);
+
+if (args.Contains("--framework", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("framework", args, registry, runners);
+
+if (args.Contains("--app", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("app", args, registry, runners);
+
+if (args.Contains("--infra", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("infra", args, registry, runners);
+
+if (args.Contains("--coverage", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("coverage", args, registry, runners);
+
+if (args.Contains("--concurrency", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("concurrency", args, registry, runners);
+
+if (args.Contains("--saga", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("saga", args, registry, runners);
+
+if (args.Contains("--compression", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("compression", args, registry, runners);
+
+if (args.Contains("--stream", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("stream", args, registry, runners);
+
+if (args.Contains("--delivery", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("delivery", args, registry, runners);
+
+if (args.Contains("--sqlgen", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("sqlgen", args, registry, runners);
+
+// ─── 迁移/量具探针（保持原入口，不参与注册表采样）───
+// 迁移演练探针（2026-10-19）：真库上执行 M1/M4 expand + 回填 + 读切换校验。
+// M2/M3 量具（2026-10-19）：M2 内存 100k 回放检查点调用计数；M3 真 broker 订阅拓扑压测。
+if (args.Contains("--m2-probe", StringComparer.OrdinalIgnoreCase))
+    return await ProjectionProbe.RunM2Async();
+
+// 出站唤醒信号量具（2026-10-22 性能轮）：写入到标记发布的延迟（InMemory 全链路，
+// 5 分钟轮询使信号成为唯一唤醒源）+ 突发写入的 tick 合并校验。
+if (args.Contains("--wakeup-probe", StringComparer.OrdinalIgnoreCase))
+    return await OutboxWakeUpProbe.RunAsync();
+
+if (args.Contains("--m3-probe", StringComparer.OrdinalIgnoreCase))
+    return await RabbitChannelProbe.RunM3Async();
+
+if (args.Contains("--m1-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM1Async(postgreSql: true);
+
+if (args.Contains("--m1-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM1Async(postgreSql: false);
+
+// 产品性能轮（2026-10-24）：#45 批量 NextCheckAt 真库语句数/EXPLAIN；#46 10k 活跃轮转覆盖。
+if (args.Contains("--saga-advance-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaAdvanceProbeAsync(postgreSql: true);
+
+if (args.Contains("--saga-advance-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaAdvanceProbeAsync(postgreSql: false);
+
+if (args.Contains("--saga-rotate-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaRotateProbeAsync(postgreSql: true);
+
+if (args.Contains("--saga-rotate-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaRotateProbeAsync(postgreSql: false);
+
+// 产品性能轮 #43：幂等 StartOrGet 冲突路径基线/复测。
+if (args.Contains("--idempotency-startorq-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunIdempotencyStartOrGetProbeAsync(postgreSql: true);
+
+if (args.Contains("--idempotency-startorq-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunIdempotencyStartOrGetProbeAsync(postgreSql: false);
+
+// 产品性能轮 #41：Saga 租约 payload（saga_data）传输/反序列化成本量化。
+if (args.Contains("--saga-payload-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaPayloadProbeAsync(postgreSql: true);
+
+if (args.Contains("--saga-payload-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaPayloadProbeAsync(postgreSql: false);
+
+// 生产窗口规模演练（2026-10-20）：M1 10k 活跃 Saga 尾部延迟；M4 10 万行回填与索引体积。
+if (args.Contains("--m1-load-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM1LoadAsync(postgreSql: true);
+
+if (args.Contains("--m1-load-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM1LoadAsync(postgreSql: false);
+
+if (args.Contains("--m4-scale-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM4ScaleAsync(postgreSql: true);
+
+if (args.Contains("--m4-scale-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM4ScaleAsync(postgreSql: false);
+
+// PalORM PG 单事件追加快路径行为探针（2026-10-20 性能轮）。
+if (args.Contains("--palorm-append-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunPalOrmAppendPgAsync();
+
+// Outbox 批量写入探针（2026-10-21）：PG 强类型 COPY / MySQL IDataReader BulkCopy，
+// 1000 行写入 + 抽样回读。
+if (args.Contains("--outbox-bulk-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunOutboxBulkProbeAsync(postgreSql: true);
+
+if (args.Contains("--outbox-bulk-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunOutboxBulkProbeAsync(postgreSql: false);
+
+// Inbox 批量认领探针（2026-10-21）：100 条一次认领/完成/重复拒绝。
+if (args.Contains("--inbox-batch-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunInboxBatchProbeAsync(postgreSql: true);
+
+if (args.Contains("--inbox-batch-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunInboxBatchProbeAsync(postgreSql: false);
+
+if (args.Contains("--m4-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM4Async(postgreSql: true);
+
+if (args.Contains("--m4-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM4Async(postgreSql: false);
+
+// ADR-033 Auto 组合 A/B（2026-10-19）：只跑新车道，避开旧 BatchMark 矩阵的 5 分钟上限。
+if (args.Contains("--delivery-auto-pg", StringComparer.OrdinalIgnoreCase))
+    return await RunRemoteDeliveryAsync(isPostgreSql: true, autoOnly: true);
+
+if (args.Contains("--delivery-auto-mysql", StringComparer.OrdinalIgnoreCase))
+    return await RunRemoteDeliveryAsync(isPostgreSql: false, autoOnly: true);
+
+// 远程真库车道别名（采样档由注册表给出；--strict 叠加时走严格档）。
+if (args.Contains("--persist-pg", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("persist-pg", args, registry, runners);
+
+if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("persist-mysql", args, registry, runners);
+
+if (args.Contains("--delivery-pg", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("delivery-pg", args, registry, runners);
+
+if (args.Contains("--delivery-mysql", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("delivery-mysql", args, registry, runners);
+
+if (args.Contains("--remote-smoke-pg", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("remote-smoke-pg", args, registry, runners);
+
+if (args.Contains("--remote-smoke-mysql", StringComparer.OrdinalIgnoreCase))
+    return await RunLaneByNameAsync("remote-smoke-mysql", args, registry, runners);
+
+// 严格参考档（无其他模式参数时默认跑两类既有严格档）。
+if (args.Contains("--strict", StringComparer.OrdinalIgnoreCase)
+    && args.Count(a => a.StartsWith("--", StringComparison.Ordinal)) == 1)
+    return await RunLaneByNameAsync("strict-core", args, registry, runners);
+
+// 历史注记（2026-09-19 五十四轮）：net11-rc runtime moniker 不被 BDN 0.15.8 的
+// DotNetSdkValidator 识别（GetRuntimeVersion throw NotRecognizedException；验证内嵌在
+// CsProjCoreToolchain.Validate，且 Switcher 在 filter 前对全程序集 case 验证——任何
+// [ShortRunJob] 类都会触发崩溃），故旧入口走显式 InProcess config 路径绕过。
+// 2026-10-17 升位 BDN 0.16.0-preview.2 后默认 Switcher 入口已恢复（--list 实测 exit 0
+// 全量列出，moniker 识别修复）；显式 InProcess 路径保留（注册表模式）。
+BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+
+return 0;
+
+// ══════════════ 注册表驱动路由 ══════════════
+
+static bool TryValue(string[] arguments, string name, out string value)
+{
+    for (var i = 0; i < arguments.Length - 1; i++)
+    {
+        if (string.Equals(arguments[i], name, StringComparison.OrdinalIgnoreCase))
+        {
+            value = arguments[i + 1];
+            return true;
+        }
+    }
+    value = "";
+    return false;
+}
+
+static async Task<int> RunProfileAsync(
+    string profile,
+    string[] args,
+    BenchRegistry registry,
+    IReadOnlyDictionary<string, Action<IConfig>> runners)
+{
+    var lanes = registry.Profile(profile).ToList();
+    if (lanes.Count == 0)
+    {
+        Console.Error.WriteLine($"ERROR: profile「{profile}」没有车道；可用：{string.Join(", ", registry.Lanes.SelectMany(l => l.Profiles).Distinct())}");
+        return 2;
+    }
+    foreach (var lane in lanes)
+    {
+        var exitCode = await RunLaneAsync(lane, args, registry, runners).ConfigureAwait(false);
+        if (exitCode != 0) return exitCode;
+    }
+    return 0;
+}
+
+static async Task<int> RunLaneByNameAsync(
+    string name,
+    string[] args,
+    BenchRegistry registry,
+    IReadOnlyDictionary<string, Action<IConfig>> runners)
+{
+    LaneDef lane;
+    try
+    {
+        lane = registry.Lane(name);
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"ERROR: {ex.Message}；--list-lanes 查看清单");
+        return 2;
+    }
+    return await RunLaneAsync(lane, args, registry, runners).ConfigureAwait(false);
+}
+
+static async Task<int> RunLaneAsync(
+    LaneDef lane,
+    string[] args,
+    BenchRegistry registry,
+    IReadOnlyDictionary<string, Action<IConfig>> runners)
+{
+    var strict = args.Contains("--strict", StringComparer.OrdinalIgnoreCase);
+    return lane.Name switch
+    {
+        "smoke" => SmokeBenchmarks.Run(),
+        "verify-persist" => await PersistenceVerifyRunner.RunAsync().ConfigureAwait(false),
+        "qps" => QpsHarness.Run(),
+        "compare" => RunCompare(args),
+        "persist-pg" => await RunRemoteDialectAsync(isPostgreSql: true, lane, strict).ConfigureAwait(false),
+        "persist-mysql" => await RunRemoteDialectAsync(isPostgreSql: false, lane, strict).ConfigureAwait(false),
+        "delivery-pg" => await RunRemoteDeliveryAsync(isPostgreSql: true).ConfigureAwait(false),
+        "delivery-mysql" => await RunRemoteDeliveryAsync(isPostgreSql: false).ConfigureAwait(false),
+        "remote-smoke-pg" => await RunRemoteSmokeAsync(isPostgreSql: true, lane, runners).ConfigureAwait(false),
+        "remote-smoke-mysql" => await RunRemoteSmokeAsync(isPostgreSql: false, lane, runners).ConfigureAwait(false),
+        _ => RunClasses(lane, strict, runners),
+    };
+}
+
+static int RunClasses(
+    LaneDef lane,
+    bool strict,
+    IReadOnlyDictionary<string, Action<IConfig>> runners)
+{
+    foreach (var className in lane.Classes)
+    {
+        if (!runners.TryGetValue(className, out var run))
+        {
+            Console.Error.WriteLine($"ERROR: 车道 {lane.Name} 引用了未登记 runner 的类 {className}");
+            return 2;
+        }
+        var modeName = strict && lane.Name != "coverage"
+            ? "strict"
+            : lane.Overrides.TryGetValue(className, out var overrideMode) ? overrideMode : lane.Mode;
+        var config = ModeConfig(modeName);
+        if (lane.Filter.Count > 0)
+        {
+            var filter = new HashSet<string>(lane.Filter, StringComparer.Ordinal);
+            config.AddFilter(new NameFilter(filter.Contains));
+        }
+        run(config);
+    }
+    return 0;
+}
+
+/// <summary>
+/// 采样档到 BDN ManualConfig 的单点映射。alloc 的计时不作引用；auto/fixed/fixed-short/
+/// medium-lite/tiny 是趋势档；medium 与 strict 是参考档（口径见 docs/performance.md）。
+/// </summary>
+static ManualConfig ModeConfig(string modeName)
+{
+    if (!BenchRegistry.Current.Modes.TryGetValue(modeName, out var mode))
+        throw new InvalidOperationException($"未知采样档「{modeName}」");
+
+    // 以 Job.MediumRun 预设为基座（与既有 _persist/--delivery 车道同形态）：Job.InProcess
+    // 是 mutator，会与 DefaultConfig 的默认 job union 出双 job，实测把 saga 从 4 秒拉到 47 秒。
+    // MediumRun 预设 + 覆盖计数保持单 job。
+    var job = Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
+        .WithWarmupCount(mode.Warmup)
+        .WithLaunchCount(mode.Launch)
+        .WithIterationCount(mode.Iterations ?? 5);
+    if (mode.Invocation is int invocation)
+        job = job.WithInvocationCount(invocation).WithUnrollFactor(1);
+    if (mode.IterationTimeMs is int iterationTimeMs)
+    {
+        job = job
+            .WithIterationTime(TimeInterval.FromMilliseconds(iterationTimeMs))
+            .WithMinIterationCount(mode.MinIterations ?? 3)
+            .WithMaxIterationCount(mode.MaxIterations ?? 5);
+    }
+
+    var artifactsName = modeName is "medium" ? "artifacts-medium"
+        : modeName is "strict" ? "artifacts-strict"
+        : "artifacts-" + modeName;
+    return ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(job)
+        .AddDiagnoser(MemoryDiagnoser.Default)
+        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, artifactsName));
+}
+
+static int RunCompare(string[] args)
+{
+    var strict = args.Contains("--strict", StringComparer.OrdinalIgnoreCase);
+    BenchmarkRunner.Run<MediatRComparisonBenchmarks>(ModeConfig(strict ? "strict" : "auto"));
     if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PALDDD_BENCH_CAP_MYSQL"))
         && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PALDDD_BENCH_CAP_RABBIT")))
     {
         // 2026-10-10 前置检查门配套：BDN BenchmarkRunner 不因基准失败（如 GlobalSetup 抛出）
         // 置非零进程退出码——曾使重试风暴垃圾数字以 exit 0 静默通过。此处消费 Summary
-        // 判定失败并返回 1（Report.Success=false 覆盖 setup 异常/执行异常两形态）
-        var capSummary = BenchmarkRunner.Run<CapComparisonBenchmarks>(medium);
+        // 判定失败并返回 1（Report.Success=false 覆盖 setup 异常/执行异常两形态）。
+        var capSummary = BenchmarkRunner.Run<CapComparisonBenchmarks>(ModeConfig("medium"));
         if (capSummary.Reports.Any(r => !r.Success))
             return 1;
     }
     else
+    {
         Console.WriteLine("⏭ CAP 对比跳过（需 PALDDD_BENCH_CAP_MYSQL + PALDDD_BENCH_CAP_RABBIT 环境变量，见 CapComparisonBenchmarks 头注）");
+    }
     return 0;
 }
 
-// 历史注记（2026-09-19 五十四轮）：net11-rc runtime moniker 不被 BDN 0.15.8 的
-// DotNetSdkValidator 识别（GetRuntimeVersion throw NotRecognizedException；验证内嵌在
-// CsProjCoreToolchain.Validate，且 Switcher 在 filter 前对全程序集 case 验证——任何
-// [ShortRunJob] 类都会触发崩溃），故 --persist 走显式 InProcess config 路径绕过。
-// 2026-10-17 升位 BDN 0.16.0-preview.2 后默认 Switcher 入口已恢复（--list 实测 exit 0
-// 全量列出，moniker 识别修复）；显式 InProcess 路径保留（MediumRun/InProcess 作业形态
-// 是刻意配置，与入口可达性无关）。
-if (args.Contains("--verify-persist", StringComparer.OrdinalIgnoreCase))
+static void PrintRegistryLanes(BenchRegistry registry)
 {
-    return await PersistenceVerifyRunner.RunAsync();
+    Console.WriteLine("EPSL 车道（bench/bench-registry.json）：");
+    foreach (var lane in registry.Lanes)
+    {
+        var profiles = lane.Profiles.Count == 0 ? "tool" : string.Join("/", lane.Profiles);
+        var remote = lane.Remote ? " [remote]" : "";
+        Console.WriteLine($"  {lane.Name,-18} --{lane.Flag,-18} {profiles,-24} mode={lane.Mode,-12} {lane.TimeoutMinutes,2}m {lane.ExpectedSeconds,5}s{remote}");
+    }
+    Console.WriteLine();
+    Console.WriteLine("--profile gate|standard|full|remote-smoke|remote-full|strict");
+    Console.WriteLine("--lane <name> 单车道；旧旗标（--framework 等）保留为别名");
 }
 
-if (args.Contains("--persist", StringComparer.OrdinalIgnoreCase))
-{
-    // 片3-P2-1 修复（2026-09-19 第五十四轮）：--persist 也传显式 InProcess config——
-    // 原依赖类 [InProcess] attribute（已随本修复移除），避免 attribute 与 ManualConfig
-    // 叠加产生双 job（BDN 0.15.8 实测：config 合并对 jobs 是 union 不去重）
-    var inProcessOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Default))
-        .AddDiagnoser(MemoryDiagnoser.Default);
-    BenchmarkRunner.Run<DapperPersistenceBenchmarks>(inProcessOnly);
-    BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(inProcessOnly);
-    BenchmarkRunner.Run<EfCorePersistenceBenchmarks>(inProcessOnly);
-    return 0;
-}
+// ══════════════ 远程车道 ══════════════
 
-// decision-2026-09-17 §2.5 验收三段式（2026-09-19 增）：before 锚须 medium 口径
-// 单次自比——历史两次 ShortRun 运行差 53%，拼接区间不作基线。显式 ManualConfig
-// （Job.Medium + InProcess + MemoryDiagnoser + Lease filter），不依赖类 attribute
-// 隐式默认，口径随 BDN artifacts 完整落盘。走 Run<T> 而非 Switcher（同 --persist
-// 理由：Switcher 对全程序集验证 net11 moniker 必崩）。
-if (args.Contains("--persist-medium", StringComparer.OrdinalIgnoreCase))
-{
-    // P2（perf-run-2026-09-20）：medium 报告写独立目录——原形态覆盖全量报告
-    // github.md（裁决数字无处查）。归档纪律：medium 数字入 docs/performance.md
-    // 时带日期，artifacts-medium 目录留存原始报告。
-    var leaseOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default))
-        .AddDiagnoser(MemoryDiagnoser.Default)
-        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-medium"))
-        .AddFilter(new NameFilter(name =>
-            name.Contains("Outbox_Lease_Batch100", StringComparison.Ordinal)));
-    BenchmarkRunner.Run<DapperPersistenceBenchmarks>(leaseOnly);
-    BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(leaseOnly);
-    BenchmarkRunner.Run<EfCorePersistenceBenchmarks>(leaseOnly);
-    return 0;
-}
-
-// R4/P0-2（ADR-027，2026-10-15）：--persist-mark——标记段成本与分组效率（本地 SQLite
-// 口径，解释 --delivery 车道 BatchMarkThreshold A/B 的本地零差：标记往返 μs 级，
-// 收益形态在远程库网络 RTT 上——本机无 Docker，真库车道不可跑）。medium 口径
-// （μs 级 op 需统计有效性），独立 artifacts 目录归档。
-if (args.Contains("--persist-mark", StringComparer.OrdinalIgnoreCase))
-{
-    var markOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default))
-        .AddDiagnoser(MemoryDiagnoser.Default)
-        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-mark"))
-        .AddFilter(new NameFilter(name =>
-            name.Contains("Mark_PerRow100", StringComparison.Ordinal)
-            || name.Contains("Mark_Batch100", StringComparison.Ordinal)));
-    BenchmarkRunner.Run<OutboxMarkPathBenchmarks>(markOnly);
-    return 0;
-}
-
-// P1（perf-run-2026-09-20）：Saga 车道基准锚——ProcessEventAsync 编排开销
-// （Normal 基线 / FanOut items=4），供骨架优化与 v3.0 子项粒度改造做回归比对。
-if (args.Contains("--saga", StringComparer.OrdinalIgnoreCase))
-{
-    BenchmarkRunner.Run<SagaLaneBenchmarks>();
-    return 0;
-}
-
-// 2026-09-25 特性审计三轮：压缩路径基准（GZip/Deflate span 编码器改造的量具先行，
-// InProcess 显式 config 同 --persist 理由）。
-if (args.Contains("--compression", StringComparer.OrdinalIgnoreCase))
-{
-    var inProcessOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Default))
-        .AddDiagnoser(MemoryDiagnoser.Default);
-    BenchmarkRunner.Run<CompressionBenchmarks>(inProcessOnly);
-    return 0;
-}
-
-// 2026-10-08 性能测试系统优化：--framework / --infra——InProcess 旁路扩到 Framework 5 类
-// 与 Infra 6 类。此前 11 类仅有 [ShortRunJob] attribute 形态，只能走默认 Switcher 入口，
-// 而 Switcher 在 net11-rc 工具链必崩（见顶部 moniker 注释），正式报告实际不可得，
-// testing.md §3.2「BDN 正式」列长期纸面 ✅。本两模式把该列落地。口径对齐
-// --persist-medium（decision-2026-09-17 §2.5：medium 单次自比，ShortRun 历史 53%
-// 跨轮差不入基线），artifacts 同落 artifacts-medium（归档纪律：数字入 performance.md 带日期）。
-// 2026-10-10 Q2：--strict——严格档（引用级数字专用）：加密采样（迭代 15→40、预热 10→20、
-// launch 2→3）压 Error 半置信区间。**专项治理轮全局化：--strict 可叠加到任意模式**
-// （如 `--persist-pg --strict`、`--infra --strict`）——普查（515 读数/83 基准/两日）定位的
-// 高频 Error 族（PG GetPending 42 轮 13 次 >5%、Drain 波段 28 轮 9~12 次、infra 四项、
-// SmartEnum）全部经加密采样受益；ns/op 语义不变，账本引用 strict 数字须带档位标签。
-// 无其他模式参数时默认跑两类既有严格档（OutboxThroughput + SmartEnum）。
-static IConfig StrictInProcessConfig()
-    => ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
-            .WithIterationCount(40).WithWarmupCount(20).WithLaunchCount(3))
-        .AddDiagnoser(MemoryDiagnoser.Default)
-        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-strict"));
-
-static IConfig ModeConfig(string[] args)
-    => args.Contains("--strict", StringComparer.OrdinalIgnoreCase)
-        ? StrictInProcessConfig()
-        : MediumInProcessConfig();
-
-static bool HasStrict(string[] args) => args.Contains("--strict", StringComparer.OrdinalIgnoreCase);
-
-static bool IsStrictOnlyRun(string[] args)
-    => HasStrict(args) && args.Count(a => a.StartsWith("--", StringComparison.Ordinal)) == 1;
-
-if (IsStrictOnlyRun(args))
-{
-    var strict = StrictInProcessConfig();
-    BenchmarkRunner.Run<OutboxThroughputBenchmarks>(strict);
-    BenchmarkRunner.Run<SmartEnumBenchmarks>(strict);
-    return 0;
-}
-
-static IConfig MediumInProcessConfig()
-    => ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default))
-        .AddDiagnoser(MemoryDiagnoser.Default)
-        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-medium"));
-
-if (args.Contains("--framework", StringComparer.OrdinalIgnoreCase))
-{
-    var medium = ModeConfig(args);
-    BenchmarkRunner.Run<EntityDomainEventBenchmarks>(medium);
-    BenchmarkRunner.Run<ValueObjectBenchmarks>(medium);
-    BenchmarkRunner.Run<SmartEnumBenchmarks>(medium);
-    BenchmarkRunner.Run<ValidationBenchmarks>(medium);
-    BenchmarkRunner.Run<EntityCreationBenchmarks>(medium);
-    return 0;
-}
-
-if (args.Contains("--sqlgen", StringComparer.OrdinalIgnoreCase))
-{
-    BenchmarkRunner.Run<SqlGenBenchmarks>(ModeConfig(args));
-    return 0;
-}
-
-if (args.Contains("--infra", StringComparer.OrdinalIgnoreCase))
-{
-    var medium = ModeConfig(args);
-    BenchmarkRunner.Run<OutboxThroughputBenchmarks>(medium);
-    BenchmarkRunner.Run<InboxThroughputBenchmarks>(medium);
-    BenchmarkRunner.Run<EventLogBenchmarks>(medium);
-    BenchmarkRunner.Run<SagaStateBenchmarks>(medium);
-    BenchmarkRunner.Run<SqlGenBenchmarks>(medium);
-    BenchmarkRunner.Run<ConfigurationBenchmarks>(medium);
-    BenchmarkRunner.Run<CompressionBenchmarks>(medium);
-    return 0;
-}
-
-// 2026-10-08 缺口补齐轮：--app——CQRS 分发链（零行为基线 vs 单直通行为，PipelineStateMachine
-// 编排开销的增量可见）+ 消息序列化（源生成 JSON 序列化/反序列化/Catalog 查找）。评估确认
-// 两车道是消息发布路径缺位面：分发此前仅有 <500B 分配契约，序列化零数据。
-if (args.Contains("--app", StringComparer.OrdinalIgnoreCase))
-{
-    var medium = ModeConfig(args);
-    BenchmarkRunner.Run<DispatcherBenchmarks>(medium);
-    BenchmarkRunner.Run<SerializationBenchmarks>(medium);
-    return 0;
-}
-
-// 2026-10-11 优化实施轮 T0.2：--delivery——投递吞吐端到端量具（SQLite 真库标记 +
-// 假 broker RTT 矩阵 0/1/20ms + T1.2 排空节奏对照），排空 1000 条积压的墙钟口径；
-// T2.1 批量标记 / T3.1 确认流水线的同轮 A/B 基线。专用采样档（5 迭代/3 预热/1 launch，
-// artifacts-delivery）：基准体为多秒级 op（RTT=20 档单次排空 ≈ 20s），medium 采样
-//（15×2）撞 InProcess 单基准 5 分钟硬上限（同 coverage×strict 车道级不兼容形态）。
-if (args.Contains("--delivery", StringComparer.OrdinalIgnoreCase))
-{
-    var delivery = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
-            .WithIterationCount(5).WithWarmupCount(3).WithLaunchCount(1))
-        .AddDiagnoser(MemoryDiagnoser.Default)
-        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-delivery"));
-    BenchmarkRunner.Run<OutboxDeliveryDrainBenchmarks>(delivery);
-    BenchmarkRunner.Run<OutboxDeliveryCadenceBenchmarks>(delivery);
-    return 0;
-}
-
-// 2026-10-08 特性面缺口清单第 ① 项：--concurrency——Outbox N worker 租约争用
-// （InMemory 簿记层 + Dapper SQLite 真库层，每 wave 带零重复不变量守卫）。
-// 「多实例并发发布零丢失零重复」从正确性主张升级为性能数据。
-if (args.Contains("--concurrency", StringComparer.OrdinalIgnoreCase))
-{
-    var medium = ModeConfig(args);
-    BenchmarkRunner.Run<OutboxConcurrencyInMemoryBenchmarks>(medium);
-    BenchmarkRunner.Run<OutboxConcurrencyDapperSqliteBenchmarks>(medium);
-    return 0;
-}
-
-// 2026-10-08 特性面缺口清单第⑦项：persist-pg / persist-mysql——PG/MySQL 网络真库车道
-//（Testcontainers 一次性容器 + DDL 真源 docs/sql/{dialect}/000_schema.sql，镜像真源
-// PalDDD.Testing/TestEnvironment；承接多实例租约残余：并发 wave 在 PG FOR UPDATE
-// SKIP LOCKED / MySQL GET_LOCK 互斥发散 ADR-024 上的真实形态）。Docker/WSL 不可达 →
-// 报错退出码 2，不静默跳过（TOOL 人工运行语义，区别于测试侧 Skip.Test 环境守卫）。
-if (args.Contains("--persist-pg", StringComparer.OrdinalIgnoreCase))
-    return await RunRemoteDialectAsync(isPostgreSql: true, ModeConfig(args));
-
-if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
-    return await RunRemoteDialectAsync(isPostgreSql: false, ModeConfig(args));
-
-// B1 复活前提实测（2026-10-16）：--delivery-pg / --delivery-mysql——远程库投递排空
-// BatchMarkThreshold A/B（「远端 DB 标记往返占发布延迟 >5%」前提的实测量具）。与
-// --delivery 同采样档（5 迭代/3 预热/1 launch：远程 op 秒级，medium 15×2 撞
-// InProcess 单基准 5 分钟硬上限），artifacts 独立目录归档；远程会话创建与
-// --persist-pg 同路（PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN 外部实例或
-// 一次性容器，palddd_bench 库名前缀守卫）。
-if (args.Contains("--delivery-pg", StringComparer.OrdinalIgnoreCase))
-    return await RunRemoteDeliveryAsync(isPostgreSql: true);
-
-if (args.Contains("--delivery-mysql", StringComparer.OrdinalIgnoreCase))
-    return await RunRemoteDeliveryAsync(isPostgreSql: false);
-
-// 2026-10-08 缺口清单第③④⑤⑥⑧项：--coverage——Projection 吞吐 / 消息演化管线 /
-// Specification 内存路径 / Hosting 每请求开销 / 端到端单命令链路（全部零外部依赖，
-// 端到端与 Hosting 为框架开销层口径：InMemory store / DefaultHttpContext，无网络与 DB）。
-if (args.Contains("--coverage", StringComparer.OrdinalIgnoreCase))
-{
-    var medium = ModeConfig(args);
-    BenchmarkRunner.Run<ProjectionBenchmarks>(medium);
-    BenchmarkRunner.Run<MessageEvolutionBenchmarks>(medium);
-    BenchmarkRunner.Run<SpecificationBenchmarks>(medium);
-    BenchmarkRunner.Run<EndToEndChainBenchmarks>(medium);
-    BenchmarkRunner.Run<HostingBenchmarks>(medium);
-    return 0;
-}
-
-// 2026-10-18 ADR-030 Phase 2 收窄论证的 bench 证据轮：--stream——流式读链路（SSE 帧路径
-// 三分支 / 富化帧 / 心跳竞速开销 / PipeWriter 零拷贝对照 / 端点全周期）。全零外部依赖，
-// 框架开销层口径（DefaultHttpContext + 内存 PipeWriter，无网络与 DB）。回答三个待测项：
-// 帧路径分配形状、心跳竞速每项开销、零拷贝化每帧收益（ADR 复活触发器 3 的判定输入）。
-if (args.Contains("--stream", StringComparer.OrdinalIgnoreCase))
-{
-    var medium = ModeConfig(args);
-    BenchmarkRunner.Run<StreamReadBenchmarks>(medium);
-    return 0;
-}
-
-static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
+static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, LaneDef lane, bool strict)
 {
     RemoteDialectBenchSession session;
     try
     {
-        session = await RemoteDialectBenchSession.CreateAsync(isPostgreSql);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        session = await RemoteDialectBenchSession.CreateAsync(isPostgreSql, cts.Token);
     }
 #pragma warning disable CA1031 // 意图性宽捕获：容器不可达是环境态而非代码缺陷，明确报错退出
     catch (Exception ex)
@@ -300,37 +444,37 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
         return 2;
     }
 
+    IConfig For(string className) => ModeConfig(
+        strict ? "strict" : lane.Overrides.GetValueOrDefault(className) ?? lane.Mode);
+
     await using (session)
     {
         RemoteDialectBenchState.Connection = session.Connection;
         RemoteDialectBenchState.ConnectionString = session.ConnectionString;
         RemoteDialectBenchState.DbType = session.DbType;
-        // 专项治理轮：config 由调用方传入（medium 或叠加 --strict 的严格档——普查定位
-        // PG GetPending/Drain 波段为最高频 Error 族，strict 加密采样对其收窄）
-        BenchmarkRunner.Run<DapperRemoteOutboxThroughputBenchmarks>(config);
-        BenchmarkRunner.Run<DapperRemoteOutboxConcurrencyBenchmarks>(config);
-        BenchmarkRunner.Run<PalOrmRemoteOutboxBenchmarks>(config);
+        BenchmarkRunner.Run<DapperRemoteOutboxThroughputBenchmarks>(For("DapperRemoteOutboxThroughputBenchmarks"));
+        BenchmarkRunner.Run<DapperRemoteOutboxConcurrencyBenchmarks>(For("DapperRemoteOutboxConcurrencyBenchmarks"));
+        BenchmarkRunner.Run<PalOrmRemoteOutboxBenchmarks>(For("PalOrmRemoteOutboxBenchmarks"));
         // 方言专属车道：PG 跑方言特性（Pipeline/Router/LISTEN-NOTIFY）；MySQL 跑 EF 栈
         // 租约 SQL 形态（SKIP LOCKED 派生表互斥验证——EF 栈级车道待上游 Provider 出
         // EF 11 rc 配套版，2026-10-09 实证见类头注）
         if (isPostgreSql)
-            BenchmarkRunner.Run<PgDialectFeaturesBenchmarks>(config);
+            BenchmarkRunner.Run<PgDialectFeaturesBenchmarks>(For("PgDialectFeaturesBenchmarks"));
         else
-            BenchmarkRunner.Run<MySqlSkipLockedShapeBenchmarks>(config);
+            BenchmarkRunner.Run<MySqlSkipLockedShapeBenchmarks>(For("MySqlSkipLockedShapeBenchmarks"));
         RemoteDialectBenchState.Connection = null;
         RemoteDialectBenchState.ConnectionString = null;
     }
     return 0;
 }
 
-/// <summary>远程库投递排空 A/B（B1 复活前提实测）——会话创建同 RunRemoteDialectAsync，
-/// 采样档同 --delivery（5/3/1），只跑 OutboxDeliveryRemoteDrainBenchmarks 一类。</summary>
-static async Task<int> RunRemoteDeliveryAsync(bool isPostgreSql)
+static async Task<int> RunRemoteDeliveryAsync(bool isPostgreSql, bool autoOnly = false)
 {
     RemoteDialectBenchSession session;
     try
     {
-        session = await RemoteDialectBenchSession.CreateAsync(isPostgreSql);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        session = await RemoteDialectBenchSession.CreateAsync(isPostgreSql, cts.Token);
     }
 #pragma warning disable CA1031 // 同 RunRemoteDialectAsync：容器不可达是环境态
     catch (Exception ex)
@@ -345,12 +489,58 @@ static async Task<int> RunRemoteDeliveryAsync(bool isPostgreSql)
         RemoteDialectBenchState.Connection = session.Connection;
         RemoteDialectBenchState.ConnectionString = session.ConnectionString;
         RemoteDialectBenchState.DbType = session.DbType;
-        var deliveryRemote = ManualConfig.Create(DefaultConfig.Instance)
-            .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
-                .WithIterationCount(5).WithWarmupCount(3).WithLaunchCount(1))
-            .AddDiagnoser(MemoryDiagnoser.Default)
-            .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-delivery-remote"));
-        BenchmarkRunner.Run<OutboxDeliveryRemoteDrainBenchmarks>(deliveryRemote);
+        var deliveryRemote = ModeConfig("medium-lite");
+        // ADR-033：Serial（窗口 1/逐条标记/对象发布）vs Auto（窗口 16/批量标记 16/raw）组合 A/B。
+        // RttMs=20 的 Serial 基线约 33s/op；3 迭代 + 2 预热 = 5 op ≈ 165s，稳在 InProcess 5 分钟上限内。
+        var deliveryAuto = ModeConfig("tiny");
+        if (!autoOnly)
+            BenchmarkRunner.Run<OutboxDeliveryRemoteDrainBenchmarks>(deliveryRemote);
+        BenchmarkRunner.Run<OutboxDeliveryRemoteAutoDrainBenchmarks>(deliveryAuto);
+        RemoteDialectBenchState.Connection = null;
+        RemoteDialectBenchState.ConnectionString = null;
+    }
+    return 0;
+}
+
+static async Task<int> RunRemoteSmokeAsync(
+    bool isPostgreSql,
+    LaneDef lane,
+    IReadOnlyDictionary<string, Action<IConfig>> runners)
+{
+    RemoteDialectBenchSession session;
+    try
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        session = await RemoteDialectBenchSession.CreateAsync(isPostgreSql, cts.Token);
+    }
+#pragma warning disable CA1031 // 环境态：快速失败并给出可行动原因
+    catch (Exception ex)
+#pragma warning restore CA1031
+    {
+        ReportRemoteUnreachable(isPostgreSql, ex);
+        return 2;
+    }
+
+    await using (session)
+    {
+        RemoteDialectBenchState.Connection = session.Connection;
+        RemoteDialectBenchState.ConnectionString = session.ConnectionString;
+        RemoteDialectBenchState.DbType = session.DbType;
+        var config = ModeConfig(lane.Mode);
+        if (lane.Filter.Count > 0)
+        {
+            var filter = new HashSet<string>(lane.Filter, StringComparer.Ordinal);
+            config.AddFilter(new NameFilter(filter.Contains));
+        }
+        foreach (var className in lane.Classes)
+        {
+            if (!runners.TryGetValue(className, out var run))
+            {
+                Console.Error.WriteLine($"ERROR: 远程冒烟车道引用了未登记 runner 的类 {className}");
+                return 2;
+            }
+            run(config);
+        }
         RemoteDialectBenchState.Connection = null;
         RemoteDialectBenchState.ConnectionString = null;
     }
@@ -359,13 +549,12 @@ static async Task<int> RunRemoteDeliveryAsync(bool isPostgreSql)
 
 static void ReportRemoteUnreachable(bool isPostgreSql, Exception ex)
     => Console.Error.WriteLine(
-        $"⛔ {(isPostgreSql ? "PostgreSQL" : "MySQL")} 容器不可达（需 Docker/WSL 环境，参考 CI dialect-probe）：{ex.Message}\n" +
+        $"⛔ {(isPostgreSql ? "PostgreSQL" : "MySQL")} 远程预检失败（10 秒上限；需 Docker/WSL 环境或外部实例）：{SanitizeRemoteMessage(ex.Message)}\n" +
         $"   替代路径：环境变量 {(isPostgreSql ? "PALDDD_BENCH_PG_CONN" : "PALDDD_BENCH_MYSQL_CONN")} 指向外部实例连接串" +
         $"（库名须 palddd_bench 前缀；wslc 容器环境用此路径，容器生命周期外部管理）");
 
-BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
-
-return 0;
+static string SanitizeRemoteMessage(string message)
+    => Regex.Replace(message, @"(?i)(password|pwd)\s*=\s*[^;]*", "$1=***", RegexOptions.None, TimeSpan.FromSeconds(1));
 
 internal static class SmokeBenchmarks
 {

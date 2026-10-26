@@ -50,8 +50,8 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
 
     private static readonly DiagnosticDescriptor MessageNameVersionMismatch = new(
         "PALMSG005",
-        "Generated message names must include the schema version suffix",
-        "Message name '{0}' must end with '.v{1}' to match SchemaVersion {1}",
+        "Generated message version suffix must match SchemaVersion",
+        "Message name '{0}' ends with a version suffix that does not match SchemaVersion {1}",
         "PalDDD.MessageContracts",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -97,7 +97,7 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                 // v25 P3 生成器族：泛型声明（自身带类型参数或嵌套于泛型包含类型）拦截——
                 // 提前返回携带 DiagnosticId，RegisterSourceOutput 报 PALMSG006 并剔除出
                 // 生成物（镜像 EnumGenerator PALENUM004 的 transform 形态）
-                if (type.Arity > 0 || IsWithinGenericContainingType(type))
+                if (type.Arity > 0 || GeneratorSymbols.IsWithinGenericContainingType(type))
                 {
                     return new MessageInfo(
                         type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
@@ -200,7 +200,12 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                     hasMessageErrors = true;
                     spc.ReportDiagnostic(Diagnostic.Create(InvalidMessageName, location, message.Name));
                 }
-                else if (message.SchemaVersion >= 1 && !HasVersionSuffix(message.Name, message.SchemaVersion))
+                // R12 C-15：版本后缀由“强制”改为“出现即匹配”。演化管线的相邻版本必须
+                // 共享同一 wire name（同一 Name + 不同 SchemaVersion）；强制后缀会让生成
+                // 目录无法表达该形态。领域事件仍由 PDDD010 强制 `.vN`（分析器单列）。
+                else if (message.SchemaVersion >= 1
+                    && HasAnyVersionSuffix(message.Name)
+                    && !HasVersionSuffix(message.Name, message.SchemaVersion))
                 {
                     hasMessageErrors = true;
                     spc.ReportDiagnostic(Diagnostic.Create(
@@ -256,25 +261,27 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
             }
             validMessages.RemoveAll(m => duplicateTypeNames.Contains(m.TypeName));
 
-            var duplicateNames = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var group in validMessages.GroupBy(static message => message.Name))
+            // R12 C-15：唯一性键对齐 MessageCatalog 的 (Name, SchemaVersion)——演化管线
+            // 的相邻版本共享同一 wire name，按 Name-only 分组会把合法版本链误判为重复。
+            var duplicateKeys = new HashSet<(string Name, int Version)>();
+            foreach (var group in validMessages.GroupBy(static message => (message.Name, message.SchemaVersion)))
             {
                 if (group.Count() > 1)
                 {
-                    duplicateNames.Add(group.Key);
+                    duplicateKeys.Add(group.Key);
                     // 重复名诊断同时报告在每个冲突点上，便于 IDE 高亮所有重复项。
                     foreach (var duplicate in group)
                     {
                         spc.ReportDiagnostic(Diagnostic.Create(
                             DuplicateMessageName,
                             duplicate.Location.ToLocation(),
-                            group.Key));
+                            group.Key.Name));
                     }
                 }
             }
 
             var generatedMessages = validMessages
-                .Where(message => !duplicateNames.Contains(message.Name))
+                .Where(message => !duplicateKeys.Contains((message.Name, message.SchemaVersion)))
                 .ToImmutableArray();
 
             if (!generatedMessages.IsDefaultOrEmpty)
@@ -333,18 +340,20 @@ public static class PalMessageCatalog
     private static bool HasVersionSuffix(string name, int schemaVersion)
         => name.EndsWith(".v" + schemaVersion, StringComparison.Ordinal);
 
-    // v25 P3 生成器族：沿 ContainingType 链检测泛型包含类型——嵌套于泛型外层内的消息
-    // 无法在生成物中以裸名 typeof 引用（镜像 EnumGenerator/IdentityGenerator 同名方法）
-    private static bool IsWithinGenericContainingType(INamedTypeSymbol symbol)
+    /// <summary>R12 C-15：消息名是否带任意版本后缀（".v" + 纯数字结尾）。</summary>
+    private static bool HasAnyVersionSuffix(string name)
     {
-        for (var t = symbol.ContainingType; t is not null; t = t.ContainingType)
+        var marker = name.LastIndexOf(".v", StringComparison.Ordinal);
+        if (marker < 0 || marker + 2 >= name.Length)
+            return false;
+        for (var i = marker + 2; i < name.Length; i++)
         {
-            if (t.Arity > 0)
-                return true;
+            if (name[i] is < '0' or > '9')
+                return false;
         }
-
-        return false;
+        return true;
     }
+
 
     private sealed record MessageInfo(
         string TypeName,

@@ -65,6 +65,12 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 - `Assembly.GetTypes()` — 用源码生成器 `[ModuleInitializer]` 替代
 - `Type.GetType(string)` — 用 `typeof(T)` 编译时常量替代
 
+> **口径（2026-10-21 修订）**：以上是默认红线，不是绝对零反射。两处反射路径为
+> **显式豁免**并有注释/测试锁定：① `Saga` 的子 Saga 分发（`MakeGenericMethod`/
+> `MakeGenericType`，Native AOT 场景不使用子 Saga）；② `ISpecification.Compile()`
+> 的表达式树编译（内存求值；AOT 场景改用 `ToExpression()`）。「零反射」的准确表述是
+> 「默认零反射，反射路径必须标注」。
+
 ### 1.5 异步模式
 
 - **`ValueTask` / `ValueTask<T>` 优先**于 `Task`，热路径零分配
@@ -129,7 +135,9 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 **何时用**：run 时长与用户耐心不匹配的场景（长 agent run、分钟级工具轮）。**不要用**在短请求或不需要重连的场景——它多一个进程内注册表与缓冲，`MapStreamQuery`（ADR-030）更简单。
 
-**形态（单写者 + 单附着 + 有界环形缓冲）**：`AddDetachedStreamRuns` 注册选项与注册表；`MapDetachedStreamQuery` 启动并附着（响应头 `X-Run-Id`）；`MapStreamRunAttach` 重连附着（遵守 `Last-Event-ID`，先回放缓冲再转 live）；`MapStreamRunCancel` 幂等取消。缓冲按项计数（默认 1024），溢出丢最旧并发 `event: gap` 带最旧可用 index。
+**形态（单写者 + 单附着 + 有界环形缓冲）**：`AddDetachedStreamRuns` 注册选项与注册表；`MapDetachedStreamQuery` 启动并附着（GET 与 POST 双形态，响应头 `X-Run-Id`；POST 用于 prompt 类请求体超过 URL 长度的场景）；`MapStreamRunAttach` 重连附着（遵守 `Last-Event-ID`，先回放缓冲再转 live）；`MapStreamRunCancel` 幂等取消。缓冲按项计数（默认 1024），溢出丢最旧并发 `event: gap` 带最旧可用 index。
+
+**遥测（与普通流式读同口径）**：注册表泵开启同一个 `Stream Query` Activity（tag 为查询/元素类型名），首个产出项记 `first-item` 事件（TTFT），终态计入 `paldd.stream.started/completed/failed/cancelled/items`（取消独立于失败）。注册表特有行为另计 `paldd.stream.attached`（成功附着数，含首次/重连/接管）与 `paldd.stream.gap`（gap 帧写出次数）。run 未附着时也计 started（产出由泵驱动，与客户端是否在看无关）。
 
 **生命周期硬边界（三条都要配）**：`MaxRunDuration`（默认 10 分钟）、`MaxItems`（默认 10 万）、`DetachGrace`（默认 5 分钟无附着即取消——「不白烧 token」的落点）。取消用 run 自有 CTS，**不用** `RequestAborted`：连接断开只 detach，handler 的 finally 与审计照常完成。
 
@@ -330,7 +338,7 @@ Pal.DDD/
 ├── Directory.Packages.props   # 中央包管理（CPM）
 ├── global.json                # SDK 版本锁定
 ├── PalDDD.slnx                # 解决方案（按层分 Folder）
-├── src/                       # 36 个源项目，Clean Architecture 分层
+├── src/                       # 37 个源项目，Clean Architecture 分层
 │   ├── PalDDD.Core/           # 领域层
 │   ├── PalDDD.Serialization/  # 应用抽象层
 │   ├── PalDDD.CQRS/           # 应用核心层
@@ -372,7 +380,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-19 ADR-032 复验）：237 源文件·36 项目·0 违规（2026-10-19 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-22 性能轮复验）：259 源文件·37 项目·0 违规（2026-10-22 性能轮新增 `OutboxWakeUpSignal` 一个源文件（258→259）；2026-10-22 R14 审计优化轮新增 `IMessageBrokerHealth`、`ProjectionReplayResult` 两个源文件（256→258）；2026-10-21 R7：`PalLogger` 迁入 Core 并新增单一定义点 `PalLoggerRegistration`，净 +1（255→256）；本轮净 +3：新增可选的 `PalDDD.Hosting.AspNetCore.OutboxHealth` 两文件；`VersionProbeRow` 以 `[Obsolete]` 回归一个 Minor 兼容窗口；`GeneratorSymbols` 为此前 `GeneratorSharedHelpers` 的合规改名，不增计数；2026-10-21 双评审修复轮新增 `DomainEventOutboxBridge`、`PostgreSqlDataSourceRegistration` 并删除 0 引用的 `VersionProbeRow`；2026-10-21 批量消费轮新增 `MessageBatchPump`、`InboxBatchConsumer` 两个源文件；同轮此前新增 `EventLogBinaryRow` 一个源文件；2026-10-20 数据面续轮新增 3 个源文件：RetentionSql、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；2026-10-21 契约盘点修复轮新增 `DapperConnectionGuard` 一个源文件（253→254）；2026-10-21 后续项轮新增 `EfCoreDialectGuard` 一个源文件（254→255）；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
@@ -400,7 +408,7 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 
 | 规则 | 详情 |
 |------|------|
-| **默认扁平** | 所有 `.cs` 文件在项目根目录。30/36 项目遵循（6 个项目有已注册子目录）。 |
+| **默认扁平** | 所有 `.cs` 文件在项目根目录。31/37 项目遵循（6 个项目有已注册子目录）。 |
 | **例外 1** | `AspNetCore/`（PalDDD.Hosting.AspNetCore）— 中间件/端点映射（`RequestDelegate`/`IApplicationBuilder` 类型域与纯 DI 注册分离） |
 | **例外 2** | `.pal/prompts/`（PalDDD.Prompts）— AI 提示模板（9 个 `.prompt.md` 文件），非源码文件 |
 | **例外 3** | `Identity/`·`Logging/`（PalDDD.Core）— ID 生成与日志抽象子域 |
@@ -409,7 +417,7 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 | **例外 6** | `Saga/`·`Outbox/`·`Inbox/`（PalDDD.Transactions，2026-08-26 组织重组零破坏拆分，命名空间不变）— 18+5+3 文件 |
 | **禁止** | `Properties/`·`Services/`·`Helpers/`·`Utils/` 等子目录。新增子目录须在本表注册 |
 
-**合规状态**：36 项目 11 个例外目录（均为已注册）。0 违规。
+**合规状态**：37 项目 11 个例外目录（均为已注册）。0 违规。
 
 ### 4.8 项目结构自检清单
 
@@ -712,7 +720,7 @@ Infrastructure / Adapters → App-Core → App-Abstractions → Domain
 
 **诊断覆盖门禁**：`test/PalDDD.Core.Tests/DiagnosticCoverageGateTests.cs` 扫描诊断定义源码，断言每条诊断 ID 都出现在某测试的断言表达式中（仅出现在注释里不算）——防止出现"实现了但无测试守护"的诊断。此门禁源于一次 mutation 实证：`PALENUM004`/`PALID003` 长期只有一行"镜像 `PALMSG006`"注释而无断言，破坏其检测实现后测试仍全绿。
 
-**分析器 ↔ 生成器分层**（详见 ADR 022）：PDDD009/PALMSG004、PDDD010/PALMSG005、PDDD011/PALMSG002 三对诊断检查同一输入，但**不是冗余**——分析器只覆盖领域事件（生成器的范围是其超集），生成器在泛型/不可访问声明下提前返回时由分析器兜底，且分析器可单独引用（不装生成器时是唯一守护）。生成器侧统一 Error（阻断构建），分析器侧命名类为 Warning 且部分配 CodeFix（一键修复），构成「阻断 + 修复」反馈链。审计此类"重复"时应先实测覆盖范围与兜底关系再判定。
+**分析器 ↔ 生成器分层**（详见 ADR 022）：PDDD009/PALMSG004、PDDD010/PALMSG005、PDDD011/PALMSG002 三对诊断检查同一输入，但**不是冗余**——分析器只覆盖领域事件（生成器的范围是其超集），生成器在泛型/不可访问声明下提前返回时由分析器兜底，且分析器可单独引用（不装生成器时是唯一守护）。生成器侧统一 Error（阻断构建），分析器侧命名类为 Warning 且部分配 CodeFix（一键修复），构成「阻断 + 修复」反馈链。2026-10-22 R12 C-15 修订：PALMSG005 放宽为「带版本后缀时必须与 SchemaVersion 一致」，允许演化管线的相邻版本共享稳定 wire name；PDDD010 对领域事件仍强制 `.vN`。审计此类"重复"时应先实测覆盖范围与兜底关系再判定。
 
 **跨包共享谓词**：`src/PalDDD.Shared/` 存放被多个分析器/生成器项目以链接源码方式共享的类型（当前仅 `StableNameValidation`）。分析器与生成器包必须相互独立（用户可各自单独引用），故共享走链接编译而非程序集引用或独立 NuGet 包。
 
@@ -840,11 +848,13 @@ var body = Expression.AndAlso(
 # 1. 构建（零错误零警告）
 dotnet build PalDDD.slnx
 
-# 2. 测试（零失败）——MTP 禁用 slnx 批量（握手 → exit 5），逐测试项目循环
-for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore; done
+# 2. 测试（零失败）——slnx 批量可直接运行（2026-10-21 实测 exit 0；用例数以当次输出为准）
+dotnet test PalDDD.slnx --no-build
+# 需要单项目定位或 MTP treenode-filter 时，再逐项目循环：
+# for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore; done
 
 # 3. 公共 API 变更时更新快照（filter 需在 -- 之后传递给 MTP）
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 
 # 3.5 快照变更必须同提交带 CHANGELOG.md——G23（BINC-1 三真源：快照+CHANGELOG+二进制兼容评估）
 # 判定口径（2026-09-25 修订为发布语义）：G23 的变更集按发布范围取——暂存集（pre-commit）
@@ -860,7 +870,7 @@ dotnet run scripts/verify-conventions.cs
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
 
-> **背景**：本框架统一使用 **TUnit 1.75.0**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.5.1**（TUnit 传递解析，2026-10-11 实测；TUnit 1.73.5 时代为 2.5.0、1.71.0 时代为 2.4.1）。不使用 VSTest。
+> **背景**：本框架统一使用 **TUnit 1.76.28**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.5.1**（TUnit 传递解析，2026-10-26 实测；TUnit 1.73.5 时代为 2.5.0、1.71.0 时代为 2.4.1）。不使用 VSTest。
 
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 
@@ -958,6 +968,22 @@ grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . 
 - **禁止改为 `string` + 运行时拼接**（会从编译时常量退化为运行时分配）
 - **禁止用 `$"..."` 插值拼接 SQL**（SQL 注入风险 + 运行时分配）
 - 数据库方言切换通过 `DapperSqlDialect` record struct，不通过字符串拼接
+
+### 12.5 采样档与 profile（2026-10-23）
+
+车道、profile、超时与每类采样档的单一真源是 `bench/bench-registry.json`。禁止在 `Program.cs` 与 `scripts/eps-run.cs` 里恢复第二份硬编码车道表。
+
+| 档 | 语义 | 引用边界 |
+| --- | --- | --- |
+| alloc | 2 预热 / 3 迭代 / 1 launch / InvocationCount 1 | 只做分配判定；计时不进入账本 |
+| fixed / fixed-short / auto / medium-lite / tiny | 趋势档 | 引用前过 Error/Mean 自评；不跨档比较绝对值 |
+| medium | 原 MediumRun（10/15/2） | 参考趋势 |
+| strict | 40/20/3 | 参考数字 |
+
+- `alloc` 不是 `[ShortRunJob]` 回归：它不承担计时基线；参考数字仍走 `medium`/`strict`。
+- 新增或修改基准类必须同步注册表的 `classes/mode/overrides`，并跑 `dotnet run scripts/perf-registry-check.cs`；漏注册、重复跑类、profile 预算超限、过滤器方法不存在均退出 1。
+- profile 预算：gate ≤10 秒、standard ≤600 秒、full ≤2700 秒、remote-smoke ≤300 秒、remote-full ≤5400 秒。改预算须同步 `perf-budgets.md` §2.1。
+- `--skip-build` 先过 `eps-run` 的二进制新鲜度检查（程序集须晚于 `bench/`、`src/` 与注册表的最新输入）。
 
 ---
 
@@ -1075,7 +1101,7 @@ dotnet test <target> 2>&1 | tail -5 > /tmp/baseline.txt; echo "exit=$?" >> /tmp/
 | 公共 API 快照 | PublicApiSnapshotTests | CI |
 | AI 模板约束 | `.pal/prompts/` 结构——**段数并非统一的「六段」**（2026-09-13 实测：9 个模板段数 5/6/7 不等；7 个为「角色/框架约束/必须遵守/禁止/输出格式」，其中 5 个追加「示例」段；`bounded-context` 以「项目引用指南」替代「输出格式」；`task-intake` 为验收断言门专用结构 7 段。README 自述「v54 勘正：各模板段数不一」） | 人工（机械化候选：按模板分组断言必填段存在） |
 | AI 编码约束 | Trellis spec 注入 + `scripts/verify-conventions.cs` | 会话 + pre-commit |
-| 配置文件策略 | `scripts/config-policy.cs`（A：dependabot `groups`/`ignore` 双词表与 `versions`/`labels`/`prefix`/`interval` 必填项，行式校验非完整 YAML 解析；B：根 `Directory.Build.*` 每处 `<Exec>` 须 `IgnoreExitCode` 或 Target 带 `GITHUB_ACTIONS` 跳过，防构建期副作用经 `-warnaserror` 打断发布链；C：`.github/workflows/*.yml` 的 `uses:` 须钉 40 位 commit SHA 且带 `# vX.Y.Z` 版本注释，防可变标签供应链风险——2026-09-25 / 2026-10-18 增） | pre-commit（文件入暂存时）+ CI |
+| 配置文件策略 | `scripts/config-policy.cs`（A：dependabot `groups`/`ignore` 双词表与 `versions`/`labels`/`prefix`/`interval` 必填项，行式校验非完整 YAML 解析——dependabot.yml 已于 2026-10-26 移除（单一版权裁决），A 项为再引入防线，文件缺失即 SKIP；B：根 `Directory.Build.*` 每处 `<Exec>` 须 `IgnoreExitCode` 或 Target 带 `GITHUB_ACTIONS` 跳过，防构建期副作用经 `-warnaserror` 打断发布链；C：`.github/workflows/*.yml` 的 `uses:` 须钉 40 位 commit SHA 且带 `# vX.Y.Z` 版本注释，防可变标签供应链风险——2026-09-25 / 2026-10-18 增） | pre-commit（文件入暂存时）+ CI |
 | 依赖许可 | `scripts/license-policy.cs`（deny-by-default 白名单 = OSI/FSF 认可的 SPDX 表达式 + 包级禁令 `Verify`/`Verify.TUnit` ≥ 33 + 有期限的 gap 台账；证据取自本机 NuGet 缓存 nuspec，取不到即 fail-closed——裁决 2026-09-25「所有引用的库必须是开源的许可，不使用商业许可」） | pre-commit（`Directory.Packages.props`/`*.csproj` 入暂存时）+ CI |
 | 文档计数一致性 | `scripts/count-audit.cs`（16 项推导真值——可打包包数/项目数/prompt/遥测计数器/诊断 ID/ADR/踩坑条目/断言点/源文件数等，推导表在脚本内=单一真源不建台账；扫描面 README*/AGENTS.md/docs 排除 `review`/`decisions`/`migration`/`design` 历史目录，声明写了必须与推导一致、缺失不算错（PD34），失实报 `文件:行号：声明 X vs 推导 Y`；推导 0 值/异常/依赖文件缺失 fail-closed。退出码 0/1/2（2=自测失败）；`--selftest` 47 例正负例（2026-10-18 增 AGENTS.md 扫描面与两条正则假阳性负例）；2026-09-25 变异记录（当时 41 例）：翻转声明判定后 26/41 红、恢复 41/41；gate-audit 2 条隔离探针——2026-09-25 增） | pre-commit（`README*.md`/`docs/**` 入暂存时）+ CI |
 | 性能契约 | BenchmarkDotNet `--smoke` 烟测（6 项分配预算，退出码 1 即红；预算单一真源 `perf-budgets.md` §2） | CI `build-and-test` 的 `perf-smoke` 步骤 + 本地（2026-10-18 从人工 TOOL 转每提交门禁） |

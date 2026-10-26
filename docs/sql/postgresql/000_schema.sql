@@ -18,10 +18,14 @@ CREATE TABLE outbox_messages (
     trace_parent    TEXT,
     trace_state     TEXT
 );
-CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until) WHERE status = 0;
-CREATE INDEX idx_outbox_created ON outbox_messages(created_at);
--- 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2
-CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until);
+-- 租约候选扫描按 next_attempt_at（可用时刻）过滤并按 (next_attempt_at, created_at) 排序；
+-- 部分索引把扫描固定为 O(批次)，不再随待租积压或已处理历史增长。
+CREATE INDEX idx_outbox_due ON outbox_messages(next_attempt_at, created_at) WHERE status = 0;
+-- 保留清理按 processed_at 分批删除；部分索引只覆盖终态行（Processed/Dead）。
+CREATE INDEX idx_outbox_processed ON outbox_messages(processed_at) WHERE status <> 0;
+-- 2026-10-21：不建 locked_by/locked_until 索引。PG 租约路径为 UPDATE ... RETURNING，
+-- 终态写按主键 id 过滤，没有按租约列回读的查询；该索引只增加每次租约与标记的写成本。
+-- MySQL 保留同名索引（其两步回读按 locked_by/locked_until 匹配）。
 
 CREATE TABLE inbox_messages (
     id                    BIGSERIAL PRIMARY KEY,
@@ -35,6 +39,8 @@ CREATE TABLE inbox_messages (
     last_error            TEXT
 );
 CREATE UNIQUE INDEX idx_inbox_unique ON inbox_messages(consumer_name, message_id);
+-- 保留清理按 processed_at 分批删除已处理行；部分索引只覆盖 Processed。
+CREATE INDEX idx_inbox_processed ON inbox_messages(processed_at) WHERE status = 2;
 
 CREATE TABLE saga_states (
     saga_id       TEXT PRIMARY KEY,  -- Ulid 26 字符（代码传字符串，非 UUID 格式）
@@ -46,15 +52,20 @@ CREATE TABLE saga_states (
     error_at      TIMESTAMPTZ,
     version       INTEGER NOT NULL DEFAULT 0,
     saga_data     JSONB,
+    next_check_at TIMESTAMPTZ,
     leased_by     TEXT,
     leased_until  TIMESTAMPTZ
 );
 CREATE INDEX idx_saga_status ON saga_states(status, created_at);
 CREATE INDEX idx_saga_lease ON saga_states(status, leased_until, created_at);
+CREATE INDEX idx_saga_due ON saga_states(status, next_check_at);
+-- 2026-10-21：同 outbox，不建 leased_by/leased_until 索引。PG 租约与回读均为单语句
+-- RETURNING，扫描释放按 saga_id 主键；MySQL 的两步回读仍需要该索引，保留在 MySQL 脚本。
 
 CREATE TABLE events (
     global_position BIGSERIAL PRIMARY KEY,
     event_id        TEXT NOT NULL,
+    event_id_bin    BYTEA,
     event_name      TEXT NOT NULL,
     stream_name     TEXT NOT NULL,
     stream_version  BIGINT NOT NULL,
@@ -72,7 +83,9 @@ CREATE TABLE events (
 );
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
-CREATE INDEX idx_events_global ON events(global_position);
+-- 2026-10-21：不建 event_id_bin 索引。该列只被 SELECT 回传，没有任何查询用它过滤；
+-- 每次事件追加却要维护一份 B-tree。文本 event_id 的唯一索引保留（唯一性守卫）。
+-- global_position 是主键，PK 索引已覆盖 ReadAll 的范围扫描与排序；独立索引纯冗余（2026-10-20 移除）。
 
 -- P3 修复（九轮评审）：补齐通用脚本已有而方言脚本缺失的两张表
 -- ── Idempotency 幂等记录表 ──
@@ -103,3 +116,11 @@ CREATE TABLE projection_checkpoints (
     PRIMARY KEY (projection_name, source_name, position)
 );
 CREATE INDEX idx_checkpoint_status ON projection_checkpoints(projection_name, source_name, status);
+
+-- ── 序列缓存（2026-10-21）──
+-- BIGSERIAL 背后的序列默认 CACHE 1：每次 nextval 推进序列页并落 WAL，高写入下成为
+-- 单点争用。这两列只作代理键/全局排序（EventLog 位置预留器本就按块跳号），允许进程
+-- 崩溃后最多 100 的跳号，故把持久化开销按 100 次摊薄。已有库执行同一 ALTER 即可，
+-- 见 docs/sql/migration-2026-10-21-pg-sequence-cache.md。
+ALTER SEQUENCE inbox_messages_id_seq CACHE 100;
+ALTER SEQUENCE events_global_position_seq CACHE 100;

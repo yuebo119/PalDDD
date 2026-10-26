@@ -149,6 +149,147 @@ public sealed partial class StreamTelemetryTests
         await Assert.That(async () => await SseFrameReader.ReadAllAsync(null!)).Throws<ArgumentNullException>();
     }
 
+    // ── 断线续跑遥测（ADR-031 补强，2026-10-19）──
+    // 注册表泵是独立于 HTTP 的执行体，遥测在注册表层断言（HTTP 层只验证帧语义，
+    // 见 DetachedStreamTests）。计数器为进程级静态累计，本类 NotInParallel 保证增量口径。
+
+    [Test]
+    public async Task DetachedRun_Completed_EmitsActivityWithFirstItemAndCounters()
+    {
+        using var activityListener = new RecordingActivityListener();
+        using var startedCounter = new RecordingMeterListener("paldd.stream.started");
+        using var completedCounter = new RecordingMeterListener("paldd.stream.completed");
+        using var itemsCounter = new RecordingMeterListener("paldd.stream.items");
+        using var registry = CreateDetachedRegistry(out _);
+
+        var run = await RunToTerminalAsync(registry, new DetachedTelemetryHandler(3));
+
+        await Assert.That(run.State).IsEqualTo(StreamRunState.Completed);
+        var streamActivity = activityListener.StoppedActivities.Single(a => a.OperationName == "Stream Query");
+        await Assert.That(streamActivity.GetTagItem("pal.stream.query")).IsEqualTo(nameof(DetachedTelemetryQuery));
+        await Assert.That(streamActivity.GetTagItem("pal.stream.item")).IsEqualTo(nameof(DetachedTelemetryChunk));
+        await Assert.That(streamActivity.Events.Count(e => e.Name == "first-item")).IsEqualTo(1);
+        await Assert.That(streamActivity.Status).IsNotEqualTo(System.Diagnostics.ActivityStatusCode.Error);
+
+        await Assert.That(startedCounter.Measurements.Sum()).IsGreaterThanOrEqualTo(1);
+        await Assert.That(completedCounter.Measurements.Sum()).IsGreaterThanOrEqualTo(1);
+        await Assert.That(itemsCounter.Measurements.Sum()).IsGreaterThanOrEqualTo(3);
+    }
+
+    [Test]
+    public async Task DetachedRun_Failed_MarksActivityErrorAndCountsFailed()
+    {
+        using var activityListener = new RecordingActivityListener();
+        using var failedCounter = new RecordingMeterListener("paldd.stream.failed");
+        using var completedCounter = new RecordingMeterListener("paldd.stream.completed");
+        using var registry = CreateDetachedRegistry(out _);
+
+        var run = await RunToTerminalAsync(registry, new DetachedThrowingHandler());
+
+        await Assert.That(run.State).IsEqualTo(StreamRunState.Failed);
+        var streamActivity = activityListener.StoppedActivities.Single(a => a.OperationName == "Stream Query");
+        await Assert.That(streamActivity.Status).IsEqualTo(System.Diagnostics.ActivityStatusCode.Error);
+        await Assert.That(streamActivity.StatusDescription).IsEqualTo(nameof(InvalidOperationException));
+        await Assert.That(failedCounter.Measurements.Sum()).IsGreaterThanOrEqualTo(1);
+        await Assert.That(completedCounter.Measurements.Sum()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task DetachedRun_Cancelled_CountsCancelledNotFailed()
+    {
+        using var cancelledCounter = new RecordingMeterListener("paldd.stream.cancelled");
+        using var failedCounter = new RecordingMeterListener("paldd.stream.failed");
+        using var registry = CreateDetachedRegistry(out _);
+
+        var runId = registry.Register(
+            new DetachedTelemetryQuery("p"), null, null, new DetachedBlockingHandler());
+        var run = await WaitForDetachedRunAsync(registry, runId);
+        await Assert.That(registry.Cancel(runId)).IsTrue();
+        await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
+
+        await Assert.That(run.State).IsEqualTo(StreamRunState.Cancelled);
+        await Assert.That(cancelledCounter.Measurements.Sum()).IsGreaterThanOrEqualTo(1);
+        await Assert.That(failedCounter.Measurements.Sum()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task DetachedRun_AttachAndGap_CountsAttachmentsAndGaps()
+    {
+        using var attachedCounter = new RecordingMeterListener("paldd.stream.attached");
+        using var gapCounter = new RecordingMeterListener("paldd.stream.gap");
+        using var registry = CreateDetachedRegistry(out _, maxBufferedItems: 2);
+
+        var run = await RunToTerminalAsync(
+            registry, new DetachedTelemetryHandler(6), idSelector: static c => c.Index.ToString());
+        await Assert.That(run.OldestAvailable).IsEqualTo(4);
+
+        // 请求位置 0 之后续读：位置已滚出缓冲 → gap；附着与 gap 帧都应有计数
+        await Assert.That(run.TryBeginAttach("0", out var startIndex, out var gap, out var generation)).IsTrue();
+        await Assert.That(gap).IsTrue();
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+        await run.StreamToAsync(
+            context,
+            DetachedTelemetryJsonContext.Default.DetachedTelemetryChunk,
+            generation,
+            startIndex,
+            gap,
+            keepAliveInterval: null);
+
+        await Assert.That(attachedCounter.Measurements.Sum()).IsGreaterThanOrEqualTo(1);
+        await Assert.That(gapCounter.Measurements.Sum()).IsGreaterThanOrEqualTo(1);
+    }
+
+    private static StreamRunRegistry CreateDetachedRegistry(
+        out DetachedStreamOptions options, int maxBufferedItems = 16)
+    {
+        options = new DetachedStreamOptions
+        {
+            MaxBufferedItems = maxBufferedItems,
+            DetachGrace = TimeSpan.FromSeconds(30),
+            MaxRunDuration = TimeSpan.FromMinutes(1)
+        };
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var provider = services.BuildServiceProvider();
+        return new StreamRunRegistry(options, provider.GetRequiredService<IServiceScopeFactory>());
+    }
+
+    private static async Task<StreamRun<DetachedTelemetryChunk>> RunToTerminalAsync(
+        StreamRunRegistry registry,
+        IStreamQueryHandler<DetachedTelemetryQuery, DetachedTelemetryChunk> handler,
+        Func<DetachedTelemetryChunk, string>? idSelector = null)
+    {
+        var runId = registry.Register(new DetachedTelemetryQuery("p"), null, idSelector, handler);
+        var run = await WaitForDetachedRunAsync(registry, runId);
+        await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
+        return run;
+    }
+
+    private static async Task<StreamRun<DetachedTelemetryChunk>> WaitForDetachedRunAsync(
+        StreamRunRegistry registry, string runId)
+    {
+        for (var i = 0; i < 200; i++)
+        {
+            if (registry.TryGet<DetachedTelemetryChunk>(runId, out var run))
+                return run!;
+            await Task.Delay(10);
+        }
+        throw new TimeoutException("Detached run not found.");
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+                return;
+            await Task.Delay(10);
+        }
+        throw new TimeoutException($"Condition not met within {timeout}.");
+    }
+
     // ─── 夹具 ───
 
     private static ServiceProvider BuildProvider(
@@ -236,4 +377,50 @@ internal sealed class AlwaysInvalidTelemetryValidator : Core.IPalValidator<Telem
 {
     public Core.PalValidationResult Validate(TelemetryStreamQuery instance)
         => Core.PalValidationResult.Failed("prompt", "required");
+}
+
+// ── 断线续跑遥测夹具（ADR-031 补强）──
+
+internal sealed record DetachedTelemetryChunk(int Index);
+
+internal sealed record DetachedTelemetryQuery(string Prompt) : IStreamQuery<DetachedTelemetryChunk>;
+
+[JsonSerializable(typeof(DetachedTelemetryChunk))]
+internal sealed partial class DetachedTelemetryJsonContext : JsonSerializerContext;
+
+internal sealed class DetachedTelemetryHandler(int count)
+    : IStreamQueryHandler<DetachedTelemetryQuery, DetachedTelemetryChunk>
+{
+    public async IAsyncEnumerable<DetachedTelemetryChunk> HandleAsync(
+        DetachedTelemetryQuery query, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            yield return new DetachedTelemetryChunk(i);
+            await Task.Yield();
+        }
+    }
+}
+
+internal sealed class DetachedThrowingHandler
+    : IStreamQueryHandler<DetachedTelemetryQuery, DetachedTelemetryChunk>
+{
+    public async IAsyncEnumerable<DetachedTelemetryChunk> HandleAsync(
+        DetachedTelemetryQuery query, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        yield return new DetachedTelemetryChunk(0);
+        await Task.Yield();
+        throw new InvalidOperationException("boom");
+    }
+}
+
+internal sealed class DetachedBlockingHandler
+    : IStreamQueryHandler<DetachedTelemetryQuery, DetachedTelemetryChunk>
+{
+    public async IAsyncEnumerable<DetachedTelemetryChunk> HandleAsync(
+        DetachedTelemetryQuery query, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        yield return new DetachedTelemetryChunk(0);
+        await Task.Delay(Timeout.Infinite, ct);
+    }
 }

@@ -13,8 +13,27 @@ namespace PalDDD.Transactions;
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCode require dynamic access",
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
-public abstract class OutboxDbContext(DbContextOptions options) : DbContext(options), IPalOutboxStore, IBatchMarkOutboxStore
+public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOutboxStore
 {
+    /// <summary>构造上下文并注册新增 Pending 行的可用时刻归一化。</summary>
+    /// <remarks>MA0056：EF 文档化的上下文初始化形态——ChangeTracker 是基类 virtual 属性，
+    /// 但派生方言上下文均只传 options、不重写它，构造期读取不存在虚分派风险。</remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Meziantou", "MA0056:Do not call overridable members in constructor",
+        Justification = "ChangeTracker 是 EF 文档化的上下文初始化入口；派生方言上下文不重写该属性，无虚分派风险。")]
+    protected OutboxDbContext(DbContextOptions options) : base(options)
+    {
+        // 只处理新跟踪的 OutboxMessage：SavingChanges 里 Entries<T>() 会触发一次全量
+        // DetectChanges，且 SaveChanges 自身还会再扫一次；Tracked 是逐实体事件，O(1)。
+        ChangeTracker.Tracked += (_, e) =>
+        {
+            if (e.Entry.State == EntityState.Added && e.Entry.Entity is OutboxMessage message)
+                NormalizePendingNextAttemptAt(message, GetUtcNow());
+        };
+    }
+
+    /// <inheritdoc />
+    public bool RequiresSaveAfterMark => false;
+
     /// <summary>发件箱消息表</summary>
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
@@ -22,6 +41,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     ValueTask IPalOutboxStore.AddMessageAsync(OutboxMessage message, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(message); // v13 姊妹对称：对齐 AddMessagesAsync/InMemory/PalORM 单条守卫（ITM-163 漏网）
+        message.NextAttemptAt = message.NextAttemptAt ?? GetUtcNow();
         OutboxMessages.Add(message);
         // 跟踪添加无 I/O——同步完成（v4.0 ③ ADR-026 异步化：写入延迟到上下文 SaveChanges
         // 的既有语义不变，仅签名异步化）
@@ -33,6 +53,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     {
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
+        var now = GetUtcNow();
+        foreach (var message in messages)
+            message.NextAttemptAt = message.NextAttemptAt ?? now;
         // 优化（二十五轮 API 扫描 EF-10）：AddRangeAsync 仅对依赖异步值生成（HiLo/Sequence）
         // 的主键必要——OutboxMessage 主键 Ulid 预设（HasConversion 字符串存储，无 DB 生成），
         // 同步 AddRange 免逐实体 async 状态机开销。
@@ -89,9 +112,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             .AsNoTracking()
             .Where(m => m.Status == OutboxStatus.Pending
                 && m.RetryCount < maxRetryCount
-                && (m.NextAttemptAt == null || m.NextAttemptAt <= now)
-                && (m.LockedUntil == null || m.LockedUntil <= now))
-            .OrderBy(m => m.CreatedAt)
+                && m.NextAttemptAt <= now)
+            .OrderBy(m => m.NextAttemptAt)
+            .ThenBy(m => m.CreatedAt)
             .Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
     }
@@ -108,14 +131,16 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// <remarks>
     /// ITM-210 修复（三十二轮守卫 → 三十四轮 token 化）：关系型 provider 用 ExecuteUpdate 带租约守卫；
     /// v30 P3 勘正（原"内存突变 + SaveChanges"失实）：非 SQL 可翻译 provider（InMemory 测试）的
-    /// 回退路径<b>仅变异 tracked 实体，不做任何 SaveChanges</b>——持久化由调用方经
-    /// <see cref="IPalOutboxStore.SaveChangesAsync"/> 完成（OutboxBatchProcessor 在每条 Mark 后
-    /// 调用 PersistSingleAsync 触发，非本方法职责）。<br/>
+    /// 回退路径<b>仅变异 tracked 实体，不做任何 SaveChanges</b>。<b>2026-10-21 勘正</b>：本类
+    /// 声明 <c>RequiresSaveAfterMark = false</c>，因此 OutboxBatchProcessor 在 Mark 后<b>不会</b>
+    /// 调用 SaveChanges；InMemory 回退的可见性来自其存储按引用共享（同一 tracked 实例即存储行），
+    /// 并非 SaveChanges 落库。新增不支持 ExecuteUpdate 的关系型 provider 前必须先改此开关或
+    /// 在回退路径内自行落库，否则终态写会静默丢失。<br/>
     /// <b>租约 token（三十四轮）</b>：持租调用方（<c>message.LockedBy</c> 非空）的终态写要求行内
     /// <c>(LockedBy, LockedUntil)</c> 与租约时捕获的标识对<b>完全匹配</b>——租约过期被重租（同 owner
     /// 复用或他 owner 接手）后，旧 worker 的终态写影响 0 行（<c>LockedUntil</c> 随每次租约单调变化，
     /// 充当 fencing token，免 DDL 加列）；无租约直呼（LockedBy 为 null，运维/测试路径）当行当前
-    /// 未被租（<c>LockedBy IS NULL</c）、仍为 Pending（v43 P2 补终态守卫）且 <c>RetryCount</c>
+    /// 未被租（<c>LockedBy IS NULL</c>）、仍为 Pending（v43 P2 补终态守卫）且 <c>RetryCount</c>
     /// 与入参快照一致时放行（v30 P3 补快照
     /// 守卫；v33 P3 起持租分支同要求 RetryCount 快照一致，见 <see cref="FencedTarget"/>）。
     /// </remarks>
@@ -152,9 +177,13 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             }
             return;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException) when (!Database.IsRelational())
         {
-            // ExecuteUpdate 不支持的 provider（EF InMemory 等）——回退到条件加载路径
+            // R13 F25：ExecuteUpdate 只在关系型 provider 可用。原实现捕获任意
+            // InvalidOperationException——关系型 provider 上的翻译失败/并发上下文冲突/
+            // 值转换异常被误当能力回落，只变异跟踪实体且 RequiresSaveAfterMark=false
+            // 不再 SaveChanges，终态写静默丢失（行仍 Pending+租约，到期重租重发）。
+            // 非关系型（EF InMemory 等）才走条件加载回落。
         }
 
         // 兜底路径：仅 provider 不支持 ExecuteUpdate 时到达（ITM-283 收窄）
@@ -198,6 +227,14 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
 
+        // 2026-10-21 评审 F10：null 元素校验前移——首元素为 null 时原实现先解引用抛
+        // NullReferenceException，第 228 行的元素守卫对索引 0 不可达。
+        foreach (var message in messages)
+        {
+            if (message is null)
+                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
+        }
+
         // 同租约校验（契约前提防御）：批内 LockedBy/LockedUntil 同值且非空
         var owner = messages[0].LockedBy;
         var until = messages[0].LockedUntil;
@@ -206,8 +243,6 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                 "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
         foreach (var message in messages)
         {
-            if (message is null)
-                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
             if (message.LockedBy != owner || message.LockedUntil != until)
                 throw new InvalidOperationException(
                     "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");
@@ -300,9 +335,10 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             }
             return;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException) when (!Database.IsRelational())
         {
-            // 同 MarkProcessed——非关系型 provider 回退
+            // R13 F25：同 MarkProcessed——只有非关系型 provider（EF InMemory 等）
+            // 才按能力回落；关系型 provider 的 IOE（翻译/上下文/转换异常）必须上抛。
         }
 
         // 兜底路径：同 MarkProcessed（清理原 `!translated || true` 恒真条件）
@@ -480,8 +516,10 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     ///（<c>MySqlOutboxDbContext</c> override 为 <c>UTC_TIMESTAMP()</c>）；(b) 默认
     /// <see cref="BuildPendingSql"/> 模板的列名无引号，在 PG（未加引号的标识符折叠为小写）下与
     /// 引号建表的混合大小写列不匹配（<c>PostgreSqlOutboxDbContext</c> override 为双引号列名 +
-    /// <c>NOW()</c>）。新方言派生类必须同时 override 本方法与 <see cref="BuildPendingSql"/>
-    ///（参考 <c>MySqlOutboxDbContext</c> / <c>PostgreSqlOutboxDbContext</c> / <c>SqliteOutboxDbContext</c>）。
+    /// <c>NOW()</c>）。新方言派生类必须 override 本方法；<see cref="BuildPendingSql"/> 仅在
+    /// 沿用基类 GetPending 默认实现时才需 override（2026-10-21 勘正：参考实现中只有
+    /// <c>PostgreSqlOutboxDbContext</c> override 了 BuildPendingSql；MySql 沿用基类模板、
+    /// Sqlite 自写 GetPending SQL）。
     /// </remarks>
     protected virtual string GetNowSql() => "CURRENT_TIMESTAMP";
 
@@ -500,9 +538,22 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     protected virtual string BuildPendingSql() => $$"""
         SELECT * FROM OutboxMessages
         WHERE Status = 0 AND RetryCount < {0}
-          AND (NextAttemptAt IS NULL OR NextAttemptAt <= {{GetNowSql()}})
-          AND (LockedUntil IS NULL OR LockedUntil <= {{GetNowSql()}})
+          AND NextAttemptAt <= {{GetNowSql()}}
         """;
+
+    /// <summary>保存前把新增 Pending 行的 next_attempt_at 归一为可用时刻。</summary>
+    /// <remarks>
+    /// 直接 <c>DbSet.Add</c> 的调用方不经过 <c>IPalOutboxStore.AddMessageAsync</c>，这里兜底：
+    /// 无租约时取 CreatedAt，已有租约时取 max(CreatedAt, LockedUntil)，避免旧式种子/直写行
+    /// 在 <c>NextAttemptAt &lt;= now</c> 谓词下永远不可见或被活跃租约提前放行。
+    /// </remarks>
+    private static void NormalizePendingNextAttemptAt(OutboxMessage message, DateTimeOffset now)
+    {
+        if (message.Status != OutboxStatus.Pending || message.NextAttemptAt is not null)
+            return;
+        var lockedUntil = message.LockedUntil;
+        message.NextAttemptAt = lockedUntil is { } until && until > now ? until : now;
+    }
 
     /// <summary>配置发件箱消息实体。</summary>
     /// <remarks>
@@ -517,7 +568,14 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         modelBuilder.Entity<OutboxMessage>(e =>
         {
             e.HasKey(x => x.Id);
+            // 租约候选扫描按 next_attempt_at（可用时刻）过滤并按 (next_attempt_at, created_at)
+            // 排序：(Status, NextAttemptAt, CreatedAt) 让关系型 provider 直接按索引序取满批次。
+            // PG/SQLite 部署应使用 docs/sql 方言脚本中的部分索引（WHERE status = 0），
+            // EF 模型保持跨 provider 可翻译的最简索引。
             e.HasIndex(x => new { x.Status, x.NextAttemptAt, x.CreatedAt });
+            // 保留清理按 processed_at 分批删除终态行；(Status, ProcessedAt) 让关系型 provider
+            // 按索引序直接取满批次，避免全表扫描加排序。对齐 docs/sql 方言脚本 idx_outbox_processed。
+            e.HasIndex(x => new { x.Status, x.ProcessedAt });
             // 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2；对齐 docs/sql/*/000_schema.sql idx_outbox_lease_holder
             e.HasIndex(x => new { x.LockedBy, x.LockedUntil });
             e.Property(x => x.Id).HasConversion(v => v.ToString(null, System.Globalization.CultureInfo.InvariantCulture), v => PalUlid.Parse(v));

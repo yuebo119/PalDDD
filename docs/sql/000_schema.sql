@@ -28,8 +28,12 @@ CREATE TABLE outbox_messages (
     trace_state     TEXT    -- 审计：W3C tracestate
 );
 
-CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until);
-CREATE INDEX idx_outbox_created ON outbox_messages(created_at);
+-- 租约候选扫描按 next_attempt_at（可用时刻）过滤并按 (next_attempt_at, created_at) 排序；
+-- 有部分索引能力的方言用 WHERE status = 0。
+CREATE INDEX idx_outbox_due ON outbox_messages(next_attempt_at, created_at);
+CREATE INDEX idx_outbox_processed ON outbox_messages(status, processed_at);
+-- 2026-10-21：不建 locked_by/locked_until 索引。SQLite/PG 租约走 UPDATE ... RETURNING，
+-- 没有按租约列回读的查询；MySQL 方言脚本保留该索引（其两步回读需要）。
 
 -- ── Inbox 收件箱幂等消费表 ──
 CREATE TABLE inbox_messages (
@@ -41,10 +45,12 @@ CREATE TABLE inbox_messages (
     processing_started_at TIMESTAMP,
     processed_at          TIMESTAMP,
     attempts              INTEGER NOT NULL DEFAULT 1,
-    last_error            TEXT
+    last_error            TEXT,
+    claim_token           CHAR(26)  -- MySQL 批量认领令牌（方言专属：MySQL 无 UPDATE...RETURNING，按本列回读本次认领的行；其它方言不写此列）
 );
 
 CREATE UNIQUE INDEX idx_inbox_unique ON inbox_messages(consumer_name, message_id);
+CREATE INDEX idx_inbox_processed ON inbox_messages(status, processed_at);
 
 -- ── Saga 状态持久化表 ──
 CREATE TABLE saga_states (
@@ -85,8 +91,8 @@ CREATE TABLE events (
 );
 
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
-CREATE INDEX idx_events_global ON events(global_position);
+CREATE UNIQUE INDEX idx_events_event_id ON events(event_id);
+-- global_position 是主键，独立索引纯冗余（2026-10-20 移除）。
 
 -- ── Idempotency 幂等记录表（P3-010 补充）──
 -- P2 修复（十轮）：列名 key → idempotency_key、唯一索引 → 复合主键——对齐

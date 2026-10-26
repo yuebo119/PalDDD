@@ -7,7 +7,7 @@ namespace PalDDD.Transactions;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>内存 Saga 状态存储 — 用于测试和单进程原型。</summary>
-public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>
+public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, ISagaScanCursorStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TState : SagaState
 {
     private readonly Lock _lock = new();
@@ -77,6 +77,23 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
         TimeSpan leaseDuration,
         int batchSize,
         CancellationToken ct)
+        => LeaseCoreAsync(owner, leaseDuration, batchSize, dueBefore: null, ct);
+
+    /// <inheritdoc/>
+    public ValueTask<IReadOnlyList<TState>> LeaseDueSagasAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        DateTimeOffset now,
+        CancellationToken ct)
+        => LeaseCoreAsync(owner, leaseDuration, batchSize, dueBefore: now, ct);
+
+    private ValueTask<IReadOnlyList<TState>> LeaseCoreAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        DateTimeOffset? dueBefore,
+        CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
@@ -85,29 +102,48 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
 
         // v36 P3：now 在 lock 外取值——与姊妹 InMemoryOutboxStore.LeasePendingMessagesAsync
         //（lock 内取）不一致；fencing 正确性不受影响（仅 leasedUntil 时间戳微早），
-        // 保留现状并声明（对齐 InMemoryOutboxStore.RequeueDeadAsync 的 lock 外声明先例）
-        var now = _timeProvider.GetUtcNow();
+        // 保留现状并声明（对齐 InMemoryOutboxStore.RequeueDeadAsync 的 lock 外声明先例）。
+        // 到期路径用调用方 now 作为租约起点，保证过滤与 LeasedUntil 同源。
+        var now = dueBefore ?? _timeProvider.GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
         lock (_lock)
         {
             // B23：扫描走活跃索引（O(活跃)）——语义与原全量扫 + 状态谓词等价
             // （索引成员即谓词为真的集合，Add/SaveChanges 受理点自纠维持）。
-            // v44 P3 饿死边界（行为不变，声明保留）：CreatedAt 固定排序 + Take(batchSize) 下，
-            // 无 Timeout 的滞留 AWD saga 永不离场（非超时分支仅清租约）——积压 ≥ batchSize
-            // 时排在其后的 saga 每轮取不到名额；生产栈 NextAttemptAt 过滤不占名额无此问题，
-            // 本栈定位测试/原型，接受该边界不修。
+            // v44 饿死边界（2026-10-21 R8 勘正）：原注释称 CreatedAt 固定排序下滞留
+            // AWD saga 永不离场；现在租约按 (leased_until NULL 优先, leased_until,
+            // created_at) 排序，并且 SagaTimeoutProcessor 对实现 ISagaScanCursorStore
+            // 的存储把 released.leased_until 写回本次扫描时刻（见 ReleaseLeasesAsync
+            // 四参重载），已扫描行退到未扫描行之后，无 Timeout 的滞留 saga 也会在
+            // 后续轮次获得名额。未实现轮转接口的自定义 store 仍可能饿死（处理器构造期
+            // 告警），本栈已实现，不再受该边界影响。
             var active = new List<TState>(Math.Min(batchSize, _activeIds.Count));
+            // 只保留排序键最小的 batchSize 条：原实现对全部活跃项 Sort 后截断，
+            // 10k 活跃时每 tick 付 O(A log A)。PriorityQueue 以反向比较器保留前 N 小，
+            // 成本约 O(A log N)，最后反转为期望升序。
+            var leaseOrder = Comparer<(int Rank, DateTimeOffset Until, DateTimeOffset Created)>.Create(
+                static (a, b) => b.CompareTo(a));
+            var top = new PriorityQueue<TState, (int Rank, DateTimeOffset Until, DateTimeOffset Created)>(leaseOrder);
             foreach (var id in _activeIds)
             {
                 if (!_states.TryGetValue(id, out var state))
                     continue; // 索引残留防御（正常不可达——移除与落库同帧发生）
                 if (state.LeasedUntil is not null && state.LeasedUntil > now)
                     continue;
-                active.Add(state);
+                // M1：NULL = 迁移前存量行——按到期处理（与 SQL 侧 NULL 谓词一致），
+                // 首次扫描后由 SagaProcessor 回填哨兵/真实到期时刻。
+                if (dueBefore is { } due && state.NextCheckAt is { } next && next > due)
+                    continue;
+                var key = state.LeasedUntil is { } until
+                    ? (1, until, state.CreatedAt)
+                    : (0, default, state.CreatedAt);
+                top.Enqueue(state, key);
+                if (top.Count > batchSize)
+                    top.Dequeue();
             }
-            active.Sort(static (a, b) => a.CreatedAt.CompareTo(b.CreatedAt));
-            if (active.Count > batchSize)
-                active.RemoveRange(batchSize, active.Count - batchSize); // 等价原 OrderBy().Take(batchSize) 语义
+            while (top.TryDequeue(out var state, out _))
+                active.Add(state);
+            active.Reverse(); // 反向比较器出队为降序，恢复为 NULL/最早优先。
 
             // v25 P3 行为族 B1：successor 替换——对齐 InMemoryOutboxStore 的 ITM-174 模式。
             // 原实现原地直写字典条目（调用方与存储共享同一引用）：worker A 租约到期后
@@ -218,5 +254,96 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
             }
         }
         return ValueTask.FromResult(released);
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<int> ReleaseLeasesAsync(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        DateTimeOffset checkedAt,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        ct.ThrowIfCancellationRequested();
+
+        var released = 0;
+        lock (_lock)
+        {
+            foreach (var saga in sagas)
+            {
+                if (_states.TryGetValue(saga.SagaId, out var current)
+                    && current.Version == saga.Version
+                    && string.Equals(current.LeasedBy, owner, StringComparison.Ordinal))
+                {
+                    current.LeasedBy = null;
+                    current.LeasedUntil = checkedAt;
+                    current.Version++;
+                    released++;
+                }
+            }
+        }
+        return ValueTask.FromResult(released);
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<int> AdvanceNextCheckAtAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        ct.ThrowIfCancellationRequested();
+
+        var affected = 0;
+        lock (_lock)
+        {
+            foreach (var saga in sagas)
+            {
+                if (_states.TryGetValue(saga.SagaId, out var current)
+                    && current.Version == saga.Version
+                    && string.Equals(current.LeasedBy, owner, StringComparison.Ordinal))
+                {
+                    current.NextCheckAt = saga.NextCheckAt;
+                    current.Version++;
+                    if (!ReferenceEquals(current, saga))
+                        saga.Version++;
+                    affected++;
+                }
+            }
+        }
+        return ValueTask.FromResult(affected);
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<IReadOnlyList<int>> SaveManyAsync(IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sagas);
+        ct.ThrowIfCancellationRequested();
+        if (sagas.Count == 0)
+            return ValueTask.FromResult<IReadOnlyList<int>>([]);
+
+        var results = new int[sagas.Count];
+        lock (_lock)
+        {
+            for (var i = 0; i < sagas.Count; i++)
+            {
+                var state = sagas[i];
+                if (state is null)
+                {
+                    results[i] = 0;
+                    continue;
+                }
+                if (!_states.TryGetValue(state.SagaId, out var current)
+                    || current.Version != state.Version)
+                {
+                    results[i] = 0;
+                    continue;
+                }
+                state.Version++;
+                _states[state.SagaId] = state;
+                SyncActiveIndex(state);
+                results[i] = 1;
+            }
+        }
+        return ValueTask.FromResult<IReadOnlyList<int>>(results);
     }
 }

@@ -67,6 +67,18 @@ public sealed class DapperIdempotencyStoreTests : IDisposable
     }
 
     [Test]
+    public async Task StartOrGetAsync_NewThenExisting_ReturnsStartedThenExisting()
+    {
+        var first = await _store.StartOrGetAsync("TestOp", "key-1", Now, Policy);
+        await Assert.That(first.Outcome).IsEqualTo(IdempotencyStartOutcome.Started);
+        await Assert.That(first.Record!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+
+        var second = await _store.StartOrGetAsync("TestOp", "key-1", Now.AddSeconds(1), Policy);
+        await Assert.That(second.Outcome).IsEqualTo(IdempotencyStartOutcome.Existing);
+        await Assert.That(second.Record!.Key).IsEqualTo("key-1");
+    }
+
+    [Test]
     public async Task TryStartAsync_CompletedRecord_ReturnsNull()
     {
         var record = await _store.TryStartAsync("TestOp", "key-1", Now, Policy);
@@ -95,7 +107,8 @@ public sealed class DapperIdempotencyStoreTests : IDisposable
         await _store.MarkCompletedAsync(record!, "done"u8.ToArray(), Now.AddSeconds(1));
         var afterExpiry = Now.AddMinutes(11);
         var reclaimed = await _store.TryStartAsync("TestOp", "key-1", afterExpiry, Policy);
-        await Assert.That(reclaimed).IsNotNull();
+        await Assert.That(reclaimed).IsTypeOf<IdempotencyRecord>();
+        await Assert.That(reclaimed!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
     }
 
     [Test]

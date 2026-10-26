@@ -54,7 +54,7 @@ public static class EndpointExtensions
                 // ITM-091 修复：SendAsync 纳入本地 try——PalValidationException 由 Dispatcher 派发时
                 // 抛出（原 catch 仅覆盖 ReadFromJsonAsync），此前验证失败会逃逸为 500；
                 // JsonException catch 语义保持不变（仍只覆盖反序列化）
-                await dispatcher.SendAsync(cmd!, ct).ConfigureAwait(false);
+                await dispatcher.SendAsync(cmd!, context.RequestServices, ct).ConfigureAwait(false);
             }
             catch (PalDDD.CQRS.PalValidationException ex)
             {
@@ -94,7 +94,7 @@ public static class EndpointExtensions
                 // ITM-091 修复：SendAsync 纳入本地 try——PalValidationException 由 Dispatcher 派发时
                 // 抛出（原 catch 仅覆盖 ReadFromJsonAsync），此前验证失败会逃逸为 500；
                 // JsonException catch 语义保持不变（仍只覆盖反序列化）
-                result = await dispatcher.SendAsync(cmd!, ct).ConfigureAwait(false);
+                result = await dispatcher.SendAsync(cmd!, context.RequestServices, ct).ConfigureAwait(false);
             }
             catch (PalDDD.CQRS.PalValidationException ex)
             {
@@ -168,7 +168,7 @@ public static class EndpointExtensions
                 // ITM-168 修复：QueryAsync 纳入本地 try——PalValidationException 由 Dispatcher
                 // 派发时抛出，此前验证失败逃逸为 500（MapCommand 两个方法均已映射 400，
                 // 查询端点缺失同族映射）。
-                result = await dispatcher.QueryAsync(query, ct).ConfigureAwait(false);
+                result = await dispatcher.QueryAsync(query, context.RequestServices, ct).ConfigureAwait(false);
             }
             catch (PalDDD.CQRS.PalValidationException ex)
             {
@@ -213,7 +213,7 @@ public static class EndpointExtensions
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(bindQuery);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
+        ValidateKeepAliveInterval(keepAliveInterval);
 
         return endpoints.MapGet(pattern, async context =>
         {
@@ -269,7 +269,7 @@ public static class EndpointExtensions
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(queryJsonTypeInfo);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
+        ValidateKeepAliveInterval(keepAliveInterval);
 
         return endpoints.MapPost(pattern, async context =>
         {
@@ -279,6 +279,21 @@ public static class EndpointExtensions
                 context, query!, itemJsonTypeInfo, formatFrame, eventSelector, idSelector, keepAliveInterval)
                 .ConfigureAwait(false);
         });
+    }
+
+    /// <summary>
+    /// R13 F18：流式端点心跳间隔的统一映射期校验（GET/POST 与断线续跑三端点共用）。
+    /// 下界 1ms：Task.Delay 对 (0,1ms) 截断为 0 并返回已完成 Task，心跳竞速会退化为
+    /// 紧循环（CPU/带宽放大，且与断线续跑的 Math.Clamp 下界分叉）；
+    /// 上界 uint.MaxValue-1 ms（约 49.7 天）：Task.Delay 上限，超过时首个请求抛 AOOR
+    /// 并被改写成 200 + event: error（R11 F21）。
+    /// </summary>
+    internal static void ValidateKeepAliveInterval(TimeSpan? keepAliveInterval)
+    {
+        if (keepAliveInterval is not { } interval)
+            return;
+        ArgumentOutOfRangeException.ThrowIfLessThan(interval, TimeSpan.FromMilliseconds(1));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(interval, TimeSpan.FromMilliseconds(uint.MaxValue - 1));
     }
 
     /// <summary>
@@ -417,9 +432,14 @@ public static class EndpointExtensions
                                 if (!valueTask.Result) break;
                                 itemCount++;
                                 WriteItemFrame(enumerator.Current);
-                                await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                                // 写合并：首帧立即提交（TTFT 与断连可见性），其后连续同步产出的帧
+                                // 累计到阈值才 flush；下一项若挂起，会在进入竞速前先 flush。
+                                if (itemCount == 1 || bodyWriter.UnflushedBytes >= StreamFrameWriter.FlushThresholdBytes)
+                                    await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
                                 continue;
                             }
+                            // 即将挂起等待下一项：先把已写帧刷出，保证心跳路径的逐项延迟语义。
+                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
                             moveNext = valueTask.AsTask();
                         }
 
@@ -448,13 +468,17 @@ public static class EndpointExtensions
                         {
                             itemCount++;
                             WriteItemFrame(enumerator.Current);
-                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                            if (itemCount == 1 || bodyWriter.UnflushedBytes >= StreamFrameWriter.FlushThresholdBytes)
+                                await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
                         }
                         else
                         {
                             break;
                         }
                     }
+
+                    // 收尾：最后一批未达阈值的帧在此刷出（空流也提交一次，保持原每流至少一次 flush）。
+                    await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -463,12 +487,38 @@ public static class EndpointExtensions
             }
             else
             {
-                // Phase 1 默认路径：await foreach 快路径（无心跳时零额外开销）
-                await foreach (var item in handler.HandleAsync(query, ct).WithCancellation(ct))
+                // Phase 1 默认路径：手动枚举 + 写合并。连续同步产出的帧累计到阈值才 flush；
+                // MoveNext 挂起前与流结束时各 flush 一次，低速率与首帧延迟保持逐项语义。
+                var enumerator = handler.HandleAsync(query, ct).GetAsyncEnumerator(ct);
+                try
                 {
-                    itemCount++;
-                    WriteItemFrame(item);
+                    while (true)
+                    {
+                        var moveNext = enumerator.MoveNextAsync();
+                        if (moveNext.IsCompletedSuccessfully)
+                        {
+                            if (!moveNext.Result)
+                                break;
+                        }
+                        else
+                        {
+                            // 即将等待下一项：先把已写帧刷出，客户端立刻可见。
+                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                            if (!await moveNext.ConfigureAwait(false))
+                                break;
+                        }
+
+                        itemCount++;
+                        WriteItemFrame(enumerator.Current);
+                        if (itemCount == 1 || bodyWriter.UnflushedBytes >= StreamFrameWriter.FlushThresholdBytes)
+                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                    }
+
                     await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await enumerator.DisposeAsync().ConfigureAwait(false);
                 }
             }
 
@@ -515,10 +565,13 @@ public static class EndpointExtensions
 
     /// <summary>读取 JSON 请求体，错误时写入对应错误响应并返回 (false, null)。
     /// ITM-799（2026-09-19）：415/畸形 JSON/验证异常/空 body 四种错误编排原在
-    /// MapCommand/MapQuery 两处逐字重复（约 40 行）——收口为单一出处，历史注释随迁。
+    /// MapCommand 两个重载中逐字重复（约 40 行）——收口为单一出处，历史注释随迁。
+    ///（2026-10-21 勘正：原文写 MapCommand/MapQuery，但 MapQuery 是 GET、无反序列化段。）
     /// ADR-030 D8：泛化版（类型参数 TCommand → T）——MapStreamQuery POST 形态复用，
-    /// 415/畸形 JSON/空 body 错误形态不变。</summary>
-    private static async Task<(bool Success, T? Body)> ReadJsonBodyOrWriteErrorAsync<T>(
+    /// 415/畸形 JSON/空 body 错误形态不变。
+    /// ADR-031 补强（2026-10-19）：MapDetachedStreamQuery POST 形态复用同一出处，
+    /// internal 仅供同程序集端点映射类调用（非公共 API）。</summary>
+    internal static async Task<(bool Success, T? Body)> ReadJsonBodyOrWriteErrorAsync<T>(
         HttpContext context, JsonTypeInfo<T> bodyJsonTypeInfo)
     {
         // v40 P3：非 JSON Content-Type 的 POST 原由 ReadFromJsonAsync 抛
@@ -577,8 +630,8 @@ public static class EndpointExtensions
 
     /// <summary>写入 400 + ValidationProblemResponse 体（ITM-283：反序列化段与派发段统一形态——
     /// 消除裸 400 无 body 与派发段 ITM-168 形态的分叉）。v33 P3：派发段三处逐字重复的
-    /// catch 收口到本方法（可选 ct 透传——派发段原样携带 RequestAborted，写响应可随
-    /// 客户端断连取消；反序列化/绑定段不传 ct，与原 default(CancellationToken) 等价）。</summary>
+    /// catch 收口到本方法（可选 ct 透传——派发段与反序列化/绑定段均原样携带
+    /// RequestAborted，写响应可随客户端断连取消）。</summary>
     private static async Task WriteValidationProblemAsync(
         HttpContext context,
         CQRS.PalValidationException ex,
@@ -613,6 +666,18 @@ internal static class ValidationProblemResponseFactory
             StatusCodes.Status415UnsupportedMediaType,
             [new ValidationProblemError("contentType", "Request Content-Type is not application/json.")]);
 
+    /// <summary>R12 C-12：请求体超限/坏请求的 ProblemDetails（保留宿主状态码，不再改写成 500）。</summary>
+    internal static ValidationProblemResponse CreateBadRequest(int statusCode, string message)
+    {
+        var (type, title) = statusCode switch
+        {
+            StatusCodes.Status413PayloadTooLarge =>
+                ("https://www.rfc-editor.org/rfc/rfc9110#section-15.5.14", "Content Too Large"),
+            _ => ("https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1", "Bad Request"),
+        };
+        return new(type, title, statusCode, [new ValidationProblemError("requestBody", message)]);
+    }
+
     /// <summary>按 PalValidationException 构造规范 ValidationProblemResponse（RFC 9110 §15.5.1）。</summary>
     internal static ValidationProblemResponse Create(CQRS.PalValidationException ex)
         => new(
@@ -645,6 +710,13 @@ internal static class ValidationProblemResponseFactory
 /// </remarks>
 internal static class StreamFrameWriter
 {
+    /// <summary>
+    /// 写合并阈值（字节）。连续同步产出的帧累计到此值才提交一次管道；MoveNext 挂起前
+    /// 与流结束时仍各 flush 一次，因此低速率流的逐项可见性不受影响。取值覆盖常见
+    /// 小帧（几十到几百字节）的十余项批量，同时避免单帧高峰值驻留。
+    /// </summary>
+    internal const int FlushThresholdBytes = 4096;
+
     private static ReadOnlySpan<byte> DataPrefix => "data: "u8;
 
     private static ReadOnlySpan<byte> FrameTerminator => "\n\n"u8;

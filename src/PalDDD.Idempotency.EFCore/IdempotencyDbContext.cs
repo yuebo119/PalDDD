@@ -14,14 +14,15 @@ namespace PalDDD.Idempotency;
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCode require dynamic access",
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
-public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext(options), IIdempotencyStore
+public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext(options), IIdempotencyStartOrGetStore
 {
     /// <summary>幂等执行记录表</summary>
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 
-    // A5（S1 轮，2026-10-15）：固定形状单行查询编译化——EF Core 每次执行都把表达式树
-    // 重新翻译成 SQL（无自动计划缓存；EF.CompileAsyncQuery 的官方存在理由即消除重复
-    // 编译开销）。两个查询是幂等路径每请求的固定形状热点（读路径 AsNoTracking、
+    // A5（S1 轮，2026-10-15）：固定形状单行查询编译化——EF Core 自 2.0 起会缓存同一
+    // 形状查询的编译结果（2026-10-21 勘正：原文「无自动计划缓存」失实）；CompileAsyncQuery
+    // 省的是每次执行 1 次查询缓存键计算与查找。两个查询是幂等路径每请求的固定形状热点
+    //（读路径 AsNoTracking、
     // TryStart 跟踪查询两形态分别编译，跟踪语义随委托固化）。按 IModel 引用各缓存一份
     // 委托：编译委托与单一模型绑定（EF 官方约束），同上下文类型跨 provider 模型实例
     // 不同，按模型分持。
@@ -73,8 +74,32 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         IdempotencyPolicy policy,
         CancellationToken ct = default)
     {
+        var result = await StartOrGetAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+        return result.Outcome == IdempotencyStartOutcome.Started ? result.Record : null;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<IdempotencyStartResult> StartOrGetAsync(
+        string operationName,
+        string key,
+        DateTimeOffset now,
+        IdempotencyPolicy policy,
+        CancellationToken ct = default)
+    {
         ArgumentNullException.ThrowIfNull(policy);
         ValidateKeyParts(operationName, key);
+
+        // 2026-10-20 性能轮：关系型 provider INSERT 优先。新 key（幂等主场景）从
+        // 「SELECT 未命中 + INSERT」两次往返降为一次；冲突时才回读现有记录走复用/Existing
+        // 分支。唯一冲突分类由 TryCreateRecordAsync 的 IsUniqueConstraintViolation 过滤，
+        // 连接故障照常上抛。InMemory provider 的重复键以 ArgumentException 形态暴露（无
+        // DbUpdateException 分类面），保持原 SELECT 优先路径不变。
+        if (Database.IsRelational())
+        {
+            var created = await TryCreateRecordAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+            if (created is not null)
+                return new IdempotencyStartResult(IdempotencyStartOutcome.Started, created);
+        }
 
         // A5（S1 轮）：跟踪查询走按模型缓存的编译委托（僵尸回收分支的突变依赖
         // ChangeTracker，保持跟踪形态；编译只固化查询形状，跟踪语义不变）
@@ -84,20 +109,31 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
                     .SingleOrDefault(x => x.OperationName == operationName && x.Key == key)))(this, operationName, key, ct).ConfigureAwait(false);
 
         if (record is null)
-            return await TryCreateRecordAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+        {
+            if (Database.IsRelational())
+                return new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null);
+
+            var created = await TryCreateRecordAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+            return created is null
+                ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
+                : new IdempotencyStartResult(IdempotencyStartOutcome.Started, created);
+        }
 
         if (record.ExpiresAt <= now
             || record.Status == IdempotencyRecordStatus.Failed
             || (record.Status == IdempotencyRecordStatus.Processing && record.LockedUntil <= now))
         {
-            return await TryReuseRecordAsync(record, now, policy, ct).ConfigureAwait(false);
+            var reused = await TryReuseRecordAsync(record, now, policy, ct).ConfigureAwait(false);
+            return reused is null
+                ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
+                : new IdempotencyStartResult(IdempotencyStartOutcome.Started, reused);
         }
 
         // v26 P3 修复：读路径无效分支（活跃 Processing/Completed 未过期）Detach——跟踪查询
         // 物化的实体滞留会在长驻 scope 下累积（对照 ProjectionCheckpointDbContext 三十八轮
         // 同分支已修；v25 B5 只修了 GetAsync 的 AsNoTracking 与终态 Detach，此分支漏）
         Entry(record).State = EntityState.Detached;
-        return null;
+        return new IdempotencyStartResult(IdempotencyStartOutcome.Existing, record);
     }
 
     /// <inheritdoc/>

@@ -203,7 +203,7 @@ public sealed class OutboxDomainEventInterceptorTests
     }
 
     [Test]
-    public async Task SavingChanges_SyncHook_OnImmediateStore_StillPerEvent(CancellationToken cancellationToken)
+    public async Task SavingChanges_SyncHook_OnImmediateStore_BatchesOnce(CancellationToken cancellationToken)
     {
         var store = new RecordingImmediateOutboxStore();
         var serializer = new PassthroughSerializer();
@@ -223,8 +223,10 @@ public sealed class OutboxDomainEventInterceptorTests
 
         context.SaveChanges();
 
-        await Assert.That(store.AddedViaSingle).Count().IsEqualTo(2);
-        await Assert.That(store.Batches).Count().IsEqualTo(0);
+        // 2026-10-19：同步钩子对立即写 store 改走单次批量（原逐事件阻塞 k 次往返）
+        await Assert.That(store.Batches).Count().IsEqualTo(1);
+        await Assert.That(store.Batches[0]).Count().IsEqualTo(2);
+        await Assert.That(store.AddedViaSingle).Count().IsEqualTo(0);
     }
 
     [Test]

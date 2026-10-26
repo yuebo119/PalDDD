@@ -23,6 +23,8 @@ public class PalOrmOutboxStoreTests
         await Assert.That(pending).Count().IsEqualTo(1);
         await Assert.That(pending[0].Type).IsEqualTo("test.event.v1");
         await Assert.That(pending[0].Status).IsEqualTo(OutboxStatus.Pending);
+        await Assert.That(msg.NextAttemptAt!.Value).IsLessThanOrEqualTo(TimeProvider.System.GetUtcNow());
+        await Assert.That(pending[0].NextAttemptAt).IsEqualTo(msg.NextAttemptAt);
     }
 
     [Test]
@@ -80,6 +82,7 @@ public class PalOrmOutboxStoreTests
 
         await Assert.That(leased).Count().IsEqualTo(1);
         await Assert.That(leased[0].LockedBy).IsEqualTo("worker-1");
+        await Assert.That(leased[0].NextAttemptAt).IsEqualTo(leased[0].LockedUntil);
     }
 
     [Test]
@@ -149,6 +152,25 @@ public class PalOrmOutboxStoreTests
 
         var pending = await store.GetPendingMessagesAsync(100, 10, default);
         await Assert.That(pending).Count().IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task Outbox_AddMessagesAsync_LargeBatch_DefaultBatchWidth()
+    {
+        // 6.6.0 单参重载：SQLite/MySQL 内部 1000 批宽分块，PG 整段单 COPY。
+        // 1001 行跨过 SQLite 首块边界，锁定「不因批宽切换丢行」。
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteOutboxStore(session);
+
+        var messages = Enumerable.Range(0, 1001)
+            .Select(i => CreateOutboxMessage($"bulk.large.{i}"))
+            .ToList();
+
+        var count = await store.AddMessagesAsync(messages);
+        await Assert.That(count).IsEqualTo(1001);
+
+        var pending = await store.GetPendingMessagesAsync(2000, 10, default);
+        await Assert.That(pending).Count().IsEqualTo(1001);
     }
 
     [Test]

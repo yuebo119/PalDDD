@@ -399,6 +399,50 @@ public sealed class BrokerIntegrationTests
 
     [Test]
     [NotInParallel("broker-integration")]
+    public async Task Kafka_ConsumerDispatchConcurrency_RunsHandlersInParallel(CancellationToken cancellationToken)
+    {
+        SkipIfKafkaUnavailable();
+        var logger = new CapturingLogger<KafkaBroker>();
+        var created = Fixture.CreateKafkaBroker(logger);
+        await using var broker = created.Item1;
+        broker.ConsumerDispatchConcurrency = 4;
+
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var prefix = $"kafka-conc-{tag}-";
+        const int expected = 4;
+        using var entered = new CountdownEvent(expected);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var sub = await broker.SubscribeAsync<TestMessage>(async (msg, ct) =>
+        {
+            ready.TrySetResult();
+            if (!msg.Name.StartsWith(prefix, StringComparison.Ordinal))
+                return;
+            entered.Signal();
+            if (entered.CurrentCount == 0)
+                allEntered.TrySetResult();
+            // 全部 handler 先停在屏障上：并发度 1 时只有首个能进入，allEntered 永不完成。
+            await release.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+        }, cancellationToken);
+
+        var warmupName = $"kafka-conc-warmup-{tag}";
+        await broker.PublishAsync(new TestMessage(warmupName), cancellationToken);
+        await WaitForSignalAsync(ready.Task,
+            ct => broker.PublishAsync(new TestMessage(warmupName), ct),
+            logger, "Kafka", "consumer join（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
+
+        for (var i = 0; i < expected; i++)
+            await broker.PublishAsync(new TestMessage($"{prefix}{i}"), cancellationToken);
+
+        await allEntered.Task.WaitAsync(TimeSpan.FromSeconds(20), cancellationToken);
+        release.TrySetResult();
+        await Assert.That(entered.CurrentCount).IsEqualTo(0);
+    }
+
+    [Test]
+    [NotInParallel("broker-integration")]
     public async Task Kafka_HandlerCancellation_DoesNotLogHandlerFailure(CancellationToken cancellationToken)
     {
         SkipIfKafkaUnavailable();
@@ -528,6 +572,65 @@ public sealed class BrokerIntegrationTests
 
         var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
         await Assert.That(got.Name).IsEqualTo($"rmq-rt-{tag}");
+    }
+
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task RabbitMq_ConsumerDispatchConcurrency_AllowsConcurrentHandlers(CancellationToken cancellationToken)
+    {
+        SkipIfRabbitUnavailable();
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger);
+        await using var broker = created.Item1;
+        broker.ConsumerDispatchConcurrency = 2;
+
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var readyName = $"rmq-conc-ready-{tag}";
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bothActive = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var active = 0;
+
+        await using var sub = await broker.SubscribeAsync<TestMessage>(async (msg, ct) =>
+        {
+            if (msg.Name == readyName)
+            {
+                ready.TrySetResult();
+                return;
+            }
+            if (!msg.Name.StartsWith("rmq-conc-", StringComparison.Ordinal)
+                || !msg.Name.EndsWith(tag, StringComparison.Ordinal))
+                return;
+
+            if (Interlocked.Increment(ref active) == 2)
+                bothActive.TrySetResult();
+            try
+            {
+                await release.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref active);
+            }
+        }, cancellationToken);
+
+        await broker.PublishAsync(new TestMessage(readyName), cancellationToken);
+        await WaitForSignalAsync(ready.Task,
+            ct => broker.PublishAsync(new TestMessage(readyName), ct),
+            logger, "RabbitMQ", "并发消费就绪", TimeSpan.FromSeconds(120), cancellationToken);
+
+        await broker.PublishAsync(new TestMessage($"rmq-conc-a-{tag}"), cancellationToken);
+        await broker.PublishAsync(new TestMessage($"rmq-conc-b-{tag}"), cancellationToken);
+
+        try
+        {
+            await bothActive.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            await Assert.That(Volatile.Read(ref active)).IsEqualTo(2);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
     }
 
     [Test]

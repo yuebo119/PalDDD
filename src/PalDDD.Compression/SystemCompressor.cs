@@ -95,39 +95,41 @@ internal sealed class BrotliCompressor : ICompressor
         // EPSL 地毯审计 2026-10-11 A-3 接入——与 LZ4/ZStd 的 C6 形态对齐），无 MemoryStream 分配
         using var decoder = new BrotliDecoder();
         var buffer = DecompressBufferPool.Rent();
-        var source = compressed;
-        long totalWritten = 0;
-
-        while (true)
+        try
         {
-            // R9/P2-2：首轮提示上限 64KB（原 max(4096, len*2) 在超大输入下 2× 过量提交，
-            // 驻留随线程槽峰值固化）——后续按需几何增长
-            Span<byte> destination = buffer.GetSpan(Math.Min(DecompressionGuard.InitialBlockHintBytes, Math.Max(4096, source.Length * 2)));
-            OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
-            buffer.Advance(bytesWritten);
-            totalWritten += bytesWritten;
-            source = source.Slice(bytesConsumed);
+            var source = compressed;
+            long totalWritten = 0;
 
-            // P1 修复（四轮评审）：Brotli 路径补输出上限——与 GZip/Deflate 的 CopyWithLimit
-            // 对称（此前六轮修复遗漏此分支，PD17 命中）
-            if (totalWritten > DecompressionGuard.MaxOutputBytes)
-                throw new System.IO.InvalidDataException($"Brotli 解压输出超过安全上限 {DecompressionGuard.MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
+            while (true)
+            {
+                // R9/P2-2：首轮提示上限 64KB（原 max(4096, len*2) 在超大输入下 2× 过量提交，
+                // 驻留随线程槽峰值固化）——后续按需几何增长
+                Span<byte> destination = buffer.GetSpan(Math.Min(DecompressionGuard.InitialBlockHintBytes, Math.Max(4096, source.Length * 2)));
+                OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
+                buffer.Advance(bytesWritten);
+                totalWritten += bytesWritten;
+                source = source.Slice(bytesConsumed);
 
-            if (status == OperationStatus.Done) break;
-            if (status == OperationStatus.DestinationTooSmall) continue;
-            throw new InvalidDataException($"Brotli 解压失败：{status}");
+                // P1 修复（四轮评审）：Brotli 路径补输出上限——与 GZip/Deflate 的 CopyWithLimit
+                // 对称（此前六轮修复遗漏此分支，PD17 命中）
+                if (totalWritten > DecompressionGuard.MaxOutputBytes)
+                    throw new System.IO.InvalidDataException($"Brotli 解压输出超过安全上限 {DecompressionGuard.MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
+
+                if (status == OperationStatus.Done) break;
+                if (status == OperationStatus.DestinationTooSmall) continue;
+                throw new InvalidDataException($"Brotli 解压失败：{status}");
+            }
+
+            return buffer.WrittenSpan.ToArray();
         }
-
-        return buffer.WrittenSpan.ToArray();
+        finally
+        {
+            // R12 C-17：成功/炸弹异常都立即归还大缓冲（超阈值弃槽），不等到下次 Rent。
+            DecompressBufferPool.Release(buffer);
+        }
     }
 
-    private static int MapLevelToQuality(CompressionLevel level) => level switch
-    {
-        CompressionLevel.Fastest => 1,
-        CompressionLevel.Balanced => 4,
-        CompressionLevel.SmallestSize => 11,
-        _ => 4,
-    };
+    private static int MapLevelToQuality(CompressionLevel level) => CompressionLevelMap.ToBrotliQuality(level);
 }
 
 /// <summary>
@@ -163,6 +165,22 @@ internal static class TlsStreamPool
 
     /// <summary>解压输出槽（容量按需增长）。</summary>
     public static MemoryStream RentDecompressOutput() => Rent(ref _decompressOutput, 0);
+
+    /// <summary>R12 C-17：解压输入槽操作结束归还——超驻留上限弃槽，避免长驻线程持大缓冲。</summary>
+    public static void ReleaseDecompressInput(MemoryStream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (ReferenceEquals(_decompressInput, stream) && stream.Capacity > MaxResidentStreamBytes)
+            _decompressInput = null;
+    }
+
+    /// <summary>R12 C-17：解压输出槽操作结束归还——超驻留上限弃槽。</summary>
+    public static void ReleaseDecompressOutput(MemoryStream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (ReferenceEquals(_decompressOutput, stream) && stream.Capacity > MaxResidentStreamBytes)
+            _decompressOutput = null;
+    }
 
     private static MemoryStream Rent(ref MemoryStream? slot, int minCapacity)
     {
@@ -223,20 +241,23 @@ internal sealed class GZipCompressor : ICompressor
         input.Write(compressed);
         input.Position = 0;
         var output = TlsStreamPool.RentDecompressOutput();
-        using (var gzip = new GZipStream(input, CompressionMode.Decompress, leaveOpen: true))
+        try
         {
-            DecompressionGuard.CopyWithLimit(gzip, output); // P2 修复：输出上限防膨胀炸弹
-            return output.ToArray();
+            using (var gzip = new GZipStream(input, CompressionMode.Decompress, leaveOpen: true))
+            {
+                DecompressionGuard.CopyWithLimit(gzip, output); // P2 修复：输出上限防膨胀炸弹
+                return output.ToArray();
+            }
+        }
+        finally
+        {
+            // R12 C-17：成功/超限异常都归还；超 256KB 的槽立即弃置。
+            TlsStreamPool.ReleaseDecompressInput(input);
+            TlsStreamPool.ReleaseDecompressOutput(output);
         }
     }
 
-    private static System.IO.Compression.CompressionLevel MapLevel(CompressionLevel level) => level switch
-    {
-        CompressionLevel.Fastest => System.IO.Compression.CompressionLevel.Fastest,
-        CompressionLevel.Balanced => System.IO.Compression.CompressionLevel.Optimal,
-        CompressionLevel.SmallestSize => System.IO.Compression.CompressionLevel.SmallestSize,
-        _ => System.IO.Compression.CompressionLevel.Optimal,
-    };
+    private static System.IO.Compression.CompressionLevel MapLevel(CompressionLevel level) => CompressionLevelMap.ToFramework(level);
 }
 
 /// <summary>
@@ -276,18 +297,44 @@ internal sealed class DeflateCompressor : ICompressor
         input.Write(compressed);
         input.Position = 0;
         var output = TlsStreamPool.RentDecompressOutput();
-        using (var deflate = new DeflateStream(input, CompressionMode.Decompress, leaveOpen: true))
+        try
         {
-            DecompressionGuard.CopyWithLimit(deflate, output); // P2 修复：输出上限防膨胀炸弹
-            return output.ToArray();
+            using (var deflate = new DeflateStream(input, CompressionMode.Decompress, leaveOpen: true))
+            {
+                DecompressionGuard.CopyWithLimit(deflate, output); // P2 修复：输出上限防膨胀炸弹
+                return output.ToArray();
+            }
+        }
+        finally
+        {
+            // R12 C-17：同 GZip——超限异常路径也归还/弃置大缓冲。
+            TlsStreamPool.ReleaseDecompressInput(input);
+            TlsStreamPool.ReleaseDecompressOutput(output);
         }
     }
 
-    private static System.IO.Compression.CompressionLevel MapLevel(CompressionLevel level) => level switch
+    private static System.IO.Compression.CompressionLevel MapLevel(CompressionLevel level) => CompressionLevelMap.ToFramework(level);
+}
+
+/// <summary>
+/// 压缩级别映射单一来源（2026-10-21 评审 F15）：Brotli 质量与 System.IO.Compression 级别
+/// 同表维护；未知枚举值 fail-fast，不再静默映射为默认级别。
+/// </summary>
+internal static class CompressionLevelMap
+{
+    internal static int ToBrotliQuality(CompressionLevel level) => level switch
+    {
+        CompressionLevel.Fastest => 1,
+        CompressionLevel.Balanced => 4,
+        CompressionLevel.SmallestSize => 11,
+        _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown compression level."),
+    };
+
+    internal static System.IO.Compression.CompressionLevel ToFramework(CompressionLevel level) => level switch
     {
         CompressionLevel.Fastest => System.IO.Compression.CompressionLevel.Fastest,
         CompressionLevel.Balanced => System.IO.Compression.CompressionLevel.Optimal,
         CompressionLevel.SmallestSize => System.IO.Compression.CompressionLevel.SmallestSize,
-        _ => System.IO.Compression.CompressionLevel.Optimal,
+        _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown compression level."),
     };
 }

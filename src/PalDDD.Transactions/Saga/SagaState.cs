@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions;
@@ -78,17 +78,44 @@ public abstract class SagaState
     /// <summary>进入死信或补偿失败状态的时间。</summary>
     public DateTimeOffset? ErrorAt { get; set; }
 
+    /// <summary>
+    /// 「当前状态没有待检查的超时步骤」的哨兵值（2026-10-21）：活动 Saga 的
+    /// <see cref="NextCheckAt"/> 恒有值——有带 Timeout 的已开始步骤时为真实到期时刻，
+    /// 否则写本哨兵（9999-12-31 UTC，MySQL DATETIME(6) 可存），到期扫描自然跳过。
+    /// 不用 <see cref="DateTimeOffset.MaxValue"/>：其 7 位小数秒 + 时区偏移超出
+    /// MySQL DATETIME(6) 范围，写入即错。终态 Saga 仍写 null。
+    /// </summary>
+    public static readonly DateTimeOffset NoPendingTimeout = new(9999, 12, 31, 0, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
+    /// 下一次超时检查时间（2026-10-19 性能迁移 M1）。当前状态中带 Timeout 且已开始
+    /// 执行的步骤的最早到期时刻；无待检查步骤时为 <see cref="NoPendingTimeout"/>。
+    /// SagaProcessor 在 <c>EnableDueTimeFilter=true</c>（默认）时只租约
+    /// <c>NextCheckAt &lt;= now</c> 或 <c>NextCheckAt IS NULL</c> 的行（NULL = 迁移前
+    /// 存量行，首次扫描后回填），避免每轮全量扫描活跃 Saga。终态写 null。
+    /// </summary>
+    public DateTimeOffset? NextCheckAt { get; set; }
+
     /// <summary>当前租约持有者；非空表示后台扫描器正在处理此 Saga。</summary>
     public string? LeasedBy { get; set; }
 
-    /// <summary>租约过期时间；过期后其他后台扫描器可重新获取。</summary>
+    /// <summary>租约过期时间；过期后其他后台扫描器可重新获取。释放时写回本次扫描时刻，
+    /// 作为全量扫描的轮转游标（NULL 表示尚未扫描，优先处理）。</summary>
     public DateTimeOffset? LeasedUntil { get; set; }
 
     /// <summary>已成功执行的步骤 Key 列表（按执行顺序）— 补偿顺序的唯一依据：
     /// <see cref="CompensationPolicy.Backward"/> 逆序遍历（最后执行的先回滚）、
     /// <see cref="CompensationPolicy.Forward"/> 正序遍历。v39 P3 勘正声明：补偿按执行序
-    /// 而非注册序（注册顺序的 List 供超时检测使用，与本列表无关）</summary>
-    public Collection<string> ExecutedStepKeys { get; init; } = [];
+    /// 而非注册序（注册顺序的 List 供超时检测使用，与本列表无关）。
+    /// <para>
+    /// 2026-10-20（ADR-035）：由 <c>Collection&lt;string&gt;</c> 改为 <c>List&lt;string&gt;</c>。
+    /// Npgsql EF 11 preview 6 对 <c>PrimitiveCollection</c> 的物化返回 <c>List&lt;string&gt;</c>，
+    /// 原类型在 EF PG/MySQL 读取路径抛 <c>InvalidCastException</c>；改为 <c>List&lt;string&gt;</c>
+    /// 后三栈统一，JSON 线格式不变。
+    /// </para></summary>
+    [SuppressMessage("Design", "CA1002:Do not expose generic lists",
+        Justification = "ADR-035：EF Npgsql 11 preview 6 对 PrimitiveCollection 的物化类型是 List<string>；用 Collection<string> 会在 EF PG/MySQL 读取路径抛 InvalidCastException。公共契约改为 List<string>，JSON 线格式不变。")]
+    public List<string> ExecutedStepKeys { get; init; } = [];
 
     /// <summary>中断原因 — HITL 中断时记录等待人工决策的原因</summary>
     public string? InterruptReason { get; set; }

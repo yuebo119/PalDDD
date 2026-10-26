@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using PalDDD.Dapper;
 using PalDDD.Projections;
+using PalDDD.Testing;
 using System.Data.Common;
 using System.Globalization;
 
@@ -96,7 +97,7 @@ public sealed class RebuilderResumeTests
     {
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new CountingResumeHandler();
-        var processor = new ProjectionProcessor<ResumeEvent>(handler, store);
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 1 };
         // 检查点前置状态：0..4 完成、5 失败、6 完成；事件流 0..8
         for (var i = 0; i <= 4; i++)
             await SeedAsync(store, i.ToString(), completed: true);
@@ -137,6 +138,181 @@ public sealed class RebuilderResumeTests
         await Assert.That(processed).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task ReplayDetailedAsync_GroupHeldByAnotherWorker_ReportsStoppedForLease()
+    {
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new CountingResumeHandler();
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 2 };
+        // 组首位置被另一个 worker 持有（Processing 未完成）：本轮回放必须提前停止，
+        // 且通过 ReplayDetailedAsync.StoppedForLease 让调用方区分「追平」与「租约冲突」。
+        var held = await store.TryStartAsync(
+            handler.ProjectionName, "orders", "0", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), CancellationToken.None);
+        await Assert.That(held).IsNotNull();
+
+        List<ReplayEvent<ResumeEvent>> events = [];
+        for (var i = 0; i <= 3; i++)
+            events.Add(new ReplayEvent<ResumeEvent>("orders", i.ToString(), DateTimeOffset.UnixEpoch.AddSeconds(i), new ResumeEvent()));
+        var source = new RecordingResumableSource(events);
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor);
+
+        var result = await rebuilder.ReplayDetailedAsync(CancellationToken.None);
+
+        await Assert.That(result.Processed).IsEqualTo(0);
+        await Assert.That(result.StoppedForLease).IsTrue();
+    }
+
+    [Test]
+    public async Task ReplayDetailedAsync_NonResumableStore_WithBatchSize_ThrowsActionable()
+    {
+        // R14：批模式只在组首/组末写锚点；非续读 store 走全量读取时，已完成组的内层事件
+        // 会在每轮重复执行（R11 的逐位置裁剪保留，用于前缀跳过与洞重放）。入口显式拒绝
+        // 该组合，而非静默持续重复。
+        var store = new NonResumableCheckpointStore(new InMemoryProjectionCheckpointStore());
+        var handler = new CountingResumeHandler();
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 100 };
+        List<ReplayEvent<ResumeEvent>> events = [new("orders", "0", DateTimeOffset.UnixEpoch, new ResumeEvent())];
+        var source = new RecordingResumableSource(events);
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor);
+
+        InvalidOperationException? captured = null;
+        try
+        {
+            await rebuilder.ReplayDetailedAsync(CancellationToken.None);
+        }
+        catch (InvalidOperationException ex)
+        {
+            captured = ex;
+        }
+
+        await Assert.That(captured).IsTypeOf<InvalidOperationException>();
+        await Assert.That(
+            captured!.Message.Contains("IResumableProjectionCheckpointStore", StringComparison.Ordinal)).IsTrue();
+    }
+
+    /// <summary>只实现基础检查点接口（不含续读/续租能力）——模拟自定义 store 的全量回放路径。</summary>
+    private sealed class NonResumableCheckpointStore(IProjectionCheckpointStore inner) : IProjectionCheckpointStore
+    {
+        public ValueTask<ProjectionCheckpoint?> GetAsync(
+            string projectionName, string sourceName, string position, CancellationToken ct)
+            => inner.GetAsync(projectionName, sourceName, position, ct);
+
+        public ValueTask<ProjectionCheckpoint?> TryStartAsync(
+            string projectionName, string sourceName, string position,
+            DateTimeOffset now, TimeSpan processingTimeout, CancellationToken ct)
+            => inner.TryStartAsync(projectionName, sourceName, position, now, processingTimeout, ct);
+
+        public ValueTask MarkCompletedAsync(
+            ProjectionCheckpoint checkpoint, DateTimeOffset completedAt, CancellationToken ct)
+            => inner.MarkCompletedAsync(checkpoint, completedAt, ct);
+
+        public ValueTask MarkFailedAsync(
+            ProjectionCheckpoint checkpoint, string reason, DateTimeOffset failedAt, CancellationToken ct)
+            => inner.MarkFailedAsync(checkpoint, reason, failedAt, ct);
+
+        public ValueTask ResetAsync(string projectionName, string sourceName, CancellationToken ct)
+            => inner.ResetAsync(projectionName, sourceName, ct);
+    }
+
+    [Test]
+    public async Task ReplayAsync_BatchHandler_ReceivesWholeGroupsOnce()
+    {
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new BatchCountingResumeHandler();
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 4 };
+        List<ReplayEvent<ResumeEvent>> events = [];
+        for (var i = 0; i <= 9; i++)
+            events.Add(new ReplayEvent<ResumeEvent>("orders", i.ToString(), DateTimeOffset.UnixEpoch.AddSeconds(i), new ResumeEvent()));
+        var source = new RecordingResumableSource(events);
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor);
+
+        var processed = await rebuilder.ReplayAsync(CancellationToken.None);
+
+        await Assert.That(processed).IsEqualTo(10);
+        // 实现批量能力后逐条入口不再被调用：三组 4/4/2 各一次。
+        await Assert.That(handler.ProjectAsyncCalls).IsEqualTo(0);
+        await Assert.That(string.Join(",", handler.BatchSizes)).IsEqualTo("4,4,2");
+        await Assert.That(handler.ItemCount).IsEqualTo(10);
+    }
+
+    [Test]
+    public async Task ReplayAsync_BatchedCheckpoints_ProcessesAllAndLeavesHighWater()
+    {
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new CountingResumeHandler();
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 4 };
+        List<ReplayEvent<ResumeEvent>> events = [];
+        for (var i = 0; i <= 9; i++)
+            events.Add(new ReplayEvent<ResumeEvent>("orders", i.ToString(), DateTimeOffset.UnixEpoch.AddSeconds(i), new ResumeEvent()));
+        var source = new RecordingResumableSource(events);
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor);
+
+        var processed = await rebuilder.ReplayAsync(CancellationToken.None);
+
+        await Assert.That(processed).IsEqualTo(10);
+        await Assert.That(handler.Count).IsEqualTo(10);
+        // 每组写组首锚点（0/4/8）与组末位置（3/7/9），全部 Completed；max+1 = 10，
+        // 组内中间位置无检查点行。
+        await Assert.That(await store.GetResumePositionAsync("order-summary", "orders", CancellationToken.None))
+            .IsEqualTo("10");
+    }
+
+    [Test]
+    public async Task ReplayAsync_TimeBoundFlush_CommitsPartialBatch()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new CountingResumeHandler();
+        // 默认批量 1000（2026-10-22 性能轮由 100 提升）：本测试靠 1 秒时间界提前提交，
+        // 证明慢回放不会攒满批——10 条远小于批宽，时间界不生效就会整批一次提交。
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store);
+        List<ReplayEvent<ResumeEvent>> events = [];
+        for (var i = 0; i <= 9; i++)
+            events.Add(new ReplayEvent<ResumeEvent>("orders", i.ToString(), DateTimeOffset.UnixEpoch.AddSeconds(i), new ResumeEvent()));
+        var source = new TimeAdvancingSource(events, time, TimeSpan.FromSeconds(1));
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor)
+        {
+            TimeProvider = time,
+            CheckpointFlushInterval = TimeSpan.FromSeconds(1),
+        };
+
+        var processed = await rebuilder.ReplayAsync(CancellationToken.None);
+
+        await Assert.That(processor.CheckpointBatchSize).IsEqualTo(1000);
+        await Assert.That(processed).IsEqualTo(10);
+        await Assert.That(handler.Count).IsEqualTo(10);
+        // 两项各推进 1s：第二项到达时距组首满 1s，触发时间界提交位置 1。
+        var partial = await store.GetAsync("order-summary", "orders", "1", CancellationToken.None);
+        await Assert.That(partial!.Status).IsEqualTo(ProjectionCheckpointStatus.Completed);
+    }
+
+    [Test]
+    public async Task ReplayAsync_BatchFailure_ResumesFromGroupStartNotAfterGroup()
+    {
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new FailingResumeHandler(failAt: "5");
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 4 };
+        List<ReplayEvent<ResumeEvent>> events = [];
+        for (var i = 0; i <= 9; i++)
+            events.Add(new ReplayEvent<ResumeEvent>("orders", i.ToString(), DateTimeOffset.UnixEpoch.AddSeconds(i), new ResumeEvent()));
+        var source = new RecordingResumableSource(events);
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor);
+
+        await Assert.That(async () => await rebuilder.ReplayAsync(CancellationToken.None))
+            .Throws<InvalidOperationException>();
+
+        // 第一批 0..3 完成；第二批 4..7 在 5 失败。组首 4 必须标 Failed，
+        // 否则续读会从组末 7 之后开始，跳过 4/5/6。
+        await Assert.That(await store.GetResumePositionAsync("order-summary", "orders", CancellationToken.None))
+            .IsEqualTo("4");
+    }
+
     private static async Task SeedAsync(InMemoryProjectionCheckpointStore store, string position, bool completed)
     {
         var checkpoint = await store.TryStartAsync(
@@ -162,6 +338,63 @@ public sealed class RebuilderResumeTests
         {
             Count++;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    /// <summary>批量能力探针：记录每批大小与总项数，逐条入口只计不应被调用。</summary>
+    private sealed class BatchCountingResumeHandler : IProjectionBatchHandler<ResumeEvent>
+    {
+        public List<int> BatchSizes { get; } = [];
+        public int ItemCount { get; private set; }
+        public int ProjectAsyncCalls { get; private set; }
+
+        public string ProjectionName => "order-summary";
+
+        public ValueTask ProjectAsync(ResumeEvent message, ProjectionContext context, CancellationToken ct = default)
+        {
+            ProjectAsyncCalls++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ProjectBatchAsync(
+            IReadOnlyList<(ResumeEvent Message, ProjectionContext Context)> batch,
+            CancellationToken ct = default)
+        {
+            BatchSizes.Add(batch.Count);
+            ItemCount += batch.Count;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FailingResumeHandler(string failAt) : IProjectionHandler<ResumeEvent>
+    {
+        public string ProjectionName => "order-summary";
+
+        public ValueTask ProjectAsync(ResumeEvent message, ProjectionContext context, CancellationToken ct = default)
+            => context.Position == failAt
+                ? throw new InvalidOperationException("simulated projection failure")
+                : ValueTask.CompletedTask;
+    }
+
+    /// <summary>每次产出前推进 FakeTimeProvider，驱动回放的时间界冲刷。</summary>
+    private sealed class TimeAdvancingSource(
+        IReadOnlyList<ReplayEvent<ResumeEvent>> events,
+        FakeTimeProvider time,
+        TimeSpan step) : IEventReplaySource<ResumeEvent>
+    {
+        public async IAsyncEnumerable<ReplayEvent<ResumeEvent>> ReadAsync(
+            string sourceName,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            foreach (var @event in events)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (@event.SourceName != sourceName)
+                    continue;
+                time.Advance(step);
+                yield return @event;
+                await Task.Yield();
+            }
         }
     }
 
@@ -207,6 +440,57 @@ public sealed class RebuilderResumeTests
                 await Task.Yield();
             }
         }
+    }
+}
+
+/// <summary>R12 C-02：EF InMemory 分支的续租（Entry.CurrentValue + SaveChanges）。</summary>
+public sealed class ProjectionLeaseRenewalEfInMemoryTests
+{
+    [Test]
+    public async Task EfCore_InMemory_RenewLease_ExtendsAndBlocksTakeover(CancellationToken cancellationToken)
+    {
+        var options = new DbContextOptionsBuilder<InMemoryCheckpointDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
+            .Options;
+        await using var db = new InMemoryCheckpointDbContext(options);
+        var t0 = DateTimeOffset.UtcNow;
+
+        var checkpoint = await db.TryStartAsync(
+            "p", "s", "0", t0, TimeSpan.FromSeconds(1), cancellationToken);
+        var renewed = await db.RenewLeaseAsync(
+            checkpoint!, t0.AddMilliseconds(800), TimeSpan.FromSeconds(3), cancellationToken);
+        var takeover = await db.TryStartAsync(
+            "p", "s", "0", t0.AddMilliseconds(1500), TimeSpan.FromSeconds(1), cancellationToken);
+
+        await Assert.That(renewed).IsTrue();
+        await Assert.That(takeover).IsNull();
+    }
+
+    private sealed class InMemoryCheckpointDbContext(DbContextOptions<InMemoryCheckpointDbContext> options)
+        : ProjectionCheckpointDbContext(options);
+}
+
+/// <summary>R12 C-03：EF 检查点续读的异常分类——只有 CAST 失败才回退全量。</summary>
+public sealed class ProjectionResumeFailureClassificationTests
+{
+    [Test]
+    public async Task IsPositionCastFailure_OnlyPgCastSqlStates()
+    {
+        await Assert.That(ProjectionCheckpointDbContext.IsPositionCastFailure(new FakeDbException("22P02"))).IsTrue();
+        await Assert.That(ProjectionCheckpointDbContext.IsPositionCastFailure(new FakeDbException("22007"))).IsTrue();
+        // 连接中断/超时/死锁等基础设施故障必须上抛，不得被当成脏数据回退全量。
+        await Assert.That(ProjectionCheckpointDbContext.IsPositionCastFailure(new FakeDbException("08006"))).IsFalse();
+        await Assert.That(ProjectionCheckpointDbContext.IsPositionCastFailure(new FakeDbException("40001"))).IsFalse();
+        await Assert.That(ProjectionCheckpointDbContext.IsPositionCastFailure(new FakeDbException(null))).IsFalse();
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1032:Implement standard exception constructors",
+        Justification = "测试桩：只承载 SqlState，不参与序列化/包装。")]
+    private sealed class FakeDbException(string? sqlState) : DbException("fake provider failure")
+    {
+        public override string? SqlState => sqlState;
+        public override int ErrorCode => 0;
     }
 }
 
@@ -269,6 +553,37 @@ public sealed class ProjectionResumeSqliteTests
     }
 
     [Test]
+    public async Task Dapper_NonNumericPosition_ReturnsNullFallback(CancellationToken cancellationToken)
+    {
+        // R11 F4 回归锁：SQLite CAST('99abc' AS INTEGER)=99，原实现返回 "100" 并跳过
+        // 6..99；接口契约要求非数值 Position 回退全量（null）。
+        var store = new DapperProjectionCheckpointStore(_conn, DapperDbType.Sqlite);
+        await CompleteAsync(store, "5", cancellationToken);
+        await CompleteAsync(store, "99abc", cancellationToken);
+
+        await Assert.That(await store.GetResumePositionAsync("p", "s", cancellationToken)).IsNull();
+    }
+
+    [Test]
+    public async Task EfCore_NonNumericPosition_ReturnsNullFallback(CancellationToken cancellationToken)
+    {
+        // R11 F4：EF SQLite 走客户端聚合兜底——非数值 Position 必须返回 null。
+        await using var conn = new SqliteConnection("DataSource=:memory:");
+        await conn.OpenAsync(cancellationToken);
+        var options = new DbContextOptionsBuilder<TestResumeCheckpointDbContext>()
+            .UseSqlite(conn)
+            .Options;
+        await using (var boot = new TestResumeCheckpointDbContext(options))
+            await boot.Database.EnsureCreatedAsync(cancellationToken);
+        await using var db = new TestResumeCheckpointDbContext(options);
+
+        await CompleteAsync(db, "5", cancellationToken);
+        await CompleteAsync(db, "99abc", cancellationToken);
+
+        await Assert.That(await db.GetResumePositionAsync("p", "s", cancellationToken)).IsNull();
+    }
+
+    [Test]
     public async Task EfCore_HoleAndAllCompleted_AndEmpty_ThreeStates(CancellationToken cancellationToken)
     {
         // 独立 :memory: 连接——EF 模型默认表名 ProjectionCheckpoints 与 Dapper DDL 的
@@ -295,6 +610,48 @@ public sealed class ProjectionResumeSqliteTests
         var retry = await db.TryStartAsync("p", "s", "3", DateTimeOffset.UtcNow.AddMinutes(1), TimeSpan.FromSeconds(30), cancellationToken);
         await db.MarkCompletedAsync(retry!, DateTimeOffset.UtcNow, cancellationToken);
         await Assert.That(await db.GetResumePositionAsync("p", "s", cancellationToken)).IsEqualTo("4");
+    }
+
+    [Test]
+    public async Task Dapper_RenewLease_ExtendsAndBlocksTakeover(CancellationToken cancellationToken)
+    {
+        var store = new DapperProjectionCheckpointStore(_conn, DapperDbType.Sqlite);
+        var t0 = DateTimeOffset.UtcNow;
+        var checkpoint = await store.TryStartAsync(
+            "p", "s", "0", t0, TimeSpan.FromSeconds(1), cancellationToken);
+
+        var renewed = await store.RenewLeaseAsync(
+            checkpoint!, t0.AddMilliseconds(800), TimeSpan.FromSeconds(3), cancellationToken);
+        var takeover = await store.TryStartAsync(
+            "p", "s", "0", t0.AddMilliseconds(1500), TimeSpan.FromSeconds(1), cancellationToken);
+
+        await Assert.That(renewed).IsTrue();
+        await Assert.That(takeover).IsNull();
+    }
+
+    [Test]
+    public async Task EfCore_RenewLease_ExtendsAndBlocksTakeover(CancellationToken cancellationToken)
+    {
+        await using var conn = new SqliteConnection("DataSource=:memory:");
+        await conn.OpenAsync(cancellationToken);
+        var options = new DbContextOptionsBuilder<TestResumeCheckpointDbContext>()
+            .UseSqlite(conn)
+            .Options;
+        await using (var boot = new TestResumeCheckpointDbContext(options))
+            await boot.Database.EnsureCreatedAsync(cancellationToken);
+        await using var db = new TestResumeCheckpointDbContext(options);
+
+        var t0 = DateTimeOffset.UtcNow;
+        var checkpoint = await db.TryStartAsync(
+            "p", "s", "0", t0, TimeSpan.FromSeconds(1), cancellationToken);
+
+        var renewed = await db.RenewLeaseAsync(
+            checkpoint!, t0.AddMilliseconds(800), TimeSpan.FromSeconds(3), cancellationToken);
+        var takeover = await db.TryStartAsync(
+            "p", "s", "0", t0.AddMilliseconds(1500), TimeSpan.FromSeconds(1), cancellationToken);
+
+        await Assert.That(renewed).IsTrue();
+        await Assert.That(takeover).IsNull();
     }
 
     private static async Task CompleteAsync(IProjectionCheckpointStore store, string position, CancellationToken ct)

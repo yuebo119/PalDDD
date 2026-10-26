@@ -16,6 +16,9 @@
     <NoWarn>$(NoWarn);CA1303;CA2254;IL3058;IL2104;IL3053</NoWarn>
     <InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);Dapper.AOT</InterceptorsPreviewNamespaces>
     <InterceptorsNamespaces>$(InterceptorsNamespaces);Dapper.AOT</InterceptorsNamespaces>
+    <!-- 同 AotSample/PalOrmSample：rc.2 SDK PublishAot+RID 文档文件路径缺陷 MSB3030 规避
+         （探针无 XML 消费方；不设此项 PublishAot 在 CopyFilesToPublishDirectory 阶段失败） -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>

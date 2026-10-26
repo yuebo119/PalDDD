@@ -1,0 +1,65 @@
+name: Perf Nightly
+
+# 2026-10-23 性能系统优化：常规档从人工逐条命令迁到注册表驱动的 standard profile。
+# PR 仍只跑 ci.yml 的 perf-smoke（约 1 秒）；本工作流按夜间 schedule 跑 10 条标准车道，
+# 目标 ≤10 分钟。发布/节点审计的全量走本地 eps-run --full（bench 数据要求独占与真库环境）。
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  perf-standard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '11.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/Directory.Build.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore PalDDD.slnx
+
+      - name: Build Release
+        run: dotnet build PalDDD.slnx --no-restore -c Release
+
+      - name: 注册表覆盖门禁
+        # 类/方法/case/profile/预算对账；漏注册、重复跑类、预算超限即失败。
+        run: dotnet run scripts/perf-registry-check.cs
+
+      - name: Perf standard profile
+        # --no-checker：eps-perf-check.mjs 是开发者本机 ~/.zcode 工具，CI 无此文件；
+        # CI 的分配门禁由 ci.yml 的 perf-smoke 承担，覆盖门禁由上一 step 承担。
+        run: dotnet run scripts/eps-run.cs -- --profile standard --skip-build --no-checker
+
+      - name: Upload perf logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-nightly-logs
+          path: bench/logs/eps-run-*
+          if-no-files-found: warn

@@ -8,11 +8,11 @@
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
-[![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ---
 
-Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 35 independent NuGet packages (plus 5 third-party PalORM engine packages; see the [Package List](#package-list)). It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning: business code stays pure C#, and the framework only delivers infrastructure.
+Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 36 independent NuGet packages (plus 5 third-party PalORM engine packages; see the [Package List](#package-list)). It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning: business code stays pure C#, and the framework only delivers infrastructure.
 
 | NuGet packages | Compile-time diagnostics | Persistence stacks | Measured tests |
 |:---:|:---:|:---:|:---:|
@@ -61,13 +61,13 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 
 **Pluggable compression**. `ICompressionProvider` / `ICompressor` abstractions with two implementations: the System built-in compressor and the native LZ4/ZStandard binding (`PalDDD.Compression.Native`, AOT-safe), swappable via DI.
 
-**Built-in observability**. `PalActivitySource` (12 Start methods) + `PalMetrics` (28 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything (command dispatch / Saga transition Activities are reserved, not yet wired).
+**Built-in observability**. `PalActivitySource` (12 Start methods) + `PalMetrics` (30 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything (command dispatch / Saga transition Activities are reserved, not yet wired).
 
 **Three persistence stacks, chosen by scenario**. PalORM (true AOT, source-generated SQL) / Dapper (call-site-level AOT, hand-written SQL) / EF Core (Migration/LINQ/ChangeTracker ecosystem) coexist equally long-term with no retirement plan; five Store capabilities are fully covered across all three stacks, with behavior guarded by cross-stack parity tests ([ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md), [ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)); ambient transactions and explicit transaction boundaries are supported.
 
 **Deep dialect adaptation**. PostgreSQL read/write splitting + multi-host failover, COPY bulk write, Pipeline single round-trip, LISTEN/NOTIFY push, consistent-hashing sharding, JSONB operators; MySQL multi-host load balancing (FailOver/RoundRobin/LeastConnections) and InnoDB session tuning; SQLite WAL/FTS5/JSON1 across both Dapper and PalORM stacks, including TEXT-primary-key standalone indexes and quoted JSON paths. Connection-string errors fail fast at registration (IPv6 four-quadrant, embedded-port, host-list validation), not deferred to connection time. Multi-tenant filtering (`[TenantAware]`) comes from the PalORM engine (see the [adapter docs](docs/palorm-adapter.md)).
 
-**Full-pipeline InMemory testing and hosting integration**. All six Store types have InMemory implementations and the default message broker is `NullMessageBroker`, so unit tests need zero external dependencies (`PalDDD.Testing` provides test primitives); the ASP.NET Core integration ships `MapCommand`/`MapQuery` Minimal API endpoint mapping, `UsePalExceptionHandler` global exception middleware, `AddPalHealthChecks` health checks, and `AddPalLogging` logging integration.
+**Full-pipeline InMemory testing and hosting integration**. All six Store types have InMemory implementations and the default message broker is `NullMessageBroker`, so unit tests need zero external dependencies (`PalDDD.Testing` provides test primitives); the ASP.NET Core integration ships `MapCommand`/`MapQuery` Minimal API endpoint mapping, SSE streaming-read endpoints (`MapStreamQuery`, GET/POST with typed event/id frames, heartbeats and a `Last-Event-ID` entry point), detached stream runs (`AddDetachedStreamRuns` plus start/attach/cancel endpoints), `UsePalExceptionHandler` global exception middleware, `AddPalHealthChecks` health checks, and `AddPalLogging` logging integration.
 
 ## Comparison with Existing Solutions
 
@@ -397,7 +397,7 @@ For full data, the MediumRun formal baselines, and the historical archive, see [
 | PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` globally inherited |
 | PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | Same as above |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **True AOT** | Source-generated RowFactory/CommandFactory, `PublishAot=true` verification passed ([PalOrmSample](samples/PalDDD.PalOrmSample/)) |
-| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ Measured | `[module:DapperAot]` enabled — 34 call-site interceptors, three-dialect NativeAOT measured 13/13; boundary: bypassing wrappers to raw Dapper API is not AOT-safe |
+| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ Measured | `[module:DapperAot]` enabled — 34 call-site interceptors, three-dialect NativeAOT measured 33/33 (batch EventLog path added 2026-10-21); boundary: bypassing wrappers to raw Dapper API is not AOT-safe |
 | PalDDD.Transactions | ❌ | Saga reflection exception (`IsAotCompatible=false`, see csproj) |
 | **PalDDD.*.EFCore (5 projects)** | ❌ | EF Core client limitations + the Saga reflection exception — a design trade-off, not deprecation; normal use for the EF ecosystem (runtime JIT) |
 | ~~PalDDD.EntityFrameworkCore~~ (old package) | ❌ | ~~Deprecated, source not committed (OBS-068) — distinct from the five current `*.EFCore` projects above~~ |
@@ -467,7 +467,7 @@ PalDDD ships 35 packages of its own plus 5 third-party PalORM engine packages (`
 ## Project Structure
 
 ```
-src/                         36 source projects · Clean Architecture (folders match PalDDD.slnx)
+src/                         37 source projects · Clean Architecture (folders match PalDDD.slnx)
 ├── Domain/                  Core · SourceGen · Analyzers · Analyzers.CodeFixes
 ├── App-Abstractions/        Serialization · Messaging · Compression · Compression.Native
 ├── App-Core/                CQRS · EventLog · Idempotency · Projections · Transactions
@@ -528,7 +528,7 @@ flowchart TB
 | [Release SOP](docs/release.md) | Versioning, package scope, CHANGELOG conventions & workflow |
 | [Pitfalls](docs/pitfalls.md) | 86 real-world DDD/AOT/concurrency pitfalls |
 | [Development](docs/development.md) | Dev environment, Git hooks, test running |
-| [Architecture Decisions](docs/decisions/) | 32 ADRs |
+| [Architecture Decisions](docs/decisions/) | 36 ADRs |
 | [Deployment Performance Knobs](docs/deployment-performance.md) | GC mode / PG·MySQL server knobs with measured trade-offs |
 | [Changelog](CHANGELOG.md) | Version history (consumer-facing changes + engineering appendix) |
 
@@ -560,6 +560,6 @@ Issues and PRs are welcome. The first build after cloning automatically configur
 
 [GNU Affero General Public License v3.0 or later](LICENSE)
 
-Copyright (C) 2026 PalDDD
+Copyright (C) 2026 SuperLee
 
-This project uses the AGPL-3.0-or-later license. AGPL v3 adds Section 13 (network interaction clause) on top of GPL v3: when providing services over a network, you must make the complete source code of the modified version available to users. See the [LICENSE](LICENSE) file or <https://www.gnu.org/licenses/agpl-3.0.html> for details.
+This project uses the Apache-2.0 license: a permissive license that allows commercial use, modification, and closed-source integration, with an explicit patent grant. Distribution must retain copies of [LICENSE](LICENSE) and [NOTICE](NOTICE) and state significant changes; trademarks are not granted. The AGPL-era network-service source-disclosure obligation no longer applies. The storage engine PalORM is also Apache-2.0 as of 6.8.0, leaving no copyleft component in the dependency chain. See the [LICENSE](LICENSE) file or <https://www.apache.org/licenses/LICENSE-2.0> for details.

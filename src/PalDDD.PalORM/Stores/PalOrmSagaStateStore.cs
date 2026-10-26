@@ -36,7 +36,7 @@ namespace PalDDD.PalORM.Stores;
 /// 未挂 cmd.Transaction 的命令抛 InvalidOperationException（MySqlConnector 严格校验）。
 /// </para>
 /// </summary>
-public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>
+public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, ISagaScanCursorStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TProvider : IDbProvider
     where TState : SagaState, new()
 {
@@ -75,7 +75,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         // SagaStateRow 未注册 —— 用 GetRawConnection + 手动 reader（ITM-243：经 CreateRawCommand 挂接环境事务）
         // 三十四轮（中断态超时兜底）：观测查询与 Lease 同步纳入 AwaitingHumanDecision（5）
         await using var cmd = CreateRawCommand();
-        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE status IN (@p0, @p1) ORDER BY created_at LIMIT @p2";
+        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until, next_check_at FROM saga_states WHERE status IN (@p0, @p1) ORDER BY created_at LIMIT @p2";
         AddParam(cmd, "@p0", (int)SagaStatus.Active);
         AddParam(cmd, "@p1", (int)SagaStatus.AwaitingHumanDecision);
         AddParam(cmd, "@p2", batchSize);
@@ -83,8 +83,17 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
     }
 
     /// <inheritdoc />
-    public async ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
+    public ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
         string owner, TimeSpan leaseDuration, int batchSize, CancellationToken ct)
+        => LeaseCoreAsync(owner, leaseDuration, batchSize, dueOnly: false, dueNow: null, ct);
+
+    /// <inheritdoc />
+    public ValueTask<IReadOnlyList<TState>> LeaseDueSagasAsync(
+        string owner, TimeSpan leaseDuration, int batchSize, DateTimeOffset now, CancellationToken ct)
+        => LeaseCoreAsync(owner, leaseDuration, batchSize, dueOnly: true, dueNow: now, ct);
+
+    private async ValueTask<IReadOnlyList<TState>> LeaseCoreAsync(
+        string owner, TimeSpan leaseDuration, int batchSize, bool dueOnly, DateTimeOffset? dueNow, CancellationToken ct)
     {
         // ITM-163 修复：补 owner 空白守卫（对齐 InMemorySagaStateStore/SagaStateDbContext/DapperSagaStateStore）
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
@@ -100,7 +109,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         if (leaseDuration.TotalSeconds > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LeasedUntil value.");
 
-        var now = _clock.GetUtcNow();  // P1-8：用注入的 Clock 替代硬编码 UtcNow
+        var now = dueNow ?? _clock.GetUtcNow();  // P1-8：用注入的 Clock 替代硬编码 UtcNow；到期路径用调用方 now
         var until = now + leaseDuration;
 
         // Saga 租约：UPDATE 子查询
@@ -111,16 +120,23 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         // 两步回读按 (leased_by, leased_until) 匹配的同 tick 混批窗口（八轮 P3 声明）
         // 在此形态下不存在（对照 PalOrmOutboxStore.LeasePendingMessagesAsync:95-104 真
         // RETURNING 先例）。实现走 raw command：RETURNING 列序与 ReadSagaRow 序号访问
-        // （0-10）逐列对齐；@p 参数复用回读同款 AddParam 绑定（until/now 经 AddParam 的
+        // （0-11，含 next_check_at）逐列对齐；@p 参数复用回读同款 AddParam 绑定（until/now 经 AddParam 的
         // DateTimeOffset 编码三方言正确——ADR-027 until 编码纪律，禁简化为 UtcDateTime）。
         // RETURNING 无排序保证，物化后按 CreatedAt 客户端排序，保留原回读
         // ORDER BY created_at 契约（LINQ OrderBy 稳定排序）。
         if (TProvider.SupportsReturningClause)
         {
+            var dueClause = dueOnly ? " AND (next_check_at IS NULL OR next_check_at <= @p4)" : string.Empty;
+            var orderClause = dueOnly
+                ? " ORDER BY next_check_at, created_at"
+                : TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql
+                    ? " ORDER BY leased_until NULLS FIRST, created_at"
+                    : " ORDER BY (leased_until IS NULL) DESC, leased_until, created_at";
             await using var leaseCmd = CreateRawCommand();  // ITM-243：挂接 IUnitOfWork 环境事务
+            // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- SQL 由方言分支字面量与常量子句（dueClause/orderClause）拼接，值全部 @pN 参数
             leaseCmd.CommandText = TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql
-                ? "UPDATE saga_states SET leased_by = @p0, leased_until = @p1, version = version + 1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (@p2, @p3) AND (leased_until IS NULL OR leased_until <= @p4) ORDER BY created_at LIMIT @p5 FOR UPDATE SKIP LOCKED) RETURNING saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until"
-                : "UPDATE saga_states SET leased_by = @p0, leased_until = @p1, version = version + 1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (@p2, @p3) AND (leased_until IS NULL OR leased_until <= @p4) ORDER BY created_at LIMIT @p5) RETURNING saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until";
+                ? "UPDATE saga_states SET leased_by = @p0, leased_until = @p1, version = version + 1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (@p2, @p3) AND (leased_until IS NULL OR leased_until <= @p4)" + dueClause + orderClause + " LIMIT @p5 FOR UPDATE SKIP LOCKED) RETURNING saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until, next_check_at"
+                : "UPDATE saga_states SET leased_by = @p0, leased_until = @p1, version = version + 1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (@p2, @p3) AND (leased_until IS NULL OR leased_until <= @p4)" + dueClause + orderClause + " LIMIT @p5) RETURNING saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until, next_check_at";
             AddParam(leaseCmd, "@p0", owner);
             AddParam(leaseCmd, "@p1", until);
             AddParam(leaseCmd, "@p2", (int)SagaStatus.Active);
@@ -132,10 +148,13 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         }
 
         {
-            // MySQL 特化路径：JOIN 子查询
+            // MySQL 特化路径：JOIN 子查询。M1 到期过滤复用 now 参数。
+            FormattableString mysqlSql = dueOnly
+                ? (FormattableString)$"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) AND (next_check_at IS NULL OR next_check_at <= {now}) ORDER BY next_check_at, created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}, t.version = t.version + 1"
+                : (FormattableString)$"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY (leased_until IS NULL) DESC, leased_until, created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}, t.version = t.version + 1";
             await Session.ExecuteAsync(
                 // v53 P2：租约即换代（version+1），见 PG 分支注释
-                $"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}, t.version = t.version + 1",
+                mysqlSql,
                 ct).ConfigureAwait(false);
         }
 
@@ -154,7 +173,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         // 回读补状态守卫：已被处理方标记终态（Completed 等）的租约残留行不再混入
         //（三十四轮：守卫集与租约集同步扩为 Active + AwaitingHumanDecision）。
         await using var cmd = CreateRawCommand();  // ITM-243：挂接 IUnitOfWork 环境事务
-        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE leased_by = @p0 AND leased_until = @p1 AND status IN (@p2, @p3) ORDER BY created_at";
+        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until, next_check_at FROM saga_states WHERE leased_by = @p0 AND leased_until = @p1 AND status IN (@p2, @p3) ORDER BY created_at";
         AddParam(cmd, "@p0", owner);
         AddParam(cmd, "@p1", until);
         AddParam(cmd, "@p2", (int)SagaStatus.Active);
@@ -166,7 +185,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
     public async ValueTask<TState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
     {
         await using var cmd = CreateRawCommand();  // ITM-243：挂接 IUnitOfWork 环境事务
-        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE saga_id = @p0";
+        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until, next_check_at FROM saga_states WHERE saga_id = @p0";
         AddParam(cmd, "@p0", sagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
@@ -220,8 +239,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         var expectedVersion = state.Version;
         var affected = await Session.ExecuteAsync(
             RequiresJsonbCast
-                ? (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = CAST({jsonData} AS jsonb), leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)} AND version = {expectedVersion}"
-                : (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)} AND version = {expectedVersion}",
+                ? (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = CAST({jsonData} AS jsonb), next_check_at = {state.NextCheckAt}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)} AND version = {expectedVersion}"
+                : (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = {jsonData}, next_check_at = {state.NextCheckAt}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)} AND version = {expectedVersion}",
             ct).ConfigureAwait(false);
         if (affected > 0)
         {
@@ -230,38 +249,29 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
             return affected;
         }
 
-        // B-3：轻量存在性探测（raw command，COUNT 无数据传输；ITM-243 挂接环境事务）
-        await using var probe = CreateRawCommand();
-        probe.CommandText = "SELECT COUNT(1) FROM saga_states WHERE saga_id = @p0";
-        AddParam(probe, "@p0", state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
-        var exists = Convert.ToInt64(await probe.ExecuteScalarAsync(ct).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture) > 0;
-        if (!exists)
+        // 2026-10-19 性能实施轮：UPDATE 0 行后直接尝试 INSERT，唯一冲突即行已存在
+        //（版本冲突或并发创建），返回 0 走乐观冲突契约。原实现先发 COUNT 探测再 INSERT，
+        // 新 Saga 路径固定 3 次往返；去掉探测后成功新建降为 2 次，已有行更新维持 1 次。
+        int inserted;
+        try
         {
-            // P2 修复（八轮）：并发插入同一新 Saga 的 TOCTOU 兜底（与 DapperSagaStateStore 对齐）——
-            // PalORM Session.ExecuteAsync 直透底层 provider 异常（DataSession.Query.cs 无包装），
-            // 唯一约束冲突转换为语义化并发异常，调用方重读后走 UPDATE 路径即可
-            int inserted;
-            try
-            {
-                inserted = await Session.ExecuteAsync(
-                    RequiresJsonbCast
-                        ? (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, CAST({jsonData} AS jsonb), {state.LeasedBy}, {state.LeasedUntil})"
-                        : (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
-                    ct).ConfigureAwait(false);
-            }
-            catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
-            {
-                throw new InvalidOperationException(
-                    $"Saga {state.SagaId} 被并发实例同时创建（主键冲突）——请重新加载后以 UPDATE 保存。", ex);
-            }
-            // v65 P3：INSERT 已落库才回写调用方对象（对齐 DapperSagaStateStore v38 形态）
-            if (inserted > 0)
-                state.Error = truncatedError;
-            return inserted;
+            inserted = await Session.ExecuteAsync(
+                RequiresJsonbCast
+                    ? (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, next_check_at, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, CAST({jsonData} AS jsonb), {state.NextCheckAt}, {state.LeasedBy}, {state.LeasedUntil}) ON CONFLICT (saga_id) DO NOTHING"
+                    : (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, next_check_at, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.NextCheckAt}, {state.LeasedBy}, {state.LeasedUntil})",
+                ct).ConfigureAwait(false);
         }
-
-        // 行在但版本不匹配 = 乐观锁冲突（他实例已写同一 Saga）——契约返回 0
-        return 0;
+        catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
+        {
+            // 行已存在（版本冲突或并发创建同一新 Saga）——统一返回 0（乐观冲突契约）。
+            // R13 F11：PG 分支已在 INSERT 上加 ON CONFLICT DO NOTHING（PG 的 23505 会把
+            // 整个事务标记 aborted，catch 后无法继续）；本 catch 保留给 SQLite/MySQL。
+            return 0;
+        }
+        // v65 P3：INSERT 已落库才回写调用方对象（对齐 DapperSagaStateStore v38 形态）
+        if (inserted > 0)
+            state.Error = truncatedError;
+        return inserted;
     }
 
     /// <inheritdoc/>
@@ -292,6 +302,312 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
+    /// <inheritdoc/>
+    /// <remarks>扫描轮转：leased_until 写成本次扫描时刻，legacy 租约按 leased_until NULLS FIRST
+    /// 排序，已扫描行退到未扫描行之后。</remarks>
+    public async ValueTask<int> ReleaseLeasesAsync(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        DateTimeOffset checkedAt,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        await using var cmd = CreateRawCommand();
+        var sb = new StringBuilder("UPDATE saga_states SET leased_by = NULL, leased_until = @p1, version = version + 1 WHERE leased_by = @p0 AND saga_id IN (@p2");
+        AddParam(cmd, "@p0", owner);
+        AddParam(cmd, "@p1", checkedAt);
+        AddParam(cmd, "@p2", sagas[0].SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        for (var i = 1; i < sagas.Count; i++)
+        {
+            var name = $"@p{i + 2}";
+            sb.Append(", ").Append(name);
+            AddParam(cmd, name, sagas[i].SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        }
+        sb.Append(')');
+        cmd.CommandText = sb.ToString();
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 到期推进只写 next_check_at + version：无 ambient 事务时由本方法开一个事务，
+    /// 整批提交一次；ambient 事务存在时并入调用方边界（ITM-243 raw command 挂接）。
+    /// </remarks>
+    public async ValueTask<int> AdvanceNextCheckAtAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        var ambient = PalOrmAmbientTransaction.TryGet(Session);
+        DbTransaction? ownTx = null;
+        if (ambient is null)
+        {
+            ownTx = await Session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
+            PalOrmAmbientTransaction.Set(Session, ownTx);
+        }
+
+        try
+        {
+            // SQLite 单语句参数上限 999：每行 3 参数，按 300 行分块。
+            const int chunkRows = 300;
+            var affected = 0;
+            var fullyApplied = true;
+            for (var start = 0; start < sagas.Count; start += chunkRows)
+            {
+                var count = Math.Min(chunkRows, sagas.Count - start);
+                await using var cmd = CreateRawCommand();
+                // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- SQL 由 BuildAdvanceNextCheckBatch 构造：表/列名为字面量，值全部 @pN 参数化
+                cmd.CommandText = BuildAdvanceNextCheckBatch(cmd, owner, sagas, start, count);
+                var rows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                affected += rows;
+                if (rows != count)
+                    fullyApplied = false;
+            }
+
+            if (ownTx is not null)
+                await ownTx.CommitAsync(ct).ConfigureAwait(false);
+            if (fullyApplied)
+            {
+                foreach (var saga in sagas)
+                    saga.Version++;
+            }
+            return affected;
+        }
+        finally
+        {
+            if (ownTx is not null)
+            {
+                try { await ownTx.DisposeAsync().ConfigureAwait(false); }
+                catch (Exception ex) when (ex is InvalidOperationException or DbException) { /* 事务已失效/已释放 */ }
+                Session.UseTransaction(null);
+                PalOrmAmbientTransaction.Set(Session, null);
+            }
+        }
+    }
+
+    /// <summary>单语句多行 NextCheckAt 推进（每块最多 300 行）。</summary>
+    private static string BuildAdvanceNextCheckBatch(
+        DbCommand cmd,
+        string owner,
+        IReadOnlyList<TState> sagas,
+        int start,
+        int count)
+    {
+        var sb = new StringBuilder(64 + count * 64);
+        AddParam(cmd, "@p0", owner);
+
+        if (TProvider.Dialect == global::PalORM.SqlDialect.MySql)
+        {
+            sb.Append("UPDATE saga_states s JOIN (");
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(" UNION ALL ");
+                sb.Append("SELECT @id").Append(i).Append(" AS saga_id, @next").Append(i)
+                  .Append(" AS next_check_at, @v").Append(i).Append(" AS version");
+                AddAdvanceParams(cmd, sagas[start + i], i);
+            }
+            sb.Append(") v ON s.saga_id = v.saga_id SET s.next_check_at = v.next_check_at, s.version = s.version + 1 WHERE s.version = v.version AND s.leased_by = @p0");
+        }
+        else if (TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql)
+        {
+            sb.Append("UPDATE saga_states AS s SET next_check_at = v.next_check_at, version = s.version + 1 FROM (VALUES ");
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                sb.Append("(CAST(@id").Append(i).Append(" AS text), CAST(@next").Append(i)
+                  .Append(" AS timestamptz), CAST(@v").Append(i).Append(" AS integer))");
+                AddAdvanceParams(cmd, sagas[start + i], i);
+            }
+            sb.Append(") AS v(saga_id, next_check_at, version) WHERE s.saga_id = v.saga_id AND s.version = v.version AND s.leased_by = @p0");
+        }
+        else
+        {
+            // SQLite UPDATE ... FROM：用 SELECT/UNION ALL 派生表（SQLite 不接受
+            // FROM (VALUES ...) AS v(col1,col2) 的列别名列表）。
+            sb.Append("UPDATE saga_states SET next_check_at = v.next_check_at, version = saga_states.version + 1 FROM (");
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(" UNION ALL ");
+                sb.Append("SELECT @id").Append(i).Append(" AS saga_id, @next").Append(i)
+                  .Append(" AS next_check_at, @v").Append(i).Append(" AS version");
+                AddAdvanceParams(cmd, sagas[start + i], i);
+            }
+            sb.Append(") AS v WHERE saga_states.saga_id = v.saga_id AND saga_states.version = v.version AND saga_states.leased_by = @p0");
+        }
+
+        return sb.ToString();
+    }
+
+    private static void AddAdvanceParams(DbCommand cmd, TState saga, int index)
+    {
+        AddParam(cmd, $"@id{index}", saga.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        AddParam(cmd, $"@next{index}", saga.NextCheckAt.HasValue ? saga.NextCheckAt.Value : (object)DBNull.Value);
+        AddParam(cmd, $"@v{index}", saga.Version);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<IReadOnlyList<int>> SaveManyAsync(IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return [];
+        if (_jsonTypeInfo is null)
+            throw new InvalidOperationException(
+                $"PalOrmSagaStateStore<TProvider,TState> requires JsonTypeInfo<TState> to persist saga_data. " +
+                "Register with AddPalSagaStore<TState>(jsonTypeInfo) or pass it to the constructor (ITM-228).");
+
+        var ambient = PalOrmAmbientTransaction.TryGet(Session);
+        DbTransaction? ownTx = null;
+        if (ambient is null)
+        {
+            ownTx = await Session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
+            PalOrmAmbientTransaction.Set(Session, ownTx);
+        }
+
+        try
+        {
+            var results = new int[sagas.Count];
+            var pending = new List<(int Index, TState State)>(sagas.Count);
+            for (var i = 0; i < sagas.Count; i++)
+            {
+                // 新 Saga（Version=0）走插入路径；已有行按版本批量 UPDATE。
+                if (sagas[i].Version == 0)
+                    results[i] = await SaveChangesAsync(sagas[i], ct).ConfigureAwait(false);
+                else
+                    pending.Add((i, sagas[i]));
+            }
+
+            // PG/MySQL 每块 500 行、SQLite 每块 90 行（11 参数/行，避开 999 上限）。
+            var chunkRows = TProvider.Dialect == global::PalORM.SqlDialect.Sqlite ? 90 : 500;
+            for (var start = 0; start < pending.Count; start += chunkRows)
+            {
+                var count = Math.Min(chunkRows, pending.Count - start);
+                await using var cmd = CreateRawCommand();
+                cmd.CommandText = BuildSaveManyBatch(cmd, pending, start, count);
+                var rows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+
+                // 全命中才回写内存；部分冲突返回 0（已落库的子集不谎报成功，下次重载后重试）。
+                if (rows != count) continue;
+                for (var i = 0; i < count; i++)
+                {
+                    var (index, state) = pending[start + i];
+                    state.Version++;
+                    state.Error = FailureReason.Truncate(state.Error, 2040);
+                    results[index] = 1;
+                }
+            }
+
+            if (ownTx is not null)
+                await ownTx.CommitAsync(ct).ConfigureAwait(false);
+            return results;
+        }
+        finally
+        {
+            if (ownTx is not null)
+            {
+                try { await ownTx.DisposeAsync().ConfigureAwait(false); }
+                catch (Exception ex) when (ex is InvalidOperationException or DbException) { /* 事务已失效/已释放 */ }
+                Session.UseTransaction(null);
+                PalOrmAmbientTransaction.Set(Session, null);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 构造单语句多行 UPSERT 更新（仅 Version&gt;0 的已有行）：
+    /// PG 用 UPDATE ... FROM (VALUES ...)，SQLite 用 UPDATE ... FROM (SELECT ... UNION ALL ...)，
+    /// MySQL 用 UPDATE ... JOIN (SELECT ... UNION ALL ...)。
+    /// </summary>
+    private string BuildSaveManyBatch(
+        DbCommand cmd,
+        IReadOnlyList<(int Index, TState State)> sagas,
+        int start,
+        int count)
+    {
+        var sb = new StringBuilder(200 + count * 220);
+        var pg = RequiresJsonbCast;
+
+        if (pg)
+        {
+            sb.Append("UPDATE saga_states AS s SET current_state = v.cs, status = v.st, completed_at = v.ca, error = v.err, error_at = v.ea, version = s.version + 1, saga_data = CAST(v.data AS jsonb), next_check_at = v.next, leased_by = v.lb, leased_until = v.lu FROM (VALUES ");
+            AppendSaveManyRows(sb, cmd, sagas, start, count, pg: true);
+            sb.Append(") AS v(id, cs, st, ca, err, ea, version, data, next, lb, lu) WHERE s.saga_id = v.id AND s.version = v.version");
+        }
+        else if (TProvider.Dialect == global::PalORM.SqlDialect.MySql)
+        {
+            sb.Append("UPDATE saga_states s JOIN (");
+            AppendSaveManyRows(sb, cmd, sagas, start, count, pg: false);
+            sb.Append(") v ON s.saga_id = v.id SET s.current_state = v.cs, s.status = v.st, s.completed_at = v.ca, s.error = v.err, s.error_at = v.ea, s.version = s.version + 1, s.saga_data = v.data, s.next_check_at = v.next, s.leased_by = v.lb, s.leased_until = v.lu WHERE s.version = v.version");
+        }
+        else
+        {
+            // SQLite 不接受 FROM (VALUES ...) AS v(col,...) 的列别名列表；用 SELECT/UNION ALL。
+            sb.Append("UPDATE saga_states SET current_state = v.cs, status = v.st, completed_at = v.ca, error = v.err, error_at = v.ea, version = saga_states.version + 1, saga_data = v.data, next_check_at = v.next, leased_by = v.lb, leased_until = v.lu FROM (");
+            AppendSaveManyRows(sb, cmd, sagas, start, count, pg: false);
+            sb.Append(") AS v WHERE saga_states.saga_id = v.id AND saga_states.version = v.version");
+        }
+
+        return sb.ToString();
+    }
+
+    private void AppendSaveManyRows(
+        StringBuilder sb,
+        DbCommand cmd,
+        IReadOnlyList<(int Index, TState State)> sagas,
+        int start,
+        int count,
+        bool pg)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            if (i > 0)
+                sb.Append(pg ? ", " : " UNION ALL ");
+
+            var state = sagas[start + i].State;
+            var id = "@id" + i;
+            var cs = "@cs" + i;
+            var st = "@st" + i;
+            var ca = "@ca" + i;
+            var err = "@err" + i;
+            var ea = "@ea" + i;
+            var v = "@v" + i;
+            var data = "@data" + i;
+            var next = "@next" + i;
+            var lb = "@lb" + i;
+            var lu = "@lu" + i;
+
+            sb.Append(pg ? "(CAST(" : "SELECT ").Append(id);
+            if (pg)
+                sb.Append(" AS text), CAST(").Append(cs).Append(" AS text), CAST(").Append(st)
+                  .Append(" AS integer), CAST(").Append(ca).Append(" AS timestamptz), CAST(")
+                  .Append(err).Append(" AS text), CAST(").Append(ea).Append(" AS timestamptz), CAST(")
+                  .Append(v).Append(" AS integer), CAST(").Append(data).Append(" AS text), CAST(")
+                  .Append(next).Append(" AS timestamptz), CAST(").Append(lb).Append(" AS text), CAST(")
+                  .Append(lu).Append(" AS timestamptz))");
+            else
+                sb.Append(" AS id, ").Append(cs).Append(" AS cs, ").Append(st).Append(" AS st, ")
+                  .Append(ca).Append(" AS ca, ").Append(err).Append(" AS err, ").Append(ea)
+                  .Append(" AS ea, ").Append(v).Append(" AS version, ").Append(data)
+                  .Append(" AS data, ").Append(next).Append(" AS next, ").Append(lb)
+                  .Append(" AS lb, ").Append(lu).Append(" AS lu");
+
+            AddParam(cmd, "@id" + i, state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+            AddParam(cmd, "@cs" + i, state.CurrentState);
+            AddParam(cmd, "@st" + i, (int)state.Status);
+            AddParam(cmd, "@ca" + i, state.CompletedAt.HasValue ? state.CompletedAt.Value : (object)DBNull.Value);
+            AddParam(cmd, "@err" + i, FailureReason.Truncate(state.Error, 2040) is { } errValue ? errValue : DBNull.Value);
+            AddParam(cmd, "@ea" + i, state.ErrorAt.HasValue ? state.ErrorAt.Value : (object)DBNull.Value);
+            AddParam(cmd, "@v" + i, state.Version);
+            AddParam(cmd, "@data" + i, JsonSerializer.Serialize(state, _jsonTypeInfo!));
+            AddParam(cmd, "@next" + i, state.NextCheckAt.HasValue ? state.NextCheckAt.Value : (object)DBNull.Value);
+            AddParam(cmd, "@lb" + i, state.LeasedBy is null ? DBNull.Value : state.LeasedBy);
+            AddParam(cmd, "@lu" + i, state.LeasedUntil.HasValue ? state.LeasedUntil.Value : (object)DBNull.Value);
+        }
+    }
+
     /// <summary>从 DbDataReader 读取多行 Saga。</summary>
     private async Task<List<TState>> ReadSagasAsync(DbCommand cmd, CancellationToken ct)
     {
@@ -318,6 +634,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         SagaData = reader.IsDBNull(8) ? null : reader.GetString(8),
         LeasedBy = reader.IsDBNull(9) ? null : reader.GetString(9),
         LeasedUntil = reader.IsDBNull(10) ? null : GetUtc(reader, 10),
+        NextCheckAt = reader.IsDBNull(11) ? null : GetUtc(reader, 11),
     };
 
     /// <summary>
@@ -378,6 +695,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         state.ErrorAt = row.ErrorAt;
         state.LeasedBy = row.LeasedBy;
         state.LeasedUntil = row.LeasedUntil;
+        state.NextCheckAt = row.NextCheckAt;
         return state;
     }
 
@@ -405,5 +723,6 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         public string? SagaData { get; set; }
         public string? LeasedBy { get; set; }
         public DateTimeOffset? LeasedUntil { get; set; }
+        public DateTimeOffset? NextCheckAt { get; set; }
     }
 }

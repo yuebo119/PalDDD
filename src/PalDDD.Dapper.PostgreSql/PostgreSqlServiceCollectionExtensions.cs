@@ -78,15 +78,9 @@ public static class PostgreSqlServiceCollectionExtensions
         if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)
             builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
         var dataSource = builder.Build();
-        services.AddSingleton(dataSource);
-        // P2/P3 修复（十七轮）：补 DbDataSource 抽象注册（镜像 MySql 版 AddPalMySqlDataSource）——
-        // NpgsqlDataSource 本身是 DbDataSource 子类，但只注册具体类型时
-        // GetRequiredService<DbDataSource> 解析失败；WithStores 的连接工厂依赖此抽象注册。
-        // ITM-167 声明（双注册 Dispose 幂等）：同一 dataSource 实例被注册为
-        // NpgsqlDataSource 与 DbDataSource 两个服务类型，容器关闭时会对同一实例 Dispose
-        // 两次。NpgsqlDataSource.Dispose/DisposeAsync 幂等（镜像 MySqlMultiHost ITM-113
-        // 同款声明），重复释放安全；此双注册允许 Store 直接注入 DbDataSource 基类型。
-        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource);
+        // F13（2026-10-21）：工厂注册让容器接管释放；DbDataSource 委托到同一注册。
+        // 原注释「容器关闭时 Dispose 两次」与实测相反——实例注册从不释放（ITM-637）。
+        PostgreSqlDataSourceRegistration.Register(services, dataSource);
 
         return services;
     }
@@ -123,11 +117,7 @@ public static class PostgreSqlServiceCollectionExtensions
             builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
         configure(builder);
         var dataSource = builder.Build();
-        services.AddSingleton(dataSource);
-        // P2/P3 修复（十七轮）：补 DbDataSource 抽象注册（同上重载，供 WithStores 连接工厂解析）
-        // ITM-167 声明（双注册 Dispose 幂等）：同基础重载——同一实例双服务类型注册，
-        // 容器关闭时 Dispose 两次；NpgsqlDataSource.Dispose 幂等，重复释放安全。
-        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource);
+        PostgreSqlDataSourceRegistration.Register(services, dataSource);
 
         return services;
     }
@@ -166,6 +156,11 @@ public static class PostgreSqlServiceCollectionExtensions
     /// <remarks>
     /// ⚡ 要求已在 DI 中注册 <c>NpgsqlDataSource</c>（通过 <c>AddPalNpgsqlDataSource</c>）。
     /// 此方法使用 DataSource 而非新连接字符串，确保复用连接池配置和类型映射器。
+    /// ⚡ NOTIFY 到达后解析的是 <see cref="OutboxBatchProcessor"/>（Scoped），由
+    /// <c>AddPalOutbox()</c> 注册；未调用时首个通知会在作用域解析阶段抛缺服务异常。
+    /// 2026-10-21 R8：本入口自带 <c>IPalLogger&lt;T&gt;</c> 门面（与 R7 的
+    /// <c>AddPalOutbox</c>/<c>AddPalInbox</c>/<c>AddPalSaga</c> 同一注册点），
+    /// 单独注册时宿主启动解析 IHostedService 不再抛缺日志门面。
     /// </remarks>
     /// <param name="channelName">通知通道名（默认 "outbox_channel"）</param>
     public static IServiceCollection AddPalPostgreSqlOutboxNotifier(
@@ -173,6 +168,7 @@ public static class PostgreSqlServiceCollectionExtensions
         string channelName = "outbox_channel")
     {
         ArgumentNullException.ThrowIfNull(services);
+        services.EnsurePalLoggerFacade();
 
         // ITM-637 姊妹：AddSingleton<IHostedService>(factory) 重复调用会追加多个描述符（多次
         // 调用启动多个 LISTEN 监听 + 每个 NOTIFY 触发多轮批处理）。改 TryAddEnumerable 按

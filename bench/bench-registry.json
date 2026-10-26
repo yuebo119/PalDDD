@@ -1,0 +1,568 @@
+{
+  "version": 1,
+  "note": "Pal.DDD \u6027\u80FD\u8F66\u9053\u4E0E\u91C7\u6837\u6863\u5355\u4E00\u771F\u6E90\u3002Program.cs \u7528 classes/mode/overrides \u9009\u62E9\u6D4B\u91CF\u6863\uFF1Beps-run.cs \u7528 profiles/expectedSeconds/timeoutMinutes/paths \u9009\u62E9\u4E0E\u7F16\u6392\u8F66\u9053\u3002\u6539\u672C\u6587\u4EF6\u987B\u540C\u6B65 perf-registry-check \u4E0E docs/review/perf-system-optimization-2026-10-23.md\u3002",
+  "targetsSeconds": {
+    "gate": 10,
+    "standard": 600,
+    "full": 2700,
+    "remoteSmoke": 300,
+    "remoteFull": 5400,
+    "strict": 600
+  },
+  "modes": {
+    "alloc": {
+      "warmup": 2,
+      "iterations": 3,
+      "launch": 1,
+      "invocation": 1,
+      "timing": "none"
+    },
+    "fixed": {
+      "warmup": 3,
+      "iterations": 9,
+      "launch": 1,
+      "timing": "trend"
+    },
+    "fixed-short": {
+      "warmup": 2,
+      "iterations": 5,
+      "launch": 1,
+      "timing": "trend"
+    },
+    "auto": {
+      "warmup": 3,
+      "iterationTimeMs": 200,
+      "minIterations": 3,
+      "maxIterations": 5,
+      "launch": 1,
+      "timing": "trend"
+    },
+    "medium-lite": {
+      "warmup": 3,
+      "iterations": 5,
+      "launch": 1,
+      "timing": "trend"
+    },
+    "tiny": {
+      "warmup": 2,
+      "iterations": 3,
+      "launch": 1,
+      "timing": "trend"
+    },
+    "medium": {
+      "warmup": 10,
+      "iterations": 15,
+      "launch": 2,
+      "timing": "reference"
+    },
+    "strict": {
+      "warmup": 20,
+      "iterations": 40,
+      "launch": 3,
+      "timing": "reference"
+    }
+  },
+  "lanes": [
+    {
+      "name": "smoke",
+      "flag": "smoke",
+      "purpose": "6 \u9879\u5206\u914D\u9884\u7B97\u95E8\u7981\uFF0C\u79D2\u7EA7",
+      "profiles": [
+        "gate",
+        "standard",
+        "full"
+      ],
+      "mode": "n/a",
+      "timeoutMinutes": 5,
+      "remote": false,
+      "expectedSeconds": 3,
+      "classes": [],
+      "paths": []
+    },
+    {
+      "name": "app",
+      "flag": "app",
+      "purpose": "CQRS \u5206\u53D1\u4E0E\u5E8F\u5217\u5316",
+      "profiles": [
+        "standard",
+        "full"
+      ],
+      "mode": "auto",
+      "overrides": {
+        "DispatcherBenchmarks": "fixed"
+      },
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 57,
+      "classes": [
+        "DispatcherBenchmarks",
+        "SerializationBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.CQRS/**",
+        "src/PalDDD.Serialization*/**",
+        "src/PalDDD.Core/**"
+      ]
+    },
+    {
+      "name": "framework",
+      "flag": "framework",
+      "purpose": "\u9886\u57DF\u4E8B\u4EF6\u3001\u503C\u5BF9\u8C61\u3001SmartEnum\u3001\u9A8C\u8BC1\u3001\u521B\u5EFA",
+      "profiles": [
+        "standard",
+        "full"
+      ],
+      "mode": "auto",
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 71,
+      "classes": [
+        "EntityDomainEventBenchmarks",
+        "ValueObjectBenchmarks",
+        "SmartEnumBenchmarks",
+        "ValidationBenchmarks",
+        "EntityCreationBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Core/**",
+        "src/PalDDD.Serialization*/**"
+      ]
+    },
+    {
+      "name": "verify-persist",
+      "flag": "verify-persist",
+      "purpose": "\u6301\u4E45\u5316\u63A2\u9488\u81EA\u68C0",
+      "profiles": [
+        "full"
+      ],
+      "mode": "n/a",
+      "timeoutMinutes": 5,
+      "remote": false,
+      "expectedSeconds": 2,
+      "classes": [],
+      "paths": [
+        "src/PalDDD.Dapper*/**",
+        "src/PalDDD.PalORM*/**"
+      ]
+    },
+    {
+      "name": "infra",
+      "flag": "infra",
+      "purpose": "Outbox\u3001Inbox\u3001EventLog\u3001SagaState\u3001Configuration\uFF08Compression \u4E0E SqlGen \u5DF2\u62C6\u5230\u805A\u7126\u8F66\u9053\uFF09",
+      "profiles": [
+        "standard",
+        "full"
+      ],
+      "mode": "auto",
+      "overrides": {
+        "OutboxThroughputBenchmarks": "medium",
+        "EventLogBenchmarks": "medium"
+      },
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 46,
+      "classes": [
+        "OutboxThroughputBenchmarks",
+        "InboxThroughputBenchmarks",
+        "EventLogBenchmarks",
+        "SagaStateBenchmarks",
+        "ConfigurationBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Transactions*/**",
+        "src/PalDDD.Dapper*/**",
+        "src/PalDDD.PalORM*/**",
+        "src/PalDDD.EventLog*/**",
+        "src/PalDDD.Messaging*/**"
+      ]
+    },
+    {
+      "name": "coverage",
+      "flag": "coverage",
+      "purpose": "Projection\u3001\u6D88\u606F\u6F14\u5316\u3001Specification\u3001\u7AEF\u5230\u7AEF\u3001Hosting",
+      "profiles": [
+        "standard",
+        "full"
+      ],
+      "mode": "auto",
+      "overrides": {
+        "ProjectionBenchmarks": "fixed"
+      },
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 93,
+      "classes": [
+        "ProjectionBenchmarks",
+        "MessageEvolutionBenchmarks",
+        "SpecificationBenchmarks",
+        "EndToEndChainBenchmarks",
+        "HostingBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Core/**",
+        "src/PalDDD.CQRS/**",
+        "src/PalDDD.Projections/**",
+        "src/PalDDD.Hosting.AspNetCore/**",
+        "src/PalDDD.Serialization*/**"
+      ]
+    },
+    {
+      "name": "concurrency",
+      "flag": "concurrency",
+      "purpose": "Outbox \u5E76\u53D1\u79DF\u7EA6\uFF08\u96F6\u91CD\u590D\u4E0D\u53D8\u91CF\u6BCF wave\uFF09",
+      "profiles": [
+        "standard",
+        "full"
+      ],
+      "mode": "fixed-short",
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 126,
+      "classes": [
+        "OutboxConcurrencyInMemoryBenchmarks",
+        "OutboxConcurrencyDapperSqliteBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Transactions*/**",
+        "src/PalDDD.Dapper*/**"
+      ]
+    },
+    {
+      "name": "saga",
+      "flag": "saga",
+      "purpose": "Saga \u7F16\u6392",
+      "profiles": [
+        "standard",
+        "full"
+      ],
+      "mode": "auto",
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 11,
+      "classes": [
+        "SagaLaneBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Transactions/**"
+      ]
+    },
+    {
+      "name": "compression",
+      "flag": "compression",
+      "purpose": "\u4E94\u7B97\u6CD5\u538B\u7F29",
+      "profiles": [
+        "full"
+      ],
+      "mode": "fixed",
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 137,
+      "classes": [
+        "CompressionBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Compression*/**"
+      ]
+    },
+    {
+      "name": "persist",
+      "flag": "persist",
+      "purpose": "SQLite \u4E09\u6808\u6301\u4E45\u5316",
+      "profiles": [
+        "standard",
+        "full"
+      ],
+      "mode": "medium",
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 52,
+      "classes": [
+        "DapperPersistenceBenchmarks",
+        "PalOrmPersistenceBenchmarks",
+        "EfCorePersistenceBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Transactions*/**",
+        "src/PalDDD.Dapper*/**",
+        "src/PalDDD.PalORM*/**",
+        "src/PalDDD.Transactions.EFCore/**"
+      ]
+    },
+    {
+      "name": "persist-medium",
+      "flag": "persist-medium",
+      "purpose": "SQLite \u79DF\u7EA6\u951A\uFF08persist \u7684\u5B50\u96C6\uFF0C\u4EC5\u805A\u7126\u5165\u53E3\uFF09",
+      "profiles": [],
+      "mode": "medium",
+      "filter": [
+        "Outbox_Lease_Batch100"
+      ],
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 16,
+      "classes": [
+        "DapperPersistenceBenchmarks",
+        "PalOrmPersistenceBenchmarks",
+        "EfCorePersistenceBenchmarks"
+      ],
+      "paths": []
+    },
+    {
+      "name": "persist-mark",
+      "flag": "persist-mark",
+      "purpose": "\u6807\u8BB0\u6BB5\u6210\u672C",
+      "profiles": [
+        "full"
+      ],
+      "mode": "medium",
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 27,
+      "classes": [
+        "OutboxMarkPathBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Transactions*/**",
+        "src/PalDDD.Dapper*/**"
+      ]
+    },
+    {
+      "name": "stream",
+      "flag": "stream",
+      "purpose": "SSE \u6D41\u5F0F\u8BFB",
+      "profiles": [
+        "standard",
+        "full"
+      ],
+      "mode": "fixed",
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 139,
+      "classes": [
+        "StreamReadBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Core/**",
+        "src/PalDDD.Serialization*/**",
+        "src/PalDDD.Hosting.AspNetCore/**"
+      ]
+    },
+    {
+      "name": "delivery",
+      "flag": "delivery",
+      "purpose": "\u6295\u9012\u6392\u7A7A\u4E0E\u8282\u594F\uFF08RTT \u77E9\u9635\uFF09",
+      "profiles": [
+        "full"
+      ],
+      "mode": "medium-lite",
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 964,
+      "classes": [
+        "OutboxDeliveryDrainBenchmarks",
+        "OutboxDeliveryCadenceBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Transactions*/**",
+        "src/PalDDD.Dapper*/**",
+        "src/PalDDD.Messaging*/**",
+        "src/PalDDD.Serialization*/**"
+      ]
+    },
+    {
+      "name": "qps",
+      "flag": "qps",
+      "purpose": "\u7EDD\u5BF9 QPS harness\uFF08\u975E BDN\uFF09",
+      "profiles": [
+        "full"
+      ],
+      "mode": "n/a",
+      "timeoutMinutes": 10,
+      "remote": false,
+      "expectedSeconds": 57,
+      "classes": [],
+      "paths": [
+        "src/PalDDD.CQRS/**",
+        "src/PalDDD.Core/**"
+      ]
+    },
+    {
+      "name": "compare",
+      "flag": "compare",
+      "purpose": "MediatR \u4E0E CAP \u5BF9\u6BD4\uFF08CAP \u9700\u73AF\u5883\u53D8\u91CF\uFF09",
+      "profiles": [
+        "full"
+      ],
+      "mode": "auto",
+      "overrides": {
+        "CapComparisonBenchmarks": "medium"
+      },
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 18,
+      "classes": [
+        "MediatRComparisonBenchmarks",
+        "CapComparisonBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Core/**",
+        "src/PalDDD.CQRS/**",
+        "src/PalDDD.Serialization*/**"
+      ]
+    },
+    {
+      "name": "sqlgen",
+      "flag": "sqlgen",
+      "purpose": "SQLite FTS/JSON SQL \u751F\u6210\uFF08\u5206\u914D\u5224\u5B9A\uFF09",
+      "profiles": [
+        "full"
+      ],
+      "mode": "alloc",
+      "timeoutMinutes": 45,
+      "remote": false,
+      "expectedSeconds": 12,
+      "classes": [
+        "SqlGenBenchmarks"
+      ],
+      "paths": [
+        "src/PalDDD.Dapper*/**",
+        "src/PalDDD.PalORM*/**"
+      ]
+    },
+    {
+      "name": "persist-pg",
+      "flag": "persist-pg",
+      "purpose": "PG \u771F\u5E93\u541E\u5410\u3001\u5E76\u53D1\u3001PalORM\u3001\u65B9\u8A00\u7279\u6027",
+      "profiles": [
+        "remote-full"
+      ],
+      "mode": "medium-lite",
+      "timeoutMinutes": 90,
+      "remote": true,
+      "expectedSeconds": 466,
+      "classes": [
+        "DapperRemoteOutboxThroughputBenchmarks",
+        "DapperRemoteOutboxConcurrencyBenchmarks",
+        "PalOrmRemoteOutboxBenchmarks",
+        "PgDialectFeaturesBenchmarks"
+      ],
+      "paths": []
+    },
+    {
+      "name": "persist-mysql",
+      "flag": "persist-mysql",
+      "purpose": "MySQL \u771F\u5E93\u541E\u5410\u3001\u5E76\u53D1\u3001PalORM\u3001SKIP LOCKED \u5F62\u6001",
+      "profiles": [
+        "remote-full"
+      ],
+      "mode": "medium-lite",
+      "timeoutMinutes": 90,
+      "remote": true,
+      "expectedSeconds": 1406,
+      "classes": [
+        "DapperRemoteOutboxThroughputBenchmarks",
+        "DapperRemoteOutboxConcurrencyBenchmarks",
+        "PalOrmRemoteOutboxBenchmarks",
+        "MySqlSkipLockedShapeBenchmarks"
+      ],
+      "paths": []
+    },
+    {
+      "name": "delivery-pg",
+      "flag": "delivery-pg",
+      "purpose": "PG \u8FDC\u7A0B\u6295\u9012\u6392\u7A7A A/B",
+      "profiles": [
+        "remote-full"
+      ],
+      "mode": "medium-lite",
+      "overrides": {
+        "OutboxDeliveryRemoteAutoDrainBenchmarks": "tiny"
+      },
+      "timeoutMinutes": 90,
+      "remote": true,
+      "expectedSeconds": 515,
+      "classes": [
+        "OutboxDeliveryRemoteDrainBenchmarks",
+        "OutboxDeliveryRemoteAutoDrainBenchmarks"
+      ],
+      "paths": []
+    },
+    {
+      "name": "delivery-mysql",
+      "flag": "delivery-mysql",
+      "purpose": "MySQL \u8FDC\u7A0B\u6295\u9012\u6392\u7A7A A/B",
+      "profiles": [
+        "remote-full"
+      ],
+      "mode": "medium-lite",
+      "overrides": {
+        "OutboxDeliveryRemoteAutoDrainBenchmarks": "tiny"
+      },
+      "timeoutMinutes": 90,
+      "remote": true,
+      "expectedSeconds": 818,
+      "classes": [
+        "OutboxDeliveryRemoteDrainBenchmarks",
+        "OutboxDeliveryRemoteAutoDrainBenchmarks"
+      ],
+      "paths": []
+    },
+    {
+      "name": "remote-smoke-pg",
+      "flag": "remote-smoke-pg",
+      "purpose": "PG \u8FDC\u7A0B\u5192\u70DF\uFF1A\u4E24\u4E2A\u4EE3\u8868 case",
+      "profiles": [
+        "remote-smoke"
+      ],
+      "mode": "medium-lite",
+      "filter": [
+        "Outbox_GetPending_Batch100",
+        "EventLog_AppendSingle"
+      ],
+      "timeoutMinutes": 10,
+      "remote": true,
+      "expectedSeconds": 32,
+      "classes": [
+        "DapperRemoteOutboxThroughputBenchmarks"
+      ],
+      "paths": []
+    },
+    {
+      "name": "remote-smoke-mysql",
+      "flag": "remote-smoke-mysql",
+      "purpose": "MySQL \u8FDC\u7A0B\u5192\u70DF\uFF1A\u4E24\u4E2A\u4EE3\u8868 case",
+      "profiles": [
+        "remote-smoke"
+      ],
+      "mode": "medium-lite",
+      "filter": [
+        "Outbox_GetPending_Batch100",
+        "EventLog_AppendSingle"
+      ],
+      "timeoutMinutes": 10,
+      "remote": true,
+      "expectedSeconds": 122,
+      "classes": [
+        "DapperRemoteOutboxThroughputBenchmarks"
+      ],
+      "paths": []
+    },
+    {
+      "name": "strict-core",
+      "flag": "strict-core",
+      "purpose": "\u53C2\u8003\u6570\u5B57\u4E25\u683C\u6863\uFF08OutboxThroughput \u002B SmartEnum\uFF09",
+      "profiles": [
+        "strict"
+      ],
+      "mode": "strict",
+      "timeoutMinutes": 30,
+      "remote": false,
+      "expectedSeconds": 180,
+      "classes": [
+        "OutboxThroughputBenchmarks",
+        "SmartEnumBenchmarks"
+      ],
+      "paths": []
+    }
+  ]
+}

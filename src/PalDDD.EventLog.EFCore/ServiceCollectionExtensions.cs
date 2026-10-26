@@ -39,7 +39,7 @@ public static class ServiceCollectionExtensions
     /// </summary>
     /// <param name="services">服务集合。</param>
     /// <param name="chunkSize">
-    /// 每次持久化分配的位置数量（默认 100）。值越大数据库往返越少，但进程崩溃时的潜在间隙也越多
+    /// 每次持久化分配的位置数量（默认 1000）。值越大数据库往返越少，但进程崩溃时的潜在间隙也越多
     /// （间隙不影响正确性，events 表唯一约束兜底）。
     /// </param>
     /// <typeparam name="TContext">派生自 <see cref="EventLogDbContext"/> 的上下文类型。</typeparam>
@@ -54,7 +54,7 @@ public static class ServiceCollectionExtensions
     /// </remarks>
     public static IServiceCollection AddPalEventLogEfCore<TContext>(
         this IServiceCollection services,
-        int chunkSize = 100)
+        int chunkSize = 1000)
         where TContext : EventLogDbContext
     {
         ArgumentNullException.ThrowIfNull(services);

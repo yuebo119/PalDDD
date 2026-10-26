@@ -24,7 +24,7 @@ namespace PalDDD.Dapper;
 //   本类所有 Command 均通过 Tx 属性自动挂接——与 DapperOutboxStore/DapperInboxStore 一致。
 
 /// <summary>Idempotency Store 的 Dapper 实现 —— 5 方法全量覆盖（ITM-667 缺口清偿）。</summary>
-public sealed class DapperIdempotencyStore : IIdempotencyStore
+public sealed class DapperIdempotencyStore : IIdempotencyStore, IIdempotencyStartOrGetStore
 {
     private readonly DbConnection _connection;
     private readonly DapperDbType _dbType;
@@ -38,6 +38,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
+        DapperConnectionGuard.Validate(connection, dbType);
         _connection = connection;
         _dbType = dbType;
         _transaction = transaction;
@@ -63,6 +64,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
 
+        await EnsureOpenAsync(ct).ConfigureAwait(false);
         const string sql = """
             SELECT operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error, revision
             FROM idempotency_records
@@ -85,8 +87,10 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
 
         if (record.ExpiresAt <= now) return null;
 
-        // 终态回放（RestoreTerminalState 不递增 Revision——回放是"恢复原状"非状态转移）
-        if (row.ResponsePayload is { Length: > 0 } && record.Status == IdempotencyRecordStatus.Completed)
+        // 终态回放（RestoreTerminalState 不递增 Revision——回放是"恢复原状"非状态转移）。
+        // 2026-10-21 评审 F3：与 PalORM 的 ITM-277 口径对齐——区分 NULL（无载荷）与 0 字节
+        //（成功完成 + 空响应体），后者同样回放 byte[0]，不得判为"无结果"。
+        if (row.ResponsePayload is not null && record.Status == IdempotencyRecordStatus.Completed)
             record.RestoreTerminalState(row.ResponsePayload, null);
         if (row.Error is not null && record.Status == IdempotencyRecordStatus.Failed)
             record.RestoreTerminalState(null, row.Error);
@@ -96,101 +100,102 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
 
     /// <inheritdoc />
     public async ValueTask<IdempotencyRecord?> TryStartAsync(
-        string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct = default)
+    string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct = default)
+    {
+        var (started, _) = await TryStartCoreAsync(
+            operationName, key, now, policy, fullConflictRead: false, ct).ConfigureAwait(false);
+        return started;
+    }
+
+    /// <summary>
+    /// TryStart 与 StartOrGet 的共同核心。fullConflictRead=false 保持 TryStart 的 B5 轻量分类读
+    /// （不拉 response_payload）；true 时冲突路径直接整行读一次，供 StartOrGet 返回 Existing，
+    /// 省掉「四列分类读 + 二次整行读」。CAS/回收语义与旧实现逐字一致。
+    /// </summary>
+    private async ValueTask<(IdempotencyRecord? Started, IdempotencyRecord? Existing)> TryStartCoreAsync(
+        string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy,
+        bool fullConflictRead, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
 
+        await EnsureOpenAsync(ct).ConfigureAwait(false);
         var lockedUntil = now + policy.ProcessingTimeout;
         var expiresAt = now + policy.Retention;
         var statusProcessing = (int)IdempotencyRecordStatus.Processing;
 
-        // 普通 INSERT + 唯一冲突捕获（ITM-228 口径：MySQL INSERT IGNORE 会吞非重复键错误）
-        const string insertSql = """
-            INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error)
-            VALUES (@OperationName, @Key, @Status, @LockedUntil, @ExpiresAt, @UpdatedAt, NULL, NULL)
-            """;
-        int affected;
-        try
-        {
-            affected = await _connection.ExecuteAsync(insertSql,
-                new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now) },
-                Tx).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (IsUniqueConstraintViolation(ex))
-        {
-            affected = 0;
-        }
-
+        var affected = await TryInsertStartAsync(
+            operationName, key, now, lockedUntil, expiresAt, statusProcessing).ConfigureAwait(false);
         if (affected > 0)
-            return new IdempotencyRecord(operationName, key,
-                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now);
+        {
+            return (new IdempotencyRecord(operationName, key,
+                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now), null);
+        }
 
-        // INSERT 冲突 → 记录已存在 → 冲突分类轻量读（B5）
-        var existing = await GetForConflictClassificationAsync(operationName, key, now, ct).ConfigureAwait(false);
-        if (existing is null)
+        var conflict = fullConflictRead
+            ? await GetFullConflictViewAsync(operationName, key, now, ct).ConfigureAwait(false)
+            : await GetClassificationConflictViewAsync(operationName, key, now, ct).ConfigureAwait(false);
+
+        if (conflict is null)
         {
             // 过期回收（三十七轮 P2-5 口径：过期即回收无论终态；v54 P2 revision 换代）
             // EPSL 地毯审计 2026-10-16 B 批 #21：PG/SQLite 改 UPDATE ... RETURNING revision
-            // 单语句——省「换代后回读 DB 新 revision」的整往返（冷路径，仅过期记录触发，
-            // 机制确定探针成本低；MySQL 无 RETURNING 维持两步）。RETURNING 行数即受影响
-            // 行数（零行 = 未回收，与旧 affected==0 同义），revision 直取无需再查。
+            // 单语句；MySQL 无 RETURNING 维持两步。
             if (_dbType == DapperDbType.PostgreSql || _dbType == DapperDbType.Sqlite)
             {
                 const string reclaimReturningSql = """
-                    UPDATE idempotency_records
-                    SET status = @Status, locked_until = @LockedUntil, expires_at = @ExpiresAt, updated_at = @UpdatedAt,
-                        error = NULL, response_payload = NULL, revision = revision + 1
-                    WHERE operation_name = @OperationName AND idempotency_key = @Key AND expires_at <= @Now
-                    RETURNING revision
-                    """;
-                var reclaimedRevisions = await _connection.QueryAsync<long>(reclaimReturningSql,
-                    new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now), Now = ToTimeParam(now) },
-                    Tx).ConfigureAwait(false);
-                var revisionList = reclaimedRevisions.ToList();
-                if (revisionList.Count == 0) return null;
-
-                return new IdempotencyRecord(operationName, key,
-                    IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, revisionList[0]);
-            }
-
-            const string reclaimSql = """
                 UPDATE idempotency_records
                 SET status = @Status, locked_until = @LockedUntil, expires_at = @ExpiresAt, updated_at = @UpdatedAt,
                     error = NULL, response_payload = NULL, revision = revision + 1
                 WHERE operation_name = @OperationName AND idempotency_key = @Key AND expires_at <= @Now
+                RETURNING revision
                 """;
+                var reclaimedRevisions = await _connection.QueryAsync<long>(reclaimReturningSql,
+                    new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now), Now = ToTimeParam(now) },
+                    Tx).ConfigureAwait(false);
+                var revisionList = reclaimedRevisions.ToList();
+                if (revisionList.Count == 0) return (null, null);
+
+                return (new IdempotencyRecord(operationName, key,
+                    IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, revisionList[0]), null);
+            }
+
+            const string reclaimSql = """
+            UPDATE idempotency_records
+            SET status = @Status, locked_until = @LockedUntil, expires_at = @ExpiresAt, updated_at = @UpdatedAt,
+                error = NULL, response_payload = NULL, revision = revision + 1
+            WHERE operation_name = @OperationName AND idempotency_key = @Key AND expires_at <= @Now
+            """;
             affected = await _connection.ExecuteAsync(reclaimSql,
                 new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now), Now = ToTimeParam(now) },
                 Tx).ConfigureAwait(false);
-            if (affected == 0) return null;
+            if (affected == 0) return (null, null);
 
-            // 换代后回读 DB 新 revision（MySQL 无 RETURNING，维持两步）
             const string readBackSql = "SELECT revision FROM idempotency_records WHERE operation_name = @OperationName AND idempotency_key = @Key";
             var newRevision = await _connection.QuerySingleOrDefaultAsync<long>(readBackSql,
                 new { OperationName = operationName, Key = key }, Tx).ConfigureAwait(false);
 
-            return new IdempotencyRecord(operationName, key,
-                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, newRevision);
+            return (new IdempotencyRecord(operationName, key,
+                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, newRevision), null);
         }
 
-        // Completed 非过期 → 返回 null（ITM-078：他人已持有终态，读取走 GetAsync 获取 response_payload）
-        if (existing.Value.Status == IdempotencyRecordStatus.Completed)
-            return null;
+        // Completed 非过期：TryStart 返回 null；StartOrGet 用整行记录返回 Existing。
+        if (conflict.Value.Status == IdempotencyRecordStatus.Completed)
+            return (null, conflict.Value.Record);
 
-        // Processing 且租约未过期 → 返回 null（他人正在处理）
-        if (existing.Value.Status == IdempotencyRecordStatus.Processing && existing.Value.LockedUntil > now)
-            return null;
+        // Processing 且租约未过期：同上。
+        if (conflict.Value.Status == IdempotencyRecordStatus.Processing && conflict.Value.LockedUntil > now)
+            return (null, conflict.Value.Record);
 
         // 过期 Processing / Failed → Revision CAS 抢占（v54 P2：revision 令牌防同刻双 worker）
         const string reclaimCasSql = """
-            UPDATE idempotency_records
-            SET status = @Status, locked_until = @LockedUntil, expires_at = @ExpiresAt, updated_at = @UpdatedAt,
-                error = NULL, response_payload = NULL, revision = revision + 1
-            WHERE operation_name = @OperationName AND idempotency_key = @Key
-              AND revision = @ExpectedRevision AND status <> @Completed
-            """;
+        UPDATE idempotency_records
+        SET status = @Status, locked_until = @LockedUntil, expires_at = @ExpiresAt, updated_at = @UpdatedAt,
+            error = NULL, response_payload = NULL, revision = revision + 1
+        WHERE operation_name = @OperationName AND idempotency_key = @Key
+          AND revision = @ExpectedRevision AND status <> @Completed
+        """;
         affected = await _connection.ExecuteAsync(reclaimCasSql,
             new
             {
@@ -200,15 +205,164 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
                 LockedUntil = ToTimeParam(lockedUntil),
                 ExpiresAt = ToTimeParam(expiresAt),
                 UpdatedAt = ToTimeParam(now),
-                ExpectedRevision = existing.Value.Revision,
+                ExpectedRevision = conflict.Value.Revision,
                 Completed = (int)IdempotencyRecordStatus.Completed
             },
             Tx).ConfigureAwait(false);
-        if (affected == 0) return null;
+        if (affected == 0)
+        {
+            if (!fullConflictRead) return (null, null);
+            var current = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
+            return (null, current);
+        }
 
-        return new IdempotencyRecord(operationName, key,
-            IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, existing.Value.Revision + 1);
+        return (new IdempotencyRecord(operationName, key,
+            IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, conflict.Value.Revision + 1), null);
     }
+
+    private async ValueTask<int> TryInsertStartAsync(
+        string operationName, string key, DateTimeOffset now,
+        DateTimeOffset lockedUntil, DateTimeOffset expiresAt, int statusProcessing)
+    {
+        // 普通 INSERT + 唯一冲突捕获（ITM-228 口径：MySQL INSERT IGNORE 会吞非重复键错误）
+        const string insertSql = """
+        INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error)
+        VALUES (@OperationName, @Key, @Status, @LockedUntil, @ExpiresAt, @UpdatedAt, NULL, NULL)
+        """;
+        try
+        {
+            return await _connection.ExecuteAsync(insertSql,
+                new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now) },
+                Tx).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsUniqueConstraintViolation(ex))
+        {
+            return 0;
+        }
+    }
+
+    private async ValueTask<ConflictView?> GetClassificationConflictViewAsync(
+        string operationName, string key, DateTimeOffset now, CancellationToken ct)
+    {
+        var info = await GetForConflictClassificationAsync(operationName, key, now, ct).ConfigureAwait(false);
+        return info is null
+            ? null
+            : new ConflictView(info.Value.Status, info.Value.LockedUntil, info.Value.ExpiresAt, info.Value.Revision, null);
+    }
+
+    private async ValueTask<ConflictView?> GetFullConflictViewAsync(
+        string operationName, string key, DateTimeOffset now, CancellationToken ct)
+    {
+        var record = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
+        return record is null
+            ? null
+            : new ConflictView(record.Status, record.LockedUntil, record.ExpiresAt, record.Revision, record);
+    }
+
+    /// <summary>冲突视图：轻量分类读（Record=null）或整行读（Record=完整记录）的统一形态。</summary>
+    private readonly record struct ConflictView(
+        IdempotencyRecordStatus Status, DateTimeOffset LockedUntil, DateTimeOffset ExpiresAt,
+        long Revision, IdempotencyRecord? Record);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 2026-10-20 性能轮：处理器走单调用后，新 key/过期回收路径省掉处理器侧的前置
+    /// <see cref="GetAsync"/>（新 key 2→1 往返）；已存在且活跃/已完成时 Insert 冲突后回读
+    /// 完整记录返回 Existing。与 EF 栈同为 Insert 优先，重复请求多一次冲突探测，
+    /// 换取新 key 主路径的一次往返。
+    /// </remarks>
+    public async ValueTask<IdempotencyStartResult> StartOrGetAsync(
+    string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct = default)
+    {
+        // 2026-10-21：PG/SQLite 走单语句 UPSERT。新建、过期回收、失败重试三种“可启动”
+        // 情形由一条 INSERT ... ON CONFLICT DO UPDATE ... RETURNING 判定并落库；只有
+        // “已被完成或正被占用”时才追加一次读取。
+        // 2026-10-24（#43）：MySQL 等无 RETURNING 方言改为 INSERT + 整行读一次；
+        // 旧路径是 INSERT + 四列分类读 + 二次整行读（冲突侧 3 条语句），现在 2 条。
+        if (_dbType is DapperDbType.PostgreSql or DapperDbType.Sqlite)
+            return await StartOrGetAtomicAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+
+        var (started, existing) = await TryStartCoreAsync(
+            operationName, key, now, policy, fullConflictRead: true, ct).ConfigureAwait(false);
+        if (started is not null)
+            return new IdempotencyStartResult(IdempotencyStartOutcome.Started, started);
+        return existing is null
+            ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
+            : new IdempotencyStartResult(IdempotencyStartOutcome.Existing, existing);
+    }
+
+    /// <summary>
+    /// PG/SQLite 单语句启动或读取：UPSERT 的 WHERE 精确复刻“过期 / Failed / 租约过期”
+    /// 三种可回收条件；返回行即本次取得执行权，零行即既有记录仍有效，再读一次返回。
+    /// </summary>
+    private async ValueTask<IdempotencyStartResult> StartOrGetAtomicAsync(
+        string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ct.ThrowIfCancellationRequested();
+
+        await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var lockedUntil = now + policy.ProcessingTimeout;
+        var expiresAt = now + policy.Retention;
+        var statusProcessing = (int)IdempotencyRecordStatus.Processing;
+        var statusFailed = (int)IdempotencyRecordStatus.Failed;
+
+        var revision = await _connection.QueryFirstOrDefaultAsync<long?>(
+            AtomicStartOrGet,
+            new
+            {
+                OperationName = operationName,
+                Key = key,
+                Status = statusProcessing,
+                Failed = statusFailed,
+                LockedUntil = ToTimeParam(lockedUntil),
+                ExpiresAt = ToTimeParam(expiresAt),
+                UpdatedAt = ToTimeParam(now),
+                Now = ToTimeParam(now)
+            },
+            Tx).ConfigureAwait(false);
+
+        if (revision is { } startedRevision)
+        {
+            // revision=0 为新建，>0 为回收换代；两者都返回 Processing 记录供调用方继续执行。
+            return new IdempotencyStartResult(
+                IdempotencyStartOutcome.Started,
+                new IdempotencyRecord(
+                    operationName, key, IdempotencyRecordStatus.Processing,
+                    lockedUntil, expiresAt, now, startedRevision));
+        }
+
+        // 零行：既有记录为 Completed 或租约未过期的 Processing。读取一次返回其快照。
+        var existing = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
+        return existing is null
+            ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
+            : new IdempotencyStartResult(IdempotencyStartOutcome.Existing, existing);
+    }
+
+    /// <summary>
+    /// PG/SQLite 原子启动 SQL。状态值：0=Processing、1=Completed、2=Failed。
+    /// 可回收条件与 <see cref="TryStartAsync"/> 的逐语句分支逐条等价：过期（任意状态）、
+    /// Failed、租约过期的 Processing；Completed 未过期不回收。
+    /// </summary>
+    private const string AtomicStartOrGet = """
+        INSERT INTO idempotency_records
+            (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error)
+        VALUES (@OperationName, @Key, @Status, @LockedUntil, @ExpiresAt, @UpdatedAt, NULL, NULL)
+        ON CONFLICT (operation_name, idempotency_key) DO UPDATE
+        SET status = @Status,
+            locked_until = @LockedUntil,
+            expires_at = @ExpiresAt,
+            updated_at = @UpdatedAt,
+            error = NULL,
+            response_payload = NULL,
+            revision = idempotency_records.revision + 1
+        WHERE idempotency_records.expires_at <= @Now
+           OR idempotency_records.status = @Failed
+           OR (idempotency_records.status = @Status AND idempotency_records.locked_until <= @Now)
+        RETURNING revision
+        """;
 
     /// <summary>
     /// B5（EPSL 地毯审计 2026-10-16）：TryStart 冲突路径的轻量读——原 GetAsync 读全行
@@ -267,7 +421,14 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         IdempotencyRecord record, ReadOnlyMemory<byte> responsePayload, DateTimeOffset completedAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(record);
-        var payloadBytes = responsePayload.ToArray();
+        await EnsureOpenAsync(ct).ConfigureAwait(false);
+        // 2026-10-20：精确数组直接交还，避免持久化边界的第二次整载荷复制。
+        var payloadBytes = System.Runtime.InteropServices.MemoryMarshal.TryGetArray(responsePayload, out var segment)
+            && segment.Array is { } array
+            && segment.Offset == 0
+            && segment.Count == array.Length
+            ? array
+            : responsePayload.ToArray();
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
         var statusProcessing = (int)IdempotencyRecordStatus.Processing;
 
@@ -286,7 +447,10 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         dp.Add("OperationName", record.OperationName);
         dp.Add("Key", record.Key);
         dp.Add("Status", statusCompleted);
-        dp.Add("UpdatedAt", completedAt);
+        // 2026-10-21 评审 F3：三方言时间编码收口——原强类型 DateTimeOffset 经生成拦截器
+        // 绑成 DateTimeOffset（SQLite 为 "O" 文本），与 TryStart/Checkpoint 的 ToTimeParam
+        // 形态不一致；统一走 ToTimeParam。
+        dp.Add("UpdatedAt", ToTimeParam(completedAt));
         dp.Add("Payload", payloadBytes, DbType.Binary);
         dp.Add("ExpectedRevision", record.Revision);
         dp.Add("Processing", statusProcessing);
@@ -301,6 +465,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
     {
         ArgumentNullException.ThrowIfNull(record);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        await EnsureOpenAsync(ct).ConfigureAwait(false);
         var reason = FailureReason.Normalize(failureReason);
         var statusFailed = (int)IdempotencyRecordStatus.Failed;
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
@@ -318,7 +483,8 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
                 OperationName = record.OperationName,
                 Key = record.Key,
                 Status = statusFailed,
-                UpdatedAt = failedAt,
+                // 2026-10-21 评审 F3：与 TryStart/MarkCompleted/Checkpoint 统一时间绑定形态。
+                UpdatedAt = ToTimeParam(failedAt),
                 Error = reason,
                 ExpectedRevision = record.Revision,
                 Completed = statusCompleted
@@ -332,6 +498,13 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
     // DapperSqlErrorClassifier（鸭子形态，码集并集含本版 1022/19/2067——分类行为兼容：
     // 首个命中分支的短路语义不变，新增的 1586/SqlServer 分支只在原返回 false 的
     // 异常上可能多判 true，方向为更多冲突被识别）
+
+    /// <summary>确保连接已打开（与 DapperInbox/Saga/Outbox 同款惰性打开语义）。</summary>
+    private async ValueTask EnsureOpenAsync(CancellationToken ct)
+    {
+        if (_connection.State != System.Data.ConnectionState.Open)
+            await _connection.OpenAsync(ct).ConfigureAwait(false);
+    }
 
     /// <summary>ITM-242 口径：UTC 归一化（MySQL DATETIME Kind=Unspecified → offset 0）。</summary>
     private static DateTimeOffset ToUtcOrMin(DateTimeOffset value)

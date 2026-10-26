@@ -12,7 +12,7 @@ namespace PalDDD.Projections;
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCode require dynamic access",
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
-public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : DbContext(options), IProjectionCheckpointStore, IResumableProjectionCheckpointStore
+public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : DbContext(options), IProjectionCheckpointStore, IResumableProjectionCheckpointStore, IProjectionLeaseRenewalStore
 {
     /// <summary>投影 checkpoint 表</summary>
     public DbSet<ProjectionCheckpoint> ProjectionCheckpoints => Set<ProjectionCheckpoint>();
@@ -324,37 +324,47 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
 
-        try
+        // R11 F4：MySQL 的 CAST 对 "99abc" 截断为 99（不抛错），服务端聚合会把脏位置
+        // 当数值并返回 max+1，续读跳过中间事件。MySQL 直接走下方客户端聚合（逐行解析，
+        // 遇非数值返回 null）；SQLite 本就因 LINQ 翻译失败落到该档；PG 服务端 CAST 抛
+        // 22P02 由 catch 返回 null。检查点行远轻于事件行，MySQL 的 O(检查点) 物化可接受。
+        var providerName = Database.ProviderName;
+        if (providerName is null
+            || !providerName.Contains("MySql", StringComparison.OrdinalIgnoreCase))
         {
-            var firstIncomplete = await ProjectionCheckpoints
-                .AsNoTracking()
-                .Where(x => x.ProjectionName == projectionName
-                    && x.SourceName == sourceName
-                    && x.Status != ProjectionCheckpointStatus.Completed)
-                .MinAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
-                .ConfigureAwait(false);
-            if (firstIncomplete is { } incomplete)
-                return incomplete.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            try
+            {
+                var firstIncomplete = await ProjectionCheckpoints
+                    .AsNoTracking()
+                    .Where(x => x.ProjectionName == projectionName
+                        && x.SourceName == sourceName
+                        && x.Status != ProjectionCheckpointStatus.Completed)
+                    .MinAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
+                    .ConfigureAwait(false);
+                if (firstIncomplete is { } incomplete)
+                    return incomplete.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-            var max = await ProjectionCheckpoints
-                .AsNoTracking()
-                .Where(x => x.ProjectionName == projectionName && x.SourceName == sourceName)
-                .MaxAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
-                .ConfigureAwait(false);
-            return max is { } value
-                ? (value + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : null;
-        }
-        catch (System.Data.Common.DbException)
-        {
-            // 数值 CAST 失败（如 PG 对非数值 Position 串 22007 族）——续读是优化面，
-            // 回退全量回放（语义兜底恒安全，对齐 Dapper 实现同款口径）
-            return null;
-        }
-        catch (InvalidOperationException)
-        {
-            // LINQ→SQL 翻译失败（SQLite provider 不映射 Convert.ToInt64(string)，实测）——
-            // 落下方最小投影客户端聚合（非全量回放：检查点行远轻于事件行）
+                var max = await ProjectionCheckpoints
+                    .AsNoTracking()
+                    .Where(x => x.ProjectionName == projectionName && x.SourceName == sourceName)
+                    .MaxAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
+                    .ConfigureAwait(false);
+                return max is { } value
+                    ? (value + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : null;
+            }
+            catch (System.Data.Common.DbException ex) when (IsPositionCastFailure(ex))
+            {
+                // R12 C-03：只有 PG 的“非数值 Position → CAST”失败（22P02/22007）才按
+                // 脏数据回退全量；连接中断/超时等其他 DbException 必须上抛——原实现
+                // 一律返回 null，基础设施故障被误分类成“无可续读位置”并触发全量回放。
+                return null;
+            }
+            catch (InvalidOperationException)
+            {
+                // LINQ→SQL 翻译失败（SQLite provider 不映射 Convert.ToInt64(string)，实测）——
+                // 落下方最小投影客户端聚合（非全量回放：检查点行远轻于事件行）
+            }
         }
 
         // 回退档：最小投影客户端聚合——两列轻量行 + AsNoTracking（零跟踪残留、零 payload）
@@ -509,10 +519,78 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         return false;
     }
 
+    /// <summary>R12 C-02：心跳续租——Revision 并发令牌 + Processing 守卫，只更新租约/更新时间。</summary>
+    public async ValueTask<bool> RenewLeaseAsync(
+        ProjectionCheckpoint checkpoint,
+        DateTimeOffset now,
+        TimeSpan processingTimeout,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+
+        var leaseUntil = now + processingTimeout;
+        if (!Database.IsRelational())
+        {
+            // InMemory provider 不支持 ExecuteUpdate：跟踪实体 + 属性入口赋值（private setter 不可直写）。
+            var current = await ProjectionCheckpoints.SingleOrDefaultAsync(
+                x => x.ProjectionName == checkpoint.ProjectionName
+                    && x.SourceName == checkpoint.SourceName
+                    && x.Position == checkpoint.Position,
+                ct).ConfigureAwait(false);
+            if (current is null
+                || current.Status != ProjectionCheckpointStatus.Processing
+                || current.Revision != checkpoint.Revision)
+            {
+                if (current is not null)
+                    Entry(current).State = EntityState.Detached;
+                return false;
+            }
+
+            Entry(current).Property(x => x.LeaseUntil).CurrentValue = leaseUntil;
+            Entry(current).Property(x => x.UpdatedAt).CurrentValue = now;
+            try
+            {
+                await SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                return false;
+            }
+            finally
+            {
+                Entry(current).State = EntityState.Detached;
+            }
+            return true;
+        }
+
+        var affected = await ProjectionCheckpoints
+            .Where(x => x.ProjectionName == checkpoint.ProjectionName
+                && x.SourceName == checkpoint.SourceName
+                && x.Position == checkpoint.Position
+                && x.Revision == checkpoint.Revision
+                && x.Status == ProjectionCheckpointStatus.Processing)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.LeaseUntil, leaseUntil)
+                .SetProperty(x => x.UpdatedAt, now),
+                ct).ConfigureAwait(false);
+        if (affected == 0)
+            return false;
+        return true;
+    }
+
     private void AttachIfDetached(ProjectionCheckpoint checkpoint)
     {
         if (Entry(checkpoint).State == EntityState.Detached)
             ProjectionCheckpoints.Attach(checkpoint);
+    }
+
+    /// <summary>R12 C-03：PostgreSQL 文本→数值 CAST 失败的 SQLSTATE（非数值 Position）。</summary>
+    internal static bool IsPositionCastFailure(System.Data.Common.DbException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return exception.SqlState is "22P02" or "22007";
     }
 
     private static void ValidateKeyParts(string projectionName, string sourceName, string position)

@@ -6,7 +6,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using PalDDD.Core.Logging;
-using PalDDD.DependencyInjection.Logging;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
@@ -25,6 +24,13 @@ public static class ServiceRegistration
     public static IServiceCollection AddPalDDD(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        // R11 F2：组件级入口自带日志门面（R7 家族）。Hosting 的 ExceptionMiddleware
+        // 强制依赖 IPalLogger<T>，而 AddPalDDD 是 MapCommand/异常中间件最基础的注册；
+        // 原实现只在 AddPalLogging/AddPalCoreStack/PipelineBehaviors 安装门面，导致
+        // 「AddPalDDD + UsePalExceptionHandler」的最小应用首个请求失败。
+        // 必须走 DI 包内 EnsureLoggerFacade（含 AddLogging）——只装门面会让 NullMessageBroker
+        // 的可选 logger 构造从参数空构造切换到 PalLogger<T>，裸 ServiceCollection 解析失败。
+        EnsureLoggerFacade(services);
         services.TryAddSingleton<CQRS.Dispatcher>();
         services.TryAddScoped<Message.IDomainEventDispatcher, Message.IterativeDomainEventDispatcher>();
         services.TryAddSingleton<Message.IMessageBroker, Message.NullMessageBroker>();
@@ -49,30 +55,26 @@ public static class ServiceRegistration
     }
 
     /// <summary>注册推荐的核心栈：<see cref="AddPalDDD"/> + <see cref="AddPalPipelineBehaviors"/> + <see cref="AddPalIdentity"/>。</summary>
-    /// <remarks>只包含 AOT 安全的核心、CQRS、内存消息能力；序列化、持久化、Broker、ASP.NET Core 适配器仍由对应包显式注册。</remarks>
+    /// <remarks>
+    /// 只包含核心、CQRS、内存消息能力；序列化、持久化、Broker、ASP.NET Core 适配器仍由对应包显式注册。
+    /// <para>
+    /// ⚠️ <b>Native AOT 限制</b>：本方法内部调用开放泛型 <see cref="AddPalPipelineBehaviors(IServiceCollection)"/>，
+    /// 在 Native AOT（<c>RuntimeFeature.IsDynamicCodeSupported == false</c>）下注册期即抛
+    /// <see cref="NotSupportedException"/>。AOT 应用请改用 <see cref="AddPalDDD"/> +
+    /// <see cref="AddPalCommandHandler{TCommand,TResponse,THandler}"/> /
+    /// <see cref="AddPalQueryHandler{TQuery,TResponse,THandler}"/>（内部闭合注册管道行为），
+    /// 或显式调用闭合版 <see cref="AddPalPipelineBehaviors{TRequest,TResponse}"/>。
+    /// </para>
+    /// <para>
+    /// 管道行为（验证/日志）需要 <see cref="IPalLogger{T}"/>——<see cref="AddPalPipelineBehaviors"/>
+    /// 自带该门面的最小注册（依赖宿主 <c>ILogger&lt;T&gt;</c>，无 Provider 时为零输出）。
+    /// <see cref="AddPalLogging(IServiceCollection)"/> 仍可选，只负责追加 ZLogger 控制台 Provider 与日志级别策略。
+    /// </para>
+    /// </remarks>
     public static IServiceCollection AddPalCoreStack(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
         return services.AddPalDDD().AddPalPipelineBehaviors().AddPalIdentity();
-    }
-
-    /// <summary>
-    /// 注册 PalDDD 默认栈；当前等价于 <see cref="AddPalCoreStack"/>。
-    /// </summary>
-    /// <remarks>
-    /// 为新用户提供低认知入口，同时不越过 Clean Architecture 边界自动引用基础设施适配器。
-    /// <para>
-    /// ⚠️ <b>名不副实声明（审计 2026-09-20 A9）</b>：本方法名为 "FullStack" 但**不注册任何
-    /// 基础设施**——序列化、持久化（Dapper/PalORM/EFCore）、消息代理（Kafka/RabbitMQ）、
-    /// 压缩均需调用方按需显式注册。这是刻意设计（避免框架替用户选定持久化与消息栈），
-    /// 但名字容易让人误以为一键到位。测试 <c>AddPalFullStack_EqualsCoreStackWithoutInfrastructureAdapters</c>
-    /// 锁定该等价性。更名属破坏性变更，随 v5.0 契约窗口处理（原 v4.0 改期，2026-10-11 发布轮改指）。
-    /// </para>
-    /// </remarks>
-    public static IServiceCollection AddPalFullStack(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        return services.AddPalCoreStack();
     }
 
     /// <summary>添加常用管道行为（验证 + 日志）— 开放泛型注册（仅 JIT / 非 Native AOT 场景）</summary>
@@ -92,10 +94,23 @@ public static class ServiceRegistration
     /// v25 P3 勘正族 C10：闭合注册的匹配范围是<b>任意</b> <c>IPipelineBehavior&lt;,&gt;</c> 闭合注册——
     /// 含用户自定义 behavior，不仅限内置 Validation/Logging；用户先注册任意闭合 behavior 即抑制
     /// 内置 Validation/Logging 开放注册（先到先得）。匹配行为保持不变，仅显式声明。</para>
+    /// <para><b>⚠️ 跳过的范围（R13 F8）</b>：开放泛型注册是<b>全局</b>的——被跳过时，<b>所有</b>
+    /// 其他请求类型也不会获得 Validation/Logging（Dispatcher 按请求类型各自解析 behavior），
+    /// 输入验证因此静默失效。混合注册（先 <c>AddPalCommandHandler</c> / 任意闭合 behavior，
+    /// 后 <c>AddPalCoreStack</c>）时，请为每个请求类型显式调用
+    /// <c>AddPalCommandHandler</c>/<c>AddPalQueryHandler</c> 或闭合版
+    /// <c>AddPalPipelineBehaviors&lt;TRequest,TResponse&gt;()</c>。注册期没有可用的 logger，
+    /// 该跳过不会产生日志/指标。</para>
     /// </remarks>
     public static IServiceCollection AddPalPipelineBehaviors(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        // 注册自身依赖的日志门面——LoggingBehavior 的构造函数要求 IPalLogger<T>。
+        // 修复（2026-10-21 契约盘点）：原先只有 AddPalLogging 注册该门面，文档推荐的
+        // AddPalCoreStack + AddPalCommandHandler 路径在首次 dispatch 抛
+        // "Unable to resolve service for type IPalLogger<...>"。门面只依赖 MEL 的
+        // ILogger<T>（AddLogging 提供，无 Provider 时静默），ZLogger 输出仍由 AddPalLogging 决定。
+        EnsureLoggerFacade(services);
         // 互斥（替代十七轮哨兵 PalPipelineBehaviorsMarker，见 P0 决策）：检查服务集合实际状态而非
         // 代理标记——开放注册已存在（防双调）或闭合注册已存在（AddPalCommandHandler/AddPalQueryHandler
         // 已自动闭合注册）时跳过，避免 GetServices<IPipelineBehavior<T,R>>() 叠加出 4 个 behavior
@@ -133,6 +148,7 @@ public static class ServiceRegistration
         where TRequest : CQRS.IRequest<TResponse>
     {
         ArgumentNullException.ThrowIfNull(services);
+        EnsureLoggerFacade(services);
         // 互斥：开放泛型注册已存在时跳过闭合注册（先到先得）——
         // 避免 GetServices<IPipelineBehavior<T,R>>() 叠加出 4 个 behavior（验证/日志重复执行）。
         if (HasOpenGenericPipelineBehaviors(services)) return services;
@@ -141,6 +157,19 @@ public static class ServiceRegistration
         services.TryAddEnumerable(ServiceDescriptor.Scoped<CQRS.IPipelineBehavior<TRequest, TResponse>, CQRS.ValidationBehavior<TRequest, TResponse>>());
         services.TryAddEnumerable(ServiceDescriptor.Scoped<CQRS.IPipelineBehavior<TRequest, TResponse>, CQRS.LoggingBehavior<TRequest, TResponse>>());
         return services;
+    }
+
+    /// <summary>
+    /// 管道行为的最小日志依赖：<c>AddLogging</c>（提供 <c>ILogger&lt;T&gt;</c>，无 Provider 时零输出）
+    /// + <see cref="IPalLogger{T}"/> 门面。与 <see cref="AddPalLogging(IServiceCollection)"/> 的 Provider 配置正交；
+    /// TryAdd 语义保证后者先注册时不覆盖。
+    /// </summary>
+    private static void EnsureLoggerFacade(IServiceCollection services)
+    {
+        services.AddLogging();
+        // 2026-10-21 R7：门面映射统一由 Core 的 PalLoggerRegistration 提供（单一定义点）——
+        // Transactions 的组件级入口调用同一方法，避免「单独注册组件时无法解析 IPalLogger<T>」。
+        services.EnsurePalLoggerFacade();
     }
 
     /// <summary>是否已注册开放泛型管道行为（<c>IPipelineBehavior&lt;,&gt;</c> 开放定义）</summary>
@@ -234,7 +263,7 @@ public static class ServiceRegistration
         // 硬校验，开放泛型 + 值类型实参组合无 native code 可用）。T 惯例为引用类型
         // （logger 类别，如 IPalLogger<LoggingBehavior<,>>），值类型类别无业务意义，
         // 故不设 AOT 门禁仅此声明。
-        services.TryAddSingleton(typeof(IPalLogger<>), typeof(PalLogger<>));
+        services.EnsurePalLoggerFacade();
         return services;
     }
 
@@ -473,7 +502,8 @@ internal sealed class HandlerCollector
 
     public HandlerCollector(IEnumerable<HandlerMarker> markers)
     {
-        // v27 P3（v26 M2 批次漏网）：全仓构造守卫——同文件姊妹 HandlerRegistrar:391 已有，本构造补齐
+        // v27 P3（v26 M2 批次漏网）：全仓构造守卫——同文件姊妹 HandlerRegistrar 构造函数已有，本构造补齐
+        //（2026-10-21：移除行号引用，原 :391 已漂移 105 行）
         ArgumentNullException.ThrowIfNull(markers);
         Markers = markers.ToImmutableArray();
     }

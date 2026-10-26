@@ -51,7 +51,8 @@ public class PalOrmIdempotencyStoreTests
 
         var later = now + TimeSpan.FromSeconds(6);
         var reclaimed = await store.TryStartAsync("op-1", "key-1", later, IdempotencyPolicy.Default, default);
-        await Assert.That(reclaimed).IsNotNull();
+        await Assert.That(reclaimed).IsTypeOf<IdempotencyRecord>();
+        await Assert.That(reclaimed!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
     }
 
     /// <summary>v8 评审 P2-2 回归：过期 Completed 记录必须可回收重建——原 `AND status&lt;&gt;Completed`
@@ -83,6 +84,61 @@ public class PalOrmIdempotencyStoreTests
         await Assert.That(reloaded).IsNotNull();
         await Assert.That(reloaded!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
         await Assert.That(reloaded.ResponsePayload?.ToArray()).IsEquivalentTo(System.Text.Encoding.UTF8.GetBytes("{\"r\":2}"));
+    }
+
+    [Test]
+    public async Task StartOrGetAsync_NewThenProcessing_ReturnsStartedThenExisting()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteIdempotencyStore(session);
+        var now = DateTimeOffset.UtcNow;
+
+        var first = await store.StartOrGetAsync("op-1", "key-1", now, IdempotencyPolicy.Default, default);
+        await Assert.That(first.Outcome).IsEqualTo(IdempotencyStartOutcome.Started);
+        await Assert.That(first.Record!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+
+        var second = await store.StartOrGetAsync("op-1", "key-1", now.AddSeconds(1), IdempotencyPolicy.Default, default);
+        await Assert.That(second.Outcome).IsEqualTo(IdempotencyStartOutcome.Existing);
+        await Assert.That(second.Record!.Key).IsEqualTo("key-1");
+        await Assert.That(second.Record.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+    }
+
+    [Test]
+    public async Task StartOrGetAsync_Completed_ReturnsExistingWithPayload()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteIdempotencyStore(session);
+        var now = DateTimeOffset.UtcNow;
+        var payload = System.Text.Encoding.UTF8.GetBytes("{\"done\":1}");
+
+        var first = await store.StartOrGetAsync("op-1", "key-1", now, IdempotencyPolicy.Default, default);
+        await Assert.That(first.Outcome).IsEqualTo(IdempotencyStartOutcome.Started);
+        await store.MarkCompletedAsync(first.Record!, payload, now.AddSeconds(1), default);
+
+        var existing = await store.StartOrGetAsync("op-1", "key-1", now.AddSeconds(2), IdempotencyPolicy.Default, default);
+        await Assert.That(existing.Outcome).IsEqualTo(IdempotencyStartOutcome.Existing);
+        await Assert.That(existing.Record!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
+        await Assert.That(existing.Record.ResponsePayload?.ToArray()).IsEquivalentTo(payload);
+    }
+
+    [Test]
+    public async Task StartOrGetAsync_Expired_ReclaimsAndStarts()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteIdempotencyStore(session);
+        var now = DateTimeOffset.UtcNow;
+        var shortPolicy = new IdempotencyPolicy
+        {
+            ProcessingTimeout = TimeSpan.FromSeconds(5),
+            Retention = TimeSpan.FromSeconds(10),
+        };
+
+        var first = await store.StartOrGetAsync("op-1", "key-1", now, shortPolicy, default);
+        await Assert.That(first.Outcome).IsEqualTo(IdempotencyStartOutcome.Started);
+
+        var reclaimed = await store.StartOrGetAsync("op-1", "key-1", now.AddSeconds(30), IdempotencyPolicy.Default, default);
+        await Assert.That(reclaimed.Outcome).IsEqualTo(IdempotencyStartOutcome.Started);
+        await Assert.That(reclaimed.Record!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
     }
 
     [Test]

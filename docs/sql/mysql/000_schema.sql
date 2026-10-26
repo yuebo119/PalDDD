@@ -17,9 +17,12 @@ CREATE TABLE outbox_messages (
     causation_id    CHAR(26),  -- 审计：因果 Ulid（26 字符）
     trace_parent    VARCHAR(255),
     trace_state     VARCHAR(512),  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
-    INDEX idx_outbox_status (status, next_attempt_at, locked_until),
-    INDEX idx_outbox_created (created_at),
-    -- 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2
+    -- 租约候选扫描按 next_attempt_at（可用时刻）过滤并按 (next_attempt_at, created_at) 排序；
+    -- (status, next_attempt_at, created_at) 让扫描按索引序直接取满批次。
+    INDEX idx_outbox_due (status, next_attempt_at, created_at),
+    -- 保留清理按 processed_at 分批删除终态行；(status, processed_at) 让扫描按索引序取满批次。
+    INDEX idx_outbox_processed (status, processed_at),
+    -- 租约回读谓词（locked_by + locked_until）覆盖索引。
     INDEX idx_outbox_lease_holder (locked_by, locked_until)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -33,7 +36,12 @@ CREATE TABLE inbox_messages (
     processed_at          DATETIME(6),
     attempts              INT NOT NULL DEFAULT 1,
     last_error            TEXT,
-    UNIQUE INDEX idx_inbox_unique (consumer_name, message_id)
+    -- 2026-10-22：批量认领令牌（MySQL 专属列）。MySQL 无 UPDATE ... RETURNING，
+    -- 批量认领用一条 UPSERT + 按本列回读来定位「本次认领到哪些行」。NULL = 未被批量认领过；
+    -- 终态/被抢占后保留旧值无害（令牌全局唯一，回读按 (consumer_name, claim_token, message_id IN ...)）。
+    claim_token           CHAR(26),
+    UNIQUE INDEX idx_inbox_unique (consumer_name, message_id),
+    INDEX idx_inbox_processed (status, processed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE saga_states (
@@ -46,15 +54,19 @@ CREATE TABLE saga_states (
     error_at      DATETIME(6),
     version       INT NOT NULL DEFAULT 0,
     saga_data     JSON,
+    next_check_at DATETIME(6),
     leased_by     VARCHAR(255),
     leased_until  DATETIME(6),
     INDEX idx_saga_status (status, created_at),
-    INDEX idx_saga_lease (status, leased_until, created_at)
+    INDEX idx_saga_lease (status, leased_until, created_at),
+    INDEX idx_saga_due (status, next_check_at),
+    INDEX idx_saga_lease_holder (leased_by, leased_until)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE events (
     global_position BIGINT AUTO_INCREMENT PRIMARY KEY,
     event_id        VARCHAR(255) NOT NULL,
+    event_id_bin    BINARY(16) NULL,
     event_name      VARCHAR(255) NOT NULL,
     stream_name     VARCHAR(512) NOT NULL,  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
     stream_version  BIGINT NOT NULL,
@@ -70,8 +82,10 @@ CREATE TABLE events (
     trace_parent    VARCHAR(255),
     trace_state     VARCHAR(512),  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
     UNIQUE INDEX idx_events_event_id (event_id),
-    UNIQUE INDEX idx_events_stream (stream_name, stream_version),
-    INDEX idx_events_global (global_position)
+    -- 2026-10-21（R14 复核补齐 MySQL 侧）：不建 event_id_bin 索引。该列只被 SELECT 回传，
+    -- 没有任何查询用它过滤；每次事件追加却要维护一份 B-tree（PG/SQLite 同口径）。
+    UNIQUE INDEX idx_events_stream (stream_name, stream_version)
+    -- global_position 是主键，独立索引纯冗余（2026-10-20 移除）。
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- P3 修复（九轮评审）：补齐通用脚本已有而方言脚本缺失的两张表

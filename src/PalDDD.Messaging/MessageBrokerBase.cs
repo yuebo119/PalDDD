@@ -34,6 +34,24 @@ public abstract class MessageBrokerBase : IMessageBroker
         MessageCatalog = messageCatalog;
     }
 
+    /// <inheritdoc />
+    /// <remarks>默认 false；Kafka/RabbitMQ 等实现按能力覆写。</remarks>
+    public virtual bool SupportsConcurrentPublish => false;
+
+    /// <inheritdoc />
+    /// <remarks>默认 false；支持直发持久化字节的实现覆写。</remarks>
+    public virtual bool SupportsRawPublish => false;
+
+    /// <inheritdoc />
+    public virtual ValueTask PublishRawAsync(
+        ReadOnlyMemory<byte> payload,
+        MessageDescriptor descriptor,
+        PalUlid messageId,
+        MessagePublishContext context,
+        CancellationToken ct = default)
+        => throw new NotSupportedException(
+            $"Broker '{GetType().Name}' does not implement raw payload publishing.");
+
     /// <summary>发布消息（泛型）— 查找描述符后转发到传输核心。</summary>
     public ValueTask PublishAsync<TMessage>(TMessage message, CancellationToken ct = default)
     {
@@ -66,6 +84,23 @@ public abstract class MessageBrokerBase : IMessageBroker
         PalUlid messageId,
         MessagePublishContext context,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// 批量订阅（2026-10-21）：默认组批泵，复用逐条订阅，按数量或时间界组批。
+    /// handler 异常交由 <see cref="OnBatchHandlerFailed"/> 处理（默认实现无操作，不记录日志），
+    /// 然后继续下一批。
+    /// </summary>
+    public virtual ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, CancellationToken, ValueTask> handler,
+        int maxBatchSize = 64,
+        TimeSpan? maxDelay = null,
+        CancellationToken ct = default)
+        => MessageBatchPump.StartAsync(this, handler, maxBatchSize, maxDelay, OnBatchHandlerFailed, ct);
+
+    /// <summary>批量 handler 抛异常时的回调（默认无操作；broker 实现覆写记录日志）。</summary>
+    protected virtual void OnBatchHandlerFailed(Exception ex)
+    {
+    }
 
     /// <summary>异步订阅消息 — 子类实现传输核心。</summary>
     public abstract ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(

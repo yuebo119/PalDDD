@@ -35,9 +35,12 @@
 using MySqlConnector;
 using Microsoft.Data.Sqlite;
 using Npgsql;
+using System.Collections;
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using PalDDD.Transactions;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Dapper;
@@ -51,7 +54,7 @@ public static class DapperBulkCopy
     // C-15（EPSL 地毯审计 2026-10-11）：AllowLoadLocalInfile 判定按连接实例缓存
     //（ConditionalWeakTable——连接串含凭据不以字符串驻留静态表；长连接复用免每次
     // 全量解析连接串只为读一个布尔）。见 MySqlBulkAsync 入口检测的使用点。
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MySqlConnection, System.Runtime.CompilerServices.StrongBox<bool>>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbConnection, System.Runtime.CompilerServices.StrongBox<bool>>
         s_allowLoadLocalInfileByConnection = new();
 
     /// <summary>
@@ -73,7 +76,9 @@ public static class DapperBulkCopy
     /// <param name="transaction">可选外部事务（UnitOfWork 模式）。三十八轮 P2 修复：三方言行为统一声明——
     /// PG COPY 自动加入连接上的活动局部事务（本参数仅作契约显式化）；MySQL 显式挂接传入事务
     /// （原实现未挂接，连接有活动事务时 WriteToServerAsync 直接抛 InvalidOperationException）；
-    /// SQLite 传入时命令挂接该事务且不 Commit/Dispose（所有权归调用方），未传时自建本地事务。</param>
+    /// SQLite 传入时命令挂接该事务且不 Commit/Dispose（所有权归调用方）。
+    /// R12 C-21：MySQL/SQLite 未传时自建本地事务；MySQL 的 Warnings/RowsInserted 检查失败会回滚，
+    /// 避免 LOAD DATA 自动提交后抛错导致重试重复写入。传入事务时所有权归调用方（不提交/回滚）。</param>
     /// <returns>成功插入的行数</returns>
     /// <exception cref="NotSupportedException">不支持的数据库类型</exception>
     public static async ValueTask<int> BulkInsertAsync<T>(
@@ -121,6 +126,68 @@ public static class DapperBulkCopy
             DapperDbType.Sqlite => await SqliteBatchAsync(conn, tableName, columns, items, valueExtractor, transaction, ct).ConfigureAwait(false),
             _ => throw new NotSupportedException($"数据库类型 {dbType} 不支持批量导入。")
         };
+    }
+
+    /// <summary>
+    /// Outbox 专用 PG COPY（2026-10-21）：强类型逐列写入。通用泛型路径每行构造
+    /// <c>object?[]</c> 并对每个值做一次 <see cref="ConvertForNpgsql"/> 类型分派，
+    /// 值类型全部装箱；本路径按列类型直接调用 <see cref="NpgsqlBinaryImporter"/> 写入，
+    /// 每行零数组分配、零装箱。列集与 <c>DapperOutboxStore.AddMessagesAsync</c> 通用路径一致。
+    /// </summary>
+    internal static async Task<int> BulkInsertOutboxAsync(
+        DbConnection conn,
+        IReadOnlyList<OutboxMessage> messages,
+        DbTransaction? transaction,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(conn);
+        ArgumentNullException.ThrowIfNull(messages);
+        if (messages.Count == 0) return 0;
+        if (transaction is not null and not NpgsqlTransaction)
+            throw new ArgumentException(
+                $"PG COPY 要求 NpgsqlTransaction，收到 {transaction.GetType().Name}。", nameof(transaction));
+
+        await EnsureOpenAsync(conn, ct).ConfigureAwait(false);
+        var pgConn = (NpgsqlConnection)conn;
+        await using var writer = await pgConn.BeginBinaryImportAsync(
+            "COPY outbox_messages (id,type,payload,content_type,schema_version,status,created_at,next_attempt_at,correlation_id,causation_id,trace_parent,trace_state) FROM STDIN (FORMAT BINARY)",
+            ct).ConfigureAwait(false);
+
+        foreach (var message in messages)
+        {
+            await writer.StartRowAsync(ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.Id.ToString(null, CultureInfo.InvariantCulture),
+                NpgsqlTypes.NpgsqlDbType.Text, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.Type, NpgsqlTypes.NpgsqlDbType.Text, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.Payload, NpgsqlTypes.NpgsqlDbType.Bytea, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.ContentType, NpgsqlTypes.NpgsqlDbType.Text, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.SchemaVersion, NpgsqlTypes.NpgsqlDbType.Integer, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                (int)OutboxStatus.Pending, NpgsqlTypes.NpgsqlDbType.Integer, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.CreatedAt, NpgsqlTypes.NpgsqlDbType.TimestampTz, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.NextAttemptAt ?? message.CreatedAt,
+                NpgsqlTypes.NpgsqlDbType.TimestampTz, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.CorrelationId?.ToString(null, CultureInfo.InvariantCulture),
+                NpgsqlTypes.NpgsqlDbType.Text, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.CausationId?.ToString(null, CultureInfo.InvariantCulture),
+                NpgsqlTypes.NpgsqlDbType.Text, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.TraceParent, NpgsqlTypes.NpgsqlDbType.Text, ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                message.TraceState, NpgsqlTypes.NpgsqlDbType.Text, ct).ConfigureAwait(false);
+        }
+
+        var rowsWritten = await writer.CompleteAsync(ct).ConfigureAwait(false);
+        return checked((int)rowsWritten);
     }
 
     // ─────────── PostgreSQL COPY（BinaryImport）───────────
@@ -211,16 +278,17 @@ public static class DapperBulkCopy
     /// <summary>
     /// MySQL BulkCopy 批量导入。<br/>
     /// 💡 MySqlBulkCopy 使用 MySQL 原生的 LOAD DATA INFILE 协议，比逐行 INSERT 快约 10 倍。<br/>
-    /// ⚡ 大批量（&gt; <see cref="MySqlMultiRowInsertRowThreshold"/> 行）需要连接字符串包含
-    /// <c>AllowLoadLocalInfile=True</c>；小批量自动路由多行 VALUES（C2'，2026-10-09），无此要求。<br/>
+    /// ⚡ 大批量（&gt; <see cref="MySqlMultiRowInsertRowThreshold"/> 行）优先 LOAD DATA；
+    /// 连接未声明 <c>AllowLoadLocalInfile=True</c> 时自动回退参数化多行 VALUES（按参数预算分块、
+    /// 本地事务），不再因 17 行以上直接失败。小批量始终走多行 VALUES（C2'，2026-10-09）。<br/>
     /// 🛡️ 检查 <see cref="MySqlBulkCopyResult.Warnings"/> 防止静默数据截断。<br/>
     /// ⚠️ v35 P3：列类型按首个非空值采样（ITM-214 跨行首个非空值口径）——跨行同列异型
-    ///（如首行 int、后续 long）时 DataTable 列定型为首个非空值的类型，不兼容值延迟到
-    /// DataTable 填充/WriteToServerAsync 阶段晦涩失败。真实调用方（Store/源码生成器）的
+    ///（如首行 int、后续 long）时读取器列定型为首个非空值的类型，不兼容值延迟到
+    /// WriteToServerAsync 阶段晦涩失败。真实调用方（Store/源码生成器）的
     /// extractor 同列同型；外部自定义 extractor 需自保每列类型一致。
     /// </summary>
-    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Aot", "IL2062:RequiresDynamicallyAccessedMembers",
-        Justification = "DataTable 列类型按运行时值推断是 MySqlBulkCopy 唯一数据源格式——Dapper.AOT 拦截器（experiment/dapper-aot-full 已启用）覆盖查询/执行调用点但不接管 MySqlBulkCopy 的 DataTable 物化路径，裁剪后列类型按 null 降级（原第 28 轮裁决'启用不做'已由实验分支推翻，见 DapperAotInitializer.cs）。")]
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "事务回滚是尽力而为的清理动作：连接已断时回滚可抛任意 provider 异常，必须吞掉以保留原始写入/校验异常。")]
     private static async Task<int> MySqlBulkAsync<T>(
         DbConnection conn, string table, string[] cols,
         IReadOnlyList<T> items, Func<T, object?[]> extractor, DbTransaction? transaction, CancellationToken ct)
@@ -229,8 +297,8 @@ public static class DapperBulkCopy
 
         // C2'（2026-10-09 优化轮）：小批量路由到参数化多行 VALUES——单往返且无
         // AllowLoadLocalInfile 部署要求（LOAD DATA 的安全门由调用方显式决策，小批量
-        // 不应被迫继承该要求）；阈值覆盖领域保存多事件典型形态（k=1~5）。大批量仍走
-        // MySqlBulkCopy（LOAD DATA 在数百行以上量级占优）
+        // 不应被迫继承该要求）；阈值覆盖领域保存多事件典型形态（k=1~5）。大批量在
+        // 允许 local_infile 时走 MySqlBulkCopy，否则回退多行 VALUES（见下方分支）。
         if (items.Count <= MySqlMultiRowInsertRowThreshold)
             return await MySqlMultiRowValuesAsync(conn, table, cols, items, extractor, transaction, ct).ConfigureAwait(false);
 
@@ -246,10 +314,47 @@ public static class DapperBulkCopy
             myConn,
             static c => new System.Runtime.CompilerServices.StrongBox<bool>(new MySqlConnectionStringBuilder(c.ConnectionString).AllowLoadLocalInfile)).Value;
         if (!allowLoadLocalInfile)
-            throw new InvalidOperationException(
-                "MySQL 批量导入要求连接字符串包含 'AllowLoadLocalInfile=True'（MySqlBulkCopy 走 LOAD DATA LOCAL INFILE 协议）。" +
-                "请在构造 MySqlConnection/MySqlDataSource 的连接串中显式添加该选项，并确认 MySQL 服务端 local_infile=1。" +
-                "本库不自动开启该选项——它扩大服务端可访问的文件面，须由调用方显式决策。");
+        {
+            // 无 local_infile 时不再直接拒绝：按参数预算回退参数化多行 VALUES。
+            // 17 行等常见批量不再被迫扩大服务端文件访问面；超过单语句参数预算时
+            // 在本地事务内分块，保持全成全败。
+            var maxRows = Math.Max(1, 60_000 / Math.Max(1, cols.Length));
+            if (items.Count <= maxRows)
+                return await MySqlMultiRowValuesAsync(conn, table, cols, items, extractor, transaction, ct).ConfigureAwait(false);
+
+            DbTransaction? localTx = null;
+            var effectiveTx = transaction;
+            if (effectiveTx is null)
+            {
+                localTx = await myConn.BeginTransactionAsync(ct).ConfigureAwait(false);
+                effectiveTx = localTx;
+            }
+
+            try
+            {
+                var total = 0;
+                for (var start = 0; start < items.Count; start += maxRows)
+                {
+                    var count = Math.Min(maxRows, items.Count - start);
+                    var chunk = new T[count];
+                    for (var i = 0; i < count; i++)
+                        chunk[i] = items[start + i];
+                    total += await MySqlMultiRowValuesAsync(
+                        conn, table, cols, chunk, extractor, effectiveTx, ct).ConfigureAwait(false);
+                }
+                if (localTx is not null)
+                    await localTx.CommitAsync(ct).ConfigureAwait(false);
+                return total;
+            }
+            finally
+            {
+                if (localTx is not null)
+                {
+                    try { await localTx.DisposeAsync().ConfigureAwait(false); }
+                    catch (Exception ex) when (ex is InvalidOperationException or DbException) { /* 事务已失效/已释放 */ }
+                }
+            }
+        }
 
         // 构建 DataTable — MySqlBulkCopy 的唯一数据源格式
         // 注意：DataTable 在现代 .NET（net6.0+）中已 AOT 兼容
@@ -278,61 +383,91 @@ public static class DapperBulkCopy
             }
         }
 
-        using var dt = new DataTable();
+        // 2026-10-21：以轻量 DbDataReader 替代 DataTable。原始行数组直接交给读取器，
+        // 逐值转换在 GetValue 时执行（与 DataTable 填充循环逐一对应），不再构造列元数据、
+        // DataRow 对象与整表行集合。MySqlBulkCopy 的 IDataReader 重载按 GetFieldType/GetValue 取值。
+        var finalColumnTypes = new Type[cols.Length];
         for (int i = 0; i < cols.Length; i++)
-            dt.Columns.Add(cols[i], columnTypes[i] ?? typeof(object));
+            finalColumnTypes[i] = columnTypes[i] ?? typeof(object);
 
-        foreach (var values in cachedValues)
-        {
-            var row = dt.NewRow();
-            // P2 修复（八轮评审）：套用 ConvertForMySql——DataTable 对未知类型（Ulid/DateTimeOffset）
-            // 静默 ToString() 是区域性依赖的静默损坏（本地化时间分隔符/Ulid 表示漂移），显式转换消除。
-            for (int i = 0; i < cols.Length; i++)
-                row[i] = ConvertForMySql(values[i]) ?? DBNull.Value;   // null 值转为 DBNull（SQL NULL）
-            dt.Rows.Add(row);
-        }
+        using var reader = new BulkValueReader(cachedValues, cols, finalColumnTypes, ConvertForMySql);
 
-        // MySqlBulkCopy 不实现 IDisposable（MySqlConnector 2.6.x）——无 using，见上方 ITM-083 注释
         // 三十八轮 P2 修复：显式挂接传入事务——MySqlConnector 要求连接有活动事务时
         // 命令必须挂接同一事务，原实现未挂接导致 UnitOfWork 内调用直接抛 InvalidOperationException
-        var mysqlTx = transaction as MySqlTransaction
-            ?? (transaction is null
-                ? null
-                : throw new ArgumentException(
+        // R12 C-21：无外部事务时自建本地事务。原实现裸调 WriteToServerAsync，LOAD DATA
+        // 自动提交后才检查 Warnings/RowsInserted 并抛错，调用方重试会重复已写入行。
+        // 自建事务在检查失败时回滚；调用方传入事务时所有权不变（由其决定提交/回滚）。
+        var ownsTransaction = transaction is null;
+        MySqlTransaction mysqlTx;
+        if (transaction is null)
+        {
+            mysqlTx = await myConn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        }
+        else
+        {
+            mysqlTx = transaction as MySqlTransaction
+                ?? throw new ArgumentException(
                     $"MySQL 批量导入要求事务为 MySqlTransaction，实际为 {transaction.GetType().Name}。",
-                    nameof(transaction)));
-        var bulkCopy = new MySqlBulkCopy(myConn, mysqlTx)
-        {
-            DestinationTableName = table
-        };
-
-        // 映射 DataTable 列 → 数据库列（按索引匹配）
-        // P3-SRC-209 修复（R44 ITM-280 勘正动机）：列映射改按索引直配——原 Array.IndexOf 逐列
-        // 扫描 O(n²)；索引直配 O(n) 且语义显式。原注释"重复列名静默错列"场景实际不可达：
-        // DataTable.Columns.Add 对重复列名先抛 DuplicateNameException，到不了 ColumnMappings。
-        // DataTable 列与 cols 同序构建（上方循环），索引天然一一对应。
-        for (int i = 0; i < cols.Length; i++)
-            bulkCopy.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, cols[i]));
-
-        // WriteToServerAsync — 真正执行批量导入
-        var result = await bulkCopy.WriteToServerAsync(dt, ct).ConfigureAwait(false);
-
-        // 🛡️ 检查 Warnings — MySQL BulkCopy 可能因类型不兼容而静默截断数据
-        // 例如：字符串超过列长度被截断、数值溢出被强制转换
-        if (result.Warnings.Count > 0)
-        {
-            var warnings = string.Join("; ", result.Warnings.Select(w => $"{w.Message} (level={w.Level})"));
-            throw new InvalidOperationException(
-                $"MySqlBulkCopy 完成但有 {result.Warnings.Count} 条警告（可能有数据截断）: {warnings}");
+                    nameof(transaction));
         }
 
-        // ITM-197 修复（三十轮）：RowsInserted 与 items 数不符（部分写入/被忽略行）显式暴露——
-        // 仅靠 Warnings 间接覆盖不足（无 warning 的部分写入不报，调用方误以为全量成功）。
-        if (result.RowsInserted != items.Count)
-            throw new InvalidOperationException(
-                $"MySqlBulkCopy 仅插入 {result.RowsInserted}/{items.Count} 行（非全量，可能含被忽略/重复键行）。");
+        try
+        {
+            // MySqlBulkCopy 不实现 IDisposable（MySqlConnector 2.6.x）——无 using，见上方 ITM-083 注释
+            var bulkCopy = new MySqlBulkCopy(myConn, mysqlTx)
+            {
+                DestinationTableName = table
+            };
 
-        return result.RowsInserted;
+            // 映射读取器列 → 数据库列（按索引匹配）
+            // P3-SRC-209 修复（R44 ITM-280 勘正动机）：列映射改按索引直配——原 Array.IndexOf 逐列
+            // 扫描 O(n²)；索引直配 O(n) 且语义显式。2026-10-21 勘正：DataTable 已被 BulkValueReader
+            // 替换，重复列名不再由 DataTable.Columns.Add 拦截——现由 ValidateColumns 显式拒绝。
+            for (int i = 0; i < cols.Length; i++)
+                bulkCopy.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, cols[i]));
+
+            // WriteToServerAsync — 真正执行批量导入
+            var result = await bulkCopy.WriteToServerAsync(reader, ct).ConfigureAwait(false);
+
+            // 🛡️ 检查 Warnings — MySQL BulkCopy 可能因类型不兼容而静默截断数据
+            // 例如：字符串超过列长度被截断、数值溢出被强制转换
+            if (result.Warnings.Count > 0)
+            {
+                var warnings = string.Join("; ", result.Warnings.Select(w => $"{w.Message} (level={w.Level})"));
+                throw new InvalidOperationException(
+                    $"MySqlBulkCopy 完成但有 {result.Warnings.Count} 条警告（可能有数据截断）: {warnings}");
+            }
+
+            // ITM-197 修复（三十轮）：RowsInserted 与 items 数不符（部分写入/被忽略行）显式暴露——
+            // 仅靠 Warnings 间接覆盖不足（无 warning 的部分写入不报，调用方误以为全量成功）。
+            if (result.RowsInserted != items.Count)
+                throw new InvalidOperationException(
+                    $"MySqlBulkCopy 仅插入 {result.RowsInserted}/{items.Count} 行（非全量，可能含被忽略/重复键行）。");
+
+            if (ownsTransaction)
+                await mysqlTx.CommitAsync(ct).ConfigureAwait(false);
+            return result.RowsInserted;
+        }
+        catch
+        {
+            if (ownsTransaction)
+            {
+                try
+                {
+                    await mysqlTx.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // 回滚失败（连接已断）不得掩盖原始异常
+                }
+            }
+            throw;
+        }
+        finally
+        {
+            if (ownsTransaction)
+                await mysqlTx.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -504,8 +639,16 @@ public static class DapperBulkCopy
     private static void ValidateColumns(string[] columns)
     {
         ArgumentOutOfRangeException.ThrowIfZero(columns.Length, nameof(columns));
+        // 2026-10-21 评审（F15 姊妹）：原 DataTable 在 Columns.Add 处替我们拦重复列名，
+        // 换成 BulkValueReader 后该保护消失——["id","id"] 会延迟到服务端才失败。
+        var seen = new HashSet<string>(columns.Length, StringComparer.OrdinalIgnoreCase);
         foreach (var column in columns)
+        {
             ValidateIdentifier(column, nameof(columns), allowDot: false);
+            if (!seen.Add(column))
+                throw new ArgumentException(
+                    $"columns 含重复列名 '{column}'：批量插入的列映射必须一一对应。", nameof(columns));
+        }
     }
 
     private static void ValidateIdentifier(string identifier, string paramName, bool allowDot)
@@ -540,6 +683,119 @@ public static class DapperBulkCopy
 
     private static bool IsIdentifierPart(char c)
         => IsIdentifierStart(c) || c is >= '0' and <= '9';
+
+    /// <summary>
+    /// MySQL BulkCopy 的轻量行读取器（2026-10-21）：替代 DataTable。原始行数组与列类型在
+    /// 入口一次性准备，逐值方言转换在 <see cref="GetValue"/> 执行；不再构造 DataTable 的
+    /// 列元数据、DataRow 对象与整表行集合。MySqlBulkCopy 的 IDataReader 重载按
+    /// GetFieldType/GetValue 取值。
+    /// </summary>
+    private sealed class BulkValueReader(
+        IReadOnlyList<object?[]> rows,
+        string[] columns,
+        Type[] columnTypes,
+        Func<object?, object?> convert) : DbDataReader
+    {
+        private int _rowIndex = -1;
+
+        public override int FieldCount => columns.Length;
+        public override bool HasRows => rows.Count > 0;
+        public override bool IsClosed => false;
+        public override int RecordsAffected => -1;
+        public override int Depth => 0;
+
+        public override object this[int ordinal] => GetValue(ordinal);
+        public override object this[string name] => GetValue(GetOrdinal(name));
+
+        public override bool Read() => ++_rowIndex < rows.Count;
+
+        public override Task<bool> ReadAsync(CancellationToken cancellationToken)
+            => Task.FromResult(Read());
+
+        public override bool NextResult() => false;
+
+        public override string GetName(int ordinal) => columns[ordinal];
+
+        public override int GetOrdinal(string name)
+        {
+            for (var i = 0; i < columns.Length; i++)
+            {
+                if (string.Equals(columns[i], name, StringComparison.Ordinal))
+                    return i;
+            }
+            throw new ArgumentException($"Column '{name}' not found.", nameof(name));
+        }
+
+        [return: DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicProperties)]
+        [UnconditionalSuppressMessage("Trimming", "IL2063",
+            Justification = "列类型由运行时值推断（与 DataTable 路径同源），仅用于 MySqlBulkCopy 的 provider 类型映射；类型已物化，不需要裁剪保留成员。")]
+        public override Type GetFieldType(int ordinal) => columnTypes[ordinal];
+        public override string GetDataTypeName(int ordinal) => columnTypes[ordinal].Name;
+
+        public override object GetValue(int ordinal)
+            => convert(rows[_rowIndex][ordinal]) ?? DBNull.Value;
+
+        public override int GetValues(object[] values)
+        {
+            ArgumentNullException.ThrowIfNull(values);
+            var count = Math.Min(values.Length, FieldCount);
+            for (var i = 0; i < count; i++)
+                values[i] = GetValue(i);
+            return count;
+        }
+
+        public override bool IsDBNull(int ordinal) => GetValue(ordinal) is DBNull;
+        public override T GetFieldValue<T>(int ordinal) => (T)GetValue(ordinal);
+
+        public override bool GetBoolean(int ordinal) => (bool)GetValue(ordinal);
+        public override byte GetByte(int ordinal) => (byte)GetValue(ordinal);
+        public override char GetChar(int ordinal) => (char)GetValue(ordinal);
+        public override DateTime GetDateTime(int ordinal) => (DateTime)GetValue(ordinal);
+        public override decimal GetDecimal(int ordinal) => (decimal)GetValue(ordinal);
+        public override double GetDouble(int ordinal) => (double)GetValue(ordinal);
+        public override float GetFloat(int ordinal) => (float)GetValue(ordinal);
+        public override Guid GetGuid(int ordinal) => (Guid)GetValue(ordinal);
+        public override short GetInt16(int ordinal) => (short)GetValue(ordinal);
+        public override int GetInt32(int ordinal) => (int)GetValue(ordinal);
+        public override long GetInt64(int ordinal) => (long)GetValue(ordinal);
+        public override string GetString(int ordinal) => (string)GetValue(ordinal);
+
+        public override long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length)
+        {
+            var bytes = (byte[])GetValue(ordinal);
+            if (buffer is null)
+                return bytes.Length;
+            var offset = checked((int)dataOffset);
+            var count = Math.Min(length, bytes.Length - offset);
+            Array.Copy(bytes, offset, buffer, bufferOffset, count);
+            return count;
+        }
+
+        public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
+        {
+            var chars = ((string)GetValue(ordinal)).ToCharArray();
+            if (buffer is null)
+                return chars.Length;
+            var offset = checked((int)dataOffset);
+            var count = Math.Min(length, chars.Length - offset);
+            Array.Copy(chars, offset, buffer, bufferOffset, count);
+            return count;
+        }
+
+        public override Stream GetStream(int ordinal)
+            => new MemoryStream((byte[])GetValue(ordinal), writable: false);
+
+        public override TextReader GetTextReader(int ordinal)
+            => new StringReader((string)GetValue(ordinal));
+
+        public override IEnumerator GetEnumerator() => new DbEnumerator(this, closeReader: false);
+
+        public override void Close()
+        {
+            // 读取器不持有外部资源：行数据来自已物化的数组，关闭只是满足 DbDataReader 契约。
+        }
+    }
 
     /// <summary>确保连接已打开（幂等操作）</summary>
     /// <remarks>P3 修复（二十一轮）：EnsureOpen 同步版改异步——OpenAsync(ct) 传导取消令牌，

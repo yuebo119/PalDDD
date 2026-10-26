@@ -77,7 +77,7 @@ var wiredNames = CollectWiredNames(root);
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
 string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage",
     "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai", "config-policy", "license-policy", "count-audit",
-    "quality-baseline", "review-freshness", "xml-guard", "vuln-scan", "test-change-guard", "new-skip-guard"];
+    "quality-baseline", "review-freshness", "xml-guard", "vuln-scan", "test-change-guard", "new-skip-guard", "perf-registry-check"];
 
 // 门禁覆盖形态声明（T-34，2026-09-22）：每个**已探针**门禁必须在此声明它覆盖哪些形态。
 // 为什么是机械要求而非文档建议：V25 的实证——一个已接线、能红、报错精确到行的门禁，
@@ -97,7 +97,7 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     ["doc-consistency"] = "D7 .ai/README.md 文件地图（其余 D1-D6/D8-D12 已下沉 C# 测试）",
     ["test-gate"] = "T1-T12 测试规范 / T-DEF-1 薄壳缺失 / T-DEF-4 CI job timeout / OSC 同测试翻转",
     ["verify-ai"] = "V1-V30 系统一致性（V1-V25 含命令形态三子类：bash-.cs / 带前缀死引用 / 裸名死引用；V26-V29 版本对账/test spec/pipefail/复发督办；V30 知识层锚点对账：ADR/边界测试规模/快照程序集与路径/根脚本数/V 上限 == 运行时推导，历史时点行豁免。V30 隔离探针注入陈旧 ADR 声明必红）",
-    ["config-policy"] = "A dependabot groups/ignore 双词表混用 / versions·labels·prefix·interval 缺失或空 / 未知上下文且注释不误报；B Directory.Build Exec 缺 IgnoreExitCode 且 Target 无 GITHUB_ACTIONS 跳过；C workflows 的 uses 非 40 位 SHA / 缺版本注释（行式校验，非完整 YAML 解析器；本地动作与 docker:// 跳过）",
+    ["config-policy"] = "A dependabot groups/ignore 双词表混用 / versions·labels·prefix·interval 缺失或空 / 未知上下文且注释不误报；B Directory.Build Exec 缺 IgnoreExitCode 且 Target 无 GITHUB_ACTIONS 跳过；C workflows 的 uses 非 40 位 SHA / 缺版本注释（行式校验，非完整 YAML 解析器；本地动作与 docker:// 跳过）；D ci/requirements-*.txt 的 Windows 专用依赖（pywin32 等）缺 sys_platform 标记（Linux CI 安装失败）",
     // license-policy 的两极由隔离探针钉住（禁令命中必红 / 白名单放行必绿）；其余判定面
     // 只在 selftest 覆盖——隔离目录没有真实 nuspec 缓存，构造不出「非白名单许可」的夹具，
     // 故如实声明为不覆盖，不拿探针数量冒充覆盖面（T-34 的本意）。
@@ -113,6 +113,7 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     // （元测试形态，diff 对称与豁免兜底）；行内 // 剥除的漏报路径（方向安全）——
     // 由 --selftest 的 13 断言覆盖。
     ["new-skip-guard"] = "test/**.cs 新增 Skip 标注四形态（[Skip( / Skip = \" / .Skip(\" / Skip.If(）净增拦截；干净文件放行；删 1 加 1 的 reason 修改放行（对称判定，防搬掩护洗白）；LINQ .Skip(1) 不误伤；**不覆盖**：字符串字面量内 Skip 文本（豁免兜底）",
+    ["perf-registry-check"] = "bench/bench-registry.json ↔ --list flat 的类/方法/case/profile/预算/重复跑类/过滤器方法对账（--from-flat 隔离探针）；**不覆盖**：真实 bench 工程构建与 Program.cs 接线（由 eps-perf-check 与 CI 构建承担）",
 };
 
 // ─── 未接线脚本的分类（2026-09-13 增）───
@@ -142,6 +143,7 @@ var manualTools = new Dictionary<string, string>(StringComparer.Ordinal)
     // 2026-10-08 C# 化增补：hook-pre-commit/hook-pre-push 由 .githooks 启动器引用（接线扫描
     // 识别为 WIRED，不进本表）；template-gate 无 .githooks/CI 引用点（.ai 侧文档引用不算接线），按设计人工按需。
     ["template-gate"] = "AI 模板编译探针门禁（2026-10-08 自 .ai/scripts/template-gate.sh C# 化迁入；.pal/prompts 模板改动后人工运行——.ai 独立裁决不进 CI）",
+    ["eps-run"] = "EPSL 快速/全量编排器（2026-10-19 增；--full 为独占长跑，--quick 为核心门禁，按设计人工调用）",
 };
 
 // 应接线而未接线的（真缺口）——逐条登记原因与解锁条件
@@ -567,6 +569,26 @@ var probes = new List<Probe>
             File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"), "<Project>\n</Project>\n");
             return [".github/dependabot.yml", ".github/workflows/bad.yml", "Directory.Build.props", "Directory.Build.targets"];
         }),
+    new(
+        Name: "config-policy 拒绝无平台标记的 Windows 专用 CI 依赖",
+        Gate: "config-policy",
+        ExpectExit: 1,
+        MustContainInStdout: "ci/requirements-semgrep.txt",
+        Setup: dir =>
+        {
+            // A/B/C 载体保持合法——违规必须来自 D，否则「因 D 而红」的断言语义失真
+            var gh = Path.Combine(dir, ".github");
+            Directory.CreateDirectory(gh);
+            File.WriteAllText(Path.Combine(gh, "dependabot.yml"),
+                "version: 2\nupdates:\n  - package-ecosystem: nuget\n    schedule:\n      interval: weekly\n    labels:\n      - dependencies\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project>\n</Project>\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"), "<Project>\n</Project>\n");
+            var ci = Path.Combine(dir, "ci");
+            Directory.CreateDirectory(ci);
+            File.WriteAllText(Path.Combine(ci, "requirements-semgrep.txt"),
+                "pywin32==311 \\\n    --hash=sha256:abc\n");
+            return [".github/dependabot.yml", "Directory.Build.props", "Directory.Build.targets", "ci/requirements-semgrep.txt"];
+        }),
     // ── license-policy 隔离探针（2026-09-25 增，裁决「所有引用的库必须是开源的许可」
     // 落成机械门禁的两极）。CWD 系门禁（FindRepoRootOrNull 以 Environment.CurrentDirectory
     // 优先向上找 PalDDD.slnx）→ 直接在隔离目录跑，无需 CopyScriptIntoIsolation。
@@ -797,7 +819,55 @@ var probes = new List<Probe>
             File.WriteAllText(p, "[Skip(\"new reason\")]\npublic class RenamedSkip { }\n");
             return ["test/Fake.Tests/RenamedSkip.cs"];
         }),
+    // ── perf-registry-check 隔离探针（2026-10-23）：注册表覆盖门禁的两极。
+    // --from-flat + --skip-cases 让探针不依赖真实 bench 工程与 Params 源文件；
+    // 正向钉「完整注册表放行」，负向钉「漏注册类必红」。
+    new(
+        Name: "perf-registry-check 放行完整注册表（负向对照）",
+        Gate: "perf-registry-check",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS perf-registry-check",
+        ExtraArgs: "-- --from-flat bench/flat.txt --skip-cases",
+        Setup: dir => SetupPerfRegistryFixture(dir, removeCoreLane: false)),
+    new(
+        Name: "perf-registry-check 拒绝漏注册类",
+        Gate: "perf-registry-check",
+        ExpectExit: 1,
+        MustContainInStdout: "不在任何车道",
+        ExtraArgs: "-- --from-flat bench/flat.txt --skip-cases",
+        Setup: dir => SetupPerfRegistryFixture(dir, removeCoreLane: true)),
 };
+
+// perf-registry-check 探针夹具：最小注册表 + 平坦清单。负向夹具删掉核心车道并把
+// strict 车道的 classes 清空，使类 A 不在任何车道（full 也随之漏跑 A）。
+static string[] SetupPerfRegistryFixture(string dir, bool removeCoreLane)
+{
+    Directory.CreateDirectory(Path.Combine(dir, "bench"));
+    var coreLane = removeCoreLane
+        ? ""
+        : """
+            {"name":"a","flag":"a","profiles":["standard","full"],"mode":"alloc","timeoutMinutes":10,"expectedSeconds":10,"classes":["A"]},
+          """;
+    var strictClasses = removeCoreLane ? "[]" : """["A"]""";
+    File.WriteAllText(Path.Combine(dir, "bench", "bench-registry.json"),
+        $$$"""
+        {
+          "version": 1,
+          "targetsSeconds": {"gate":10,"standard":100,"full":200,"remoteSmoke":100,"remoteFull":200,"strict":100},
+          "modes": {"alloc":{"warmup":2,"iterations":3,"launch":1,"timing":"none"}},
+          "lanes": [
+            {"name":"smoke","flag":"smoke","profiles":["gate","standard","full"],"mode":"n/a","timeoutMinutes":5,"expectedSeconds":1,"classes":[]},
+            {{{coreLane}}}
+            {"name":"r","flag":"r","profiles":["remote-full"],"mode":"alloc","timeoutMinutes":10,"expectedSeconds":10,"remote":true,"classes":["R"]},
+            {"name":"rs","flag":"rs","profiles":["remote-smoke"],"mode":"alloc","timeoutMinutes":10,"expectedSeconds":10,"remote":true,"filter":["M2"],"classes":["R"]},
+            {"name":"s","flag":"s","profiles":["strict"],"mode":"alloc","timeoutMinutes":10,"expectedSeconds":10,"classes":{{{strictClasses}}}}
+          ]
+        }
+        """);
+    File.WriteAllText(Path.Combine(dir, "bench", "flat.txt"),
+        "PalDDD.Benchmarks.A.M1\nPalDDD.Benchmarks.R.M2\n");
+    return ["bench/bench-registry.json", "bench/flat.txt"];
+}
 
 // count-audit 探针夹具：最小可推导仓库（16 项推导全部 >0 才会走到声明扫描）。
 // 关键构造：① App.csproj 无 IsPackable=false → 可打包包数 = 1，README 里 999
@@ -1202,10 +1272,12 @@ static int SelfTest()
     Case("HasSelfVerification 识别 --selftest 存在", HasSelfVerification("if (args.Contains(\"--selftest\")) return SelfTest();"));
     Case("HasSelfVerification 对无自证脚本返回 false", !HasSelfVerification("Console.WriteLine(\"hi\"); return 0;"));
 
-    // 接线判定口径：名字出现即接线（含变量插值形态）
+    // 接线判定口径：名字出现即接线（含变量插值形态）——R11 F17：两条自测必须调用
+    // 生产判定函数本身（原实现只对 corpus 调 string.Contains，把判定改成 return false
+    // 自测仍绿，形态②回归无保护）。
     var wiredCorpus = "for g in encoding-gate doc-consistency; do dotnet run scripts/$g.cs; done";
-    Case("接线判定命中变量插值形态", wiredCorpus.Contains("encoding-gate", StringComparison.Ordinal));
-    Case("接线判定不误报未出现名", !wiredCorpus.Contains("sibling-map", StringComparison.Ordinal));
+    Case("接线判定命中变量插值形态", AppearsAsExecutableInvocation(wiredCorpus, "encoding-gate"));
+    Case("接线判定不误报未出现名", !AppearsAsExecutableInvocation(wiredCorpus, "sibling-map"));
 
     // T-36（2026-09-22）：子串假阳性——`encoding-gate.cs` 不得把 `gate` 判为已接线。正负例各一。
     Case("接线判定：encoding-gate.cs 不把 gate 判为接线（子串假阳性）",

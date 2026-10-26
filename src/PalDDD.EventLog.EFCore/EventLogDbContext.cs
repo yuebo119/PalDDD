@@ -2,6 +2,7 @@
 // 📜 EventLogDbContext — EF Core 事件日志（Hi/Lo 位置分配 + 乐观并发）
 // ─────────────────────────────────────────────────────────────
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using PalDDD.Core.Diagnostics;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
@@ -29,6 +30,16 @@ public abstract class EventLogDbContext(
 
     /// <summary>持久化事件日志表。</summary>
     public DbSet<StoredEvent> Events => Set<StoredEvent>();
+
+    /// <summary>
+    /// 读取时使用 16 字节 event_id_bin（M4）。默认 false 回退文本列。
+    /// <para>
+    /// true 为严格二进制投影：只 SELECT <c>EventIdBin</c>，存量为 NULL 的行会抛异常，
+    /// 不再静默回退文本列。置 true 前必须确认
+    /// <see cref="CountMissingBinaryEventIdsAsync"/> 为 0。
+    /// </para>
+    /// </summary>
+    public bool UseBinaryEventId { get; set; }
 
     /// <summary>持久化全局事件位置分配器状态。</summary>
     public DbSet<EventLogGlobalPositionAllocator> GlobalPositionAllocators => Set<EventLogGlobalPositionAllocator>();
@@ -72,12 +83,6 @@ public abstract class EventLogDbContext(
         // 版本校验移出事务不改变并发语义：非串行化读下本就是乐观检查，TOCTOU 由
         // (StreamName, StreamVersion) 唯一索引兜底（与原形态同一守卫，窗口宽度无实质差异）。
         // 失败路径语义变化声明：版本不匹配抛并发异常前已消耗预留位置（间隙，ReadAll >= 过滤兼容）。
-        // A4（S1 轮）：NoStream 期望下跳过 MAX 预查——空流的约定版本即 -1，插入版本 1
-        // 若撞 (StreamName, StreamVersion) 唯一索引即证明流已存在（流版本自 1 起连续
-        // 分配是不变量：新流的 firstStreamVersion = actualVersion+1 = 1），冲突分类路径
-        // 与预查命中同一语义（重查 MAX 后转 EventStreamConcurrencyException）。Any 仍需
-        // MAX 计算起始版本；Exact 需预查验证（同时防陈旧低期望造成版本间隙）；
-        // StreamExists 需预查判定存在性。
         // A4（S1 轮）：NoStream 期望下跳过 MAX 预查——空流的约定版本即 -1，插入首条
         // 版本 0 若撞 (StreamName, StreamVersion) 唯一索引即证明流已存在（流版本自 0
         // 起连续分配是不变量：新流的 firstStreamVersion = actualVersion+1 = 0，已存在
@@ -103,14 +108,6 @@ public abstract class EventLogDbContext(
         // 并发追加）。附带收益：失败 INSERT 不再使显式事务进入 aborted 状态，冲突
         // 分类的重查降级路径（ITM-126 的 PG 25P02 分支）失去触发条件。关系型与非
         // 关系型分支自此同形，合并为单一路径。
-        // A3（S1 轮）：删显式事务——AppendCoreAsync 内仅一次 SaveChanges，单语句自身
-        // 原子；EF Core 7+ 默认 AutoTransactionBehavior.WhenNeeded 对单语句不开显式
-        // 事务（官方文档实证省 BEGIN/COMMIT 两次往返），多事件批次下显式与隐式事务
-        // 同为 BEGIN+COMMIT，删除呈中性。流级并发仍由 (StreamName, StreamVersion)
-        // 唯一索引 + 下方 DbUpdateException 捕获保证（默认 ReadCommitted 允许不同流
-        // 并发追加）。附带收益：失败 INSERT 不再使显式事务进入 aborted 状态，冲突
-        // 分类的重查降级路径（ITM-126 的 PG 25P02 分支）失去触发条件。关系型与非
-        // 关系型分支自此同形，合并为单一路径。
         var result = await AppendCoreAsync(
             streamName,
             expectedVersion,
@@ -122,6 +119,12 @@ public abstract class EventLogDbContext(
         PalMetrics.EventLogAppended.Add(events.Count);
         return result;
     }
+
+    /// <summary>
+    /// 统计尚未回填 16 字节二进制 EventId 的行数。开启 <see cref="UseBinaryEventId"/> 前必须为 0。
+    /// </summary>
+    public Task<int> CountMissingBinaryEventIdsAsync(CancellationToken cancellationToken = default)
+        => Events.CountAsync(e => e.EventIdBin == null, cancellationToken);
 
     /// <inheritdoc />
     public async IAsyncEnumerable<RecordedEvent> ReadStreamAsync(
@@ -143,11 +146,12 @@ public abstract class EventLogDbContext(
         // 计数同样改为 yield 前（对齐 InMemoryEventLog ITM-120）。
         try
         {
-            var query = Events
-                .AsNoTracking()
-                .Where(e => e.StreamName == streamName && e.StreamVersion >= fromVersion)
-                .OrderBy(e => e.StreamVersion)
-                .Take(maxCount)
+            var query = ProjectReadRows(
+                    Events
+                        .AsNoTracking()
+                        .Where(e => e.StreamName == streamName && e.StreamVersion >= fromVersion)
+                        .OrderBy(e => e.StreamVersion)
+                        .Take(maxCount))
                 .AsAsyncEnumerable()
                 .WithCancellation(cancellationToken)
                 .ConfigureAwait(false);
@@ -155,7 +159,7 @@ public abstract class EventLogDbContext(
             await foreach (var @event in query)
             {
                 checked { read++; }
-                yield return @event.ToRecordedEvent();
+                yield return @event.ToRecordedEvent(UseBinaryEventId);
             }
         }
         finally
@@ -181,11 +185,12 @@ public abstract class EventLogDbContext(
         // 对齐 InMemoryEventLog 二十一轮 / ITM-120）。
         try
         {
-            var query = Events
-                .AsNoTracking()
-                .Where(e => e.GlobalPosition >= fromPosition)
-                .OrderBy(e => e.GlobalPosition)
-                .Take(maxCount)
+            var query = ProjectReadRows(
+                    Events
+                        .AsNoTracking()
+                        .Where(e => e.GlobalPosition >= fromPosition)
+                        .OrderBy(e => e.GlobalPosition)
+                        .Take(maxCount))
                 .AsAsyncEnumerable()
                 .WithCancellation(cancellationToken)
                 .ConfigureAwait(false);
@@ -193,7 +198,7 @@ public abstract class EventLogDbContext(
             await foreach (var @event in query)
             {
                 checked { read++; }
-                yield return @event.ToRecordedEvent();
+                yield return @event.ToRecordedEvent(UseBinaryEventId);
             }
         }
         finally
@@ -202,6 +207,97 @@ public abstract class EventLogDbContext(
             // maxCount 无界，高基数命中 ITM-229 清理标准；计数保留在 EventLogRead 指标
             PalMetrics.EventLogRead.Add(read);
         }
+    }
+
+    /// <summary>按读取模式投影：文本模式只拉 EventId，二进制模式只拉 EventIdBin。</summary>
+    private IQueryable<EventReadRow> ProjectReadRows(IQueryable<StoredEvent> query)
+    {
+        if (UseBinaryEventId)
+        {
+            return query.Select(e => new EventReadRow
+            {
+                StreamName = e.StreamName,
+                StreamVersion = e.StreamVersion,
+                GlobalPosition = e.GlobalPosition,
+                RecordedAt = e.RecordedAt,
+                EventIdBin = e.EventIdBin,
+                EventName = e.EventName,
+                SchemaVersion = e.SchemaVersion,
+                ContentType = e.ContentType,
+                Payload = e.Payload,
+                Metadata = e.Metadata,
+                ActorId = e.ActorId,
+                Reason = e.Reason,
+                CorrelationId = e.CorrelationId,
+                CausationId = e.CausationId,
+                TraceParent = e.TraceParent,
+                TraceState = e.TraceState,
+            });
+        }
+
+        return query.Select(e => new EventReadRow
+        {
+            StreamName = e.StreamName,
+            StreamVersion = e.StreamVersion,
+            GlobalPosition = e.GlobalPosition,
+            RecordedAt = e.RecordedAt,
+            EventId = e.EventId,
+            EventName = e.EventName,
+            SchemaVersion = e.SchemaVersion,
+            ContentType = e.ContentType,
+            Payload = e.Payload,
+            Metadata = e.Metadata,
+            ActorId = e.ActorId,
+            Reason = e.Reason,
+            CorrelationId = e.CorrelationId,
+            CausationId = e.CausationId,
+            TraceParent = e.TraceParent,
+            TraceState = e.TraceState,
+        });
+    }
+
+    /// <summary>只读投影行：二进制模式不加载文本 EventId，文本模式不加载二进制列。</summary>
+    private sealed class EventReadRow
+    {
+        public string StreamName { get; set; } = string.Empty;
+        public long StreamVersion { get; set; }
+        public long GlobalPosition { get; set; }
+        public DateTimeOffset RecordedAt { get; set; }
+        public PalUlid EventId { get; set; }
+        public byte[]? EventIdBin { get; set; }
+        public string EventName { get; set; } = string.Empty;
+        public int SchemaVersion { get; set; }
+        public string ContentType { get; set; } = string.Empty;
+        public byte[] Payload { get; set; } = [];
+        public byte[] Metadata { get; set; } = [];
+        public string? ActorId { get; set; }
+        public string? Reason { get; set; }
+        public PalUlid? CorrelationId { get; set; }
+        public PalUlid? CausationId { get; set; }
+        public string? TraceParent { get; set; }
+        public string? TraceState { get; set; }
+
+        public RecordedEvent ToRecordedEvent(bool useBinaryEventId)
+            => StoredEvent.CreateRecordedEvent(
+                StreamName,
+                StreamVersion,
+                GlobalPosition,
+                RecordedAt,
+                EventId,
+                EventIdBin,
+                useBinaryEventId,
+                requireBinaryEventId: useBinaryEventId,
+                EventName,
+                SchemaVersion,
+                ContentType,
+                Payload,
+                Metadata,
+                ActorId,
+                Reason,
+                CorrelationId,
+                CausationId,
+                TraceParent,
+                TraceState);
     }
 
     /// <summary>配置持久化事件日志实体。</summary>
@@ -219,6 +315,8 @@ public abstract class EventLogDbContext(
             // 缺转换时 ctx.Model 即抛"无法映射类型"（探针实证关系型完全不可用；InMemory-only
             // 测试网掩盖）。对齐 OutboxDbContext.Id / SagaStateDbContext.SagaId 姊妹模式。
             e.Property(x => x.EventId).HasConversion(v => v.ToString(null, System.Globalization.CultureInfo.InvariantCulture), v => PalUlid.Parse(v));
+            // M4：16 字节二进制 EventId 双写列；读取按 UseBinaryEventId 切换。
+            e.Property(x => x.EventIdBin);
             e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
             e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
             e.Property(x => x.StreamName).HasMaxLength(512);
@@ -232,6 +330,8 @@ public abstract class EventLogDbContext(
             e.Property(x => x.Metadata).IsRequired();
             e.HasIndex(x => new { x.StreamName, x.StreamVersion }).IsUnique();
             e.HasIndex(x => x.EventId).IsUnique();
+            // 2026-10-21：不为 EventIdBin 建索引。该列只被读取回传，没有查询用它过滤；
+            // 每次追加都维护一份 B-tree 是纯写放大。存量库按 migration 文档删除。
         });
 
         modelBuilder.Entity<EventLogGlobalPositionAllocator>(e =>
@@ -255,24 +355,24 @@ public abstract class EventLogDbContext(
         // 本方法只负责事件构建/落库/冲突分类；firstStreamVersion/firstGlobalPosition 为
         // 前置阶段产物直传
         var now = _timeProvider.GetUtcNow();
-
+        var added = new List<EntityEntry<StoredEvent>>(events.Count);
         for (var i = 0; i < events.Count; i++)
         {
-            Events.Add(StoredEvent.From(
+            added.Add(Events.Add(StoredEvent.From(
                 streamName,
                 firstStreamVersion + i,
                 firstGlobalPosition + i,
                 now,
-                events[i]));
+                events[i])));
         }
 
         try
         {
             await SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            // v62 P3 + v64 P2 勘正：成功路径 Detach（v62 版因 Added 过滤实为 no-op，
-            // v64 改无条件后真正对齐 Checkpoint/Idempotency 成功路径家族——长寿命 context
-            // 持续追加时 Unchanged 条目线性累积；append-only 契约无后续读写依赖）
-            DetachAddedEvents();
+            // 2026-10-21：按本批 EntityEntry 精确 Detach。原 ChangeTracker.Entries<StoredEvent>()
+            // 会触发 DetectChanges + 全跟踪扫描，每次 append 多付一次全量扫描；allocator 由
+            // EventLogPositionReserver 保存成功后自清。
+            DetachAddedEvents(added);
         }
         catch (DbUpdateException ex)
         {
@@ -285,12 +385,11 @@ public abstract class EventLogDbContext(
                 // 三十八轮 P2 修复：上抛前清理本批 Added 实体——长生命周期 DbContext 中
                 // 残留批次携带旧 GlobalPosition，污染后续追加（ITM-226 场景级联：重取块
                 // 落入已用区间 → PK 冲突 → 再被误分类）
-                // v34 P3：清理范围扩至 allocator 跟踪实体（见 DetachAddedEvents v34 P3 注释）
-                DetachAddedEvents();
+                DetachAddedEvents(added);
                 throw;
             }
 
-            DetachAddedEvents();
+            DetachAddedEvents(added);
             // ITM-126 修复：PG 显式事务内 SaveChanges 抛 23505 后事务进入 aborted 状态，
             // 同事务重查会抛 25P02 并替换原始 DbUpdateException——重查失败时放弃分类，
             // 走外层 throw 原样上抛原始冲突异常（对齐 DapperEventLog/PalOrmEventLog 姊妹实现）
@@ -353,9 +452,18 @@ public abstract class EventLogDbContext(
     // 按 IModel 引用各缓存一份委托：编译委托与单一模型绑定（EF 官方约束，跨模型执行抛
     // InvalidOperationException），同上下文类型跨 provider（InMemory 测试/SQLite/PG
     // 生产）模型实例不同，按模型分持。查找为引用哈希，相对表达式翻译可忽略。
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+    // R14：ConcurrentDictionary 强引用键改为 ConditionalWeakTable——多租户/多
+    // DbContextOptions 场景下每个 options 生成独立 IModel，静态字典会让历史模型及其
+    // 全部元数据永不回收；弱引用表随 service provider 一同释放。
+    private static readonly ConditionalWeakTable<
         Microsoft.EntityFrameworkCore.Metadata.IModel,
-        Func<EventLogDbContext, string, CancellationToken, Task<long?>>> MaxStreamVersionByModel = new();
+        CompiledMaxQuery> MaxStreamVersionByModel = new();
+
+    /// <summary>编译查询委托的容器（ConditionalWeakTable 的值必须是引用类型）。</summary>
+    private sealed class CompiledMaxQuery
+    {
+        public required Func<EventLogDbContext, string, CancellationToken, Task<long?>> Query { get; init; }
+    }
 
     private async ValueTask<long> GetActualStreamVersionAsync(string streamName, CancellationToken cancellationToken)
     {
@@ -365,11 +473,14 @@ public abstract class EventLogDbContext(
         // A5（S1 轮）：改走按模型缓存的编译查询委托（形状恒定，参数化 streamName）。
         // MIG-008：ConfigureAwait 补齐——原裸 await 被旧 G12 文件级差值计数漏检（该文件
         // 多余 CA 名额抵消），节点级 SourceCodeGuardTests 守卫 4 抓出（偏差账本同步销账）。
-        var compiled = MaxStreamVersionByModel.GetOrAdd(Model, static _ =>
-            EF.CompileAsyncQuery<EventLogDbContext, string, long?>(
-                (ctx, name, ct) => ctx.Events
-                    .Where(e => e.StreamName == name)
-                    .Max(e => (long?)e.StreamVersion)));
+        var compiled = MaxStreamVersionByModel.GetValue(Model, static _ =>
+            new CompiledMaxQuery
+            {
+                Query = EF.CompileAsyncQuery<EventLogDbContext, string, long?>(
+                    (ctx, name, ct) => ctx.Events
+                        .Where(e => e.StreamName == name)
+                        .Max(e => (long?)e.StreamVersion)),
+            }).Query;
         return await compiled(this, streamName, cancellationToken)
             .ConfigureAwait(false)
             ?? -1;
@@ -399,23 +510,10 @@ public abstract class EventLogDbContext(
     /// 取消后同 scope 复用 context（违背正常生命周期：取消即应弃置 scope）。v4.0 统一收敛。
     /// </para>
     /// </remarks>
-    private void DetachAddedEvents()
+    private static void DetachAddedEvents(IReadOnlyList<EntityEntry<StoredEvent>> added)
     {
-        // v64 P2：改无条件 Detach——v62 在成功路径复用本方法时是 no-op（SaveChanges 成功
-        // 后本批 StoredEvent 已 Added→Unchanged，Added 过滤匹配零条，Unchanged 线性累积原样
-        // 存在）。本 context 对 StoredEvent 的读路径全 AsNoTracking/投影，跟踪条目只可能来自
-        // append 路径，无条件安全（失败路径条目保持 Added，同样被覆盖）
-        foreach (var entry in ChangeTracker.Entries<StoredEvent>())
-        {
+        foreach (var entry in added)
             entry.State = EntityState.Detached;
-        }
-
-        // v34 P3：allocator 无状态过滤——Unchanged（SaveChanges 成功后）与 Modified 均为
-        // 待清幽灵态；Added 仅存在于 Reserver 内部 SaveChanges 之前，其异常分支已自行 Detach
-        foreach (var entry in ChangeTracker.Entries<EventLogGlobalPositionAllocator>())
-        {
-            entry.State = EntityState.Detached;
-        }
     }
 
     /// <summary>

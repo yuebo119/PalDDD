@@ -91,6 +91,16 @@ public sealed class ProjectionCheckpoint
         Revision++;
     }
 
+    /// <summary>R12 C-02：续租——只更新租约/更新时间，不推进 Revision（保持调用方令牌有效）。</summary>
+    internal void RenewLease(DateTimeOffset now, TimeSpan processingTimeout)
+    {
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+
+        UpdatedAt = now;
+        LeaseUntil = now + processingTimeout;
+    }
+
     public void MarkCompleted(DateTimeOffset completedAt)
     {
         Status = ProjectionCheckpointStatus.Completed;

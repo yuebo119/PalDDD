@@ -12,20 +12,38 @@
 //   - 通过 DI opt-in 注册：AddPalPostgreSqlOutboxNotifier()。
 //   - 收到 NOTIFY 后触发 OutboxBatchProcessor.ProcessBatchAsync() — 复用现有批处理逻辑。
 //
-// PostgreSQL 端配置：
-//   CREATE OR REPLACE FUNCTION notify_outbox() RETURNS trigger AS $$
+// PostgreSQL 端配置（PostgreSQL 10+ transition tables；每条 INSERT/UPDATE 语句最多一次通知）：
+//   CREATE OR REPLACE FUNCTION notify_outbox_insert() RETURNS trigger AS $$
 //   BEGIN
-//     PERFORM pg_notify('outbox_channel', 'new_message');
-//     RETURN NEW;
+//     IF EXISTS (SELECT 1 FROM new_rows WHERE status = 0) THEN
+//       PERFORM pg_notify('outbox_channel', 'new_message');
+//     END IF;
+//     RETURN NULL;
 //   END;
 //   $$ LANGUAGE plpgsql;
 //
-//   CREATE TRIGGER outbox_notify
-//     AFTER INSERT OR UPDATE ON outbox_messages
-//     -- status 列为 INT（三十八轮统一：Pending=0）——PG 无 integer=text 运算符，
-//     -- 必须写数字字面量（v8 评审 P2-1：旧示例 'Pending' 照抄即建坏触发器）
-//     FOR EACH ROW WHEN (NEW.status = 0)
-//     EXECUTE FUNCTION notify_outbox();
+//   CREATE OR REPLACE FUNCTION notify_outbox_update() RETURNS trigger AS $$
+//   BEGIN
+//     -- 只在 Dead/Processed -> Pending 的重新入队时通知；租约 UPDATE（仅 locked_until/
+//     -- next_attempt_at 变化）不触发，避免批量租约放大成 N 次 pg_notify。
+//     IF EXISTS (
+//       SELECT 1 FROM new_rows n JOIN old_rows o ON n.id = o.id
+//       WHERE n.status = 0 AND o.status <> 0) THEN
+//       PERFORM pg_notify('outbox_channel', 'new_message');
+//     END IF;
+//     RETURN NULL;
+//   END;
+//   $$ LANGUAGE plpgsql;
+//
+//   CREATE TRIGGER outbox_notify_insert
+//     AFTER INSERT ON outbox_messages
+//     REFERENCING NEW TABLE AS new_rows
+//     FOR EACH STATEMENT EXECUTE FUNCTION notify_outbox_insert();
+//
+//   CREATE TRIGGER outbox_notify_update
+//     AFTER UPDATE ON outbox_messages
+//     REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+//     FOR EACH STATEMENT EXECUTE FUNCTION notify_outbox_update();
 // ─────────────────────────────────────────────────────────────
 
 using Microsoft.Extensions.DependencyInjection;
@@ -43,11 +61,13 @@ namespace PalDDD.Dapper.PostgreSql;
 /// </summary>
 /// <remarks>
 /// 注册方式（在 Program.cs 中）：
+///   services.AddPalOutbox();                    // 注册 OutboxBatchProcessor（本服务的作用域依赖）
 ///   services.AddPalNpgsqlDataSource(connStr);
 ///   services.AddPalPostgreSqlOutboxNotifier();
 ///
-/// ⚠️ 必须已在 DI 中注册 <see cref="OutboxProcessor"/>（默认轮询器）。
-///   此 Notifier 将替换其轮询延迟效果——收到 NOTIFY 后立即触发批处理。
+/// ⚠️ 必须已通过 <c>AddPalOutbox()</c> 注册 <see cref="OutboxBatchProcessor"/>
+///   （Scoped；默认轮询器随该入口一并注册）。此 Notifier 收到 NOTIFY 后立即触发
+///   批处理以降低轮询延迟，默认轮询器仍可作为兜底保留。
 /// </remarks>
 public sealed class PostgreSqlOutboxNotifier : BackgroundService
 {

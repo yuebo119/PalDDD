@@ -142,6 +142,14 @@ public abstract class InboxDbContext(
                 if (record is null)
                     return null;
             }
+            catch (Exception)
+            {
+                // R12 C-05：非 DbUpdateException/OCE 等异常（请求取消最常见）也必须 Detach——
+                // 原实现只处理 DbUpdateException，Added 实体滞留 ChangeTracker，同 scope
+                // 下一次 SaveChanges 会把从未成功认领的记录作为 Processing 行插入。
+                Entry(record).State = EntityState.Detached;
+                throw;
+            }
         }
 
         if (record.Status == InboxStatus.Processed)
@@ -169,6 +177,41 @@ public abstract class InboxDbContext(
         // 的 SQL WHERE status 守卫在同窗口拒绝。对齐守卫集：排除 Processed（Pending/
         // Failed/Processing 均可抢）；超时复核不可下推（ITM-261 有序比较限制），读取时
         // 已判定 + 令牌等值守卫覆盖本场景。令牌等值可翻译（ITM-261：等值可译）。
+        // R12 H2：非关系型 provider（InMemory）不支持 ExecuteUpdate。预 SELECT 路径已
+        // 判定该行可抢（未 Processed 且租约已过），此处用跟踪实体 + SaveChanges 完成
+        // 抢占；ProcessingStartedAt 是并发令牌，冲突时按"他人已推进"让位。状态守卫在
+        // 跟踪查询上复核，避免把另一消费者已终态化的行翻回 Processing。
+        if (!Database.IsRelational())
+        {
+            var current = await InboxMessages.SingleOrDefaultAsync(x => x.Id == record.Id, ct).ConfigureAwait(false);
+            if (current is null || current.Status == InboxStatus.Processed)
+            {
+                if (current is not null)
+                    Entry(current).State = EntityState.Detached;
+                return null;
+            }
+
+            current.Status = InboxStatus.Processing;
+            current.Attempts++;
+            current.ProcessingStartedAt = now;
+            current.LastError = null;
+            try
+            {
+                await SaveChangesAsync(ct).ConfigureAwait(false);
+                return current;
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                Entry(current).State = EntityState.Detached;
+                return null;
+            }
+            catch (Exception)
+            {
+                Entry(current).State = EntityState.Detached;
+                throw;
+            }
+        }
+
         var originalStartedAt = record.ProcessingStartedAt;
         var affected = await InboxMessages
             .Where(x => x.Id == record.Id
@@ -249,9 +292,10 @@ public abstract class InboxDbContext(
             e.Property(x => x.ConsumerName).HasMaxLength(256);
             e.Property(x => x.LastError).HasMaxLength(2048);
             e.Property(x => x.ProcessingStartedAt).IsConcurrencyToken();
-            e.HasIndex(x => x.ProcessedAt);
-            e.HasIndex(x => x.Status);
             e.HasIndex(x => new { x.Status, x.ProcessingStartedAt });
+            // 保留清理按 processed_at 分批删除 Processed 行；复合索引避免全表扫描加排序。
+            // 不再单独建 (Status)/(ProcessedAt)：前者是复合索引前缀，后者无状态过滤的读者。
+            e.HasIndex(x => new { x.Status, x.ProcessedAt });
         });
     }
 
@@ -269,6 +313,30 @@ public abstract class InboxDbContext(
 
     private async ValueTask SaveTerminalStateAsync(InboxMessage message, CancellationToken ct)
     {
+        // R12 H2：InMemory 不支持 ExecuteUpdate——跟踪实体 SaveChanges；ProcessingStartedAt
+        // 并发令牌拒绝被抢占后的旧持有者。调用方（MarkProcessed/MarkFailed）已在
+        // AttachIfDetached 后修改字段，此处直接保存。
+        if (!Database.IsRelational())
+        {
+            if (Entry(message).State == EntityState.Detached)
+                InboxMessages.Update(message);
+            try
+            {
+                await SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                _logger?.Warning($"Inbox: terminal state for message {message.MessageId} (consumer {message.ConsumerName}) was overwritten by a concurrent processor; the record is detached without persisting the local terminal state.");
+            }
+            catch (Exception)
+            {
+                Entry(message).State = EntityState.Detached;
+                throw;
+            }
+            Entry(message).State = EntityState.Detached;
+            return;
+        }
+
         // F1b 修复（第五十四轮片4，2026-09-19）：终态写从 SaveChanges（仅并发令牌）改
         // ExecuteUpdate 带 DB 端 status=Processing 守卫——原实现的守卫是内存态
         // message.Status（MarkProcessedAsync :168 前置检查），持有过期引用的调用方可把
@@ -276,20 +344,28 @@ public abstract class InboxDbContext(
         // SqlTemplates :226/:235 与 PalOrmInboxStore :190/:224 的 WHERE 形态。
         // 令牌等值可翻译（ITM-261）；affected=0 = 行已被并发推进，Detach 让位（与原
         // DbUpdateConcurrencyException 分支同语义，Warning 保留）。
-        var affected = await InboxMessages
-            .Where(x => x.Id == message.Id
-                && x.ProcessingStartedAt == message.ProcessingStartedAt
-                && x.Status == InboxStatus.Processing)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(x => x.Status, message.Status == InboxStatus.Processed
-                    ? InboxStatus.Processed
-                    : InboxStatus.Failed)
-                .SetProperty(x => x.ProcessedAt, message.ProcessedAt)
-                .SetProperty(x => x.LastError, message.LastError),
-                ct).ConfigureAwait(false);
-
-        // v25 P3 行为族 B6 语义保留：终态路径后 Detach（不残留 ChangeTracker）
-        Entry(message).State = EntityState.Detached;
+        int affected;
+        try
+        {
+            affected = await InboxMessages
+                .Where(x => x.Id == message.Id
+                    && x.ProcessingStartedAt == message.ProcessingStartedAt
+                    && x.Status == InboxStatus.Processing)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.Status, message.Status == InboxStatus.Processed
+                        ? InboxStatus.Processed
+                        : InboxStatus.Failed)
+                    .SetProperty(x => x.ProcessedAt, message.ProcessedAt)
+                    .SetProperty(x => x.LastError, message.LastError),
+                    ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            // R12 C-05：ExecuteUpdate 失败（取消/连接断）也必须 Detach——原实现
+            // 仅成功路径分离，异常时实体滞留 ChangeTracker，后续 SaveChanges 可能
+            // 把本地终态写回。
+            Entry(message).State = EntityState.Detached;
+        }
 
         if (affected == 0)
         {

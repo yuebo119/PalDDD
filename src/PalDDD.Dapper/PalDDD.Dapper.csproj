@@ -4,7 +4,7 @@
     <RootNamespace>PalDDD.Dapper</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
-    <Description>Pal.DDD Dapper 持久化适配器（调用点级 NativeAOT：`[module:DapperAot]` 已启用，34 调用点拦截器接管，三方言实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持）— 含 Transaction/EventLog/Projection/Repository</Description>
+    <Description>Pal.DDD Dapper 持久化适配器（调用点级 NativeAOT：`[module:DapperAot]` 已启用，34 调用点拦截器接管，三方言实测 33/33；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持）— 含 Transaction/EventLog/Projection/Repository</Description>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
     <NoWarn>$(NoWarn);CA1001;CA2007;CA1062;CA2100;CA2000;CA1849;CA2016;CS1591;CS1573;IL3058;CA2255</NoWarn>
@@ -25,9 +25,15 @@
   <ItemGroup>
     <PackageReference Include="Dapper" />
     <PackageReference Include="Dapper.AOT" />
-    <PackageReference Include="Microsoft.Data.Sqlite" />
-    <PackageReference Include="Npgsql" />
-    <PackageReference Include="MySqlConnector" />
+    <!-- 契约盘点 2026-10-21：三驱动引用是 DapperBulkCopy 的实现需要（PG COPY 的
+         NpgsqlBinaryImporter / MySQL BulkCopy / SQLite 逐条路径均为 provider 原生 API），
+         但这些是**实现私有依赖**：PrivateAssets="all" 使其不进 nuspec、不流向消费方。
+         基础包仍可编译；消费方只获得自己显式引用的驱动或方言包（PalDDD.Dapper.PostgreSql
+         等）带来的单一驱动。PG-only 消费方不再被迫携带 MySQL/SQLite 驱动；
+         代价是直接用基础包且依赖传递驱动的调用方需显式声明所用驱动（v5.0 依赖图说明）。 -->
+    <PackageReference Include="Microsoft.Data.Sqlite" PrivateAssets="all" />
+    <PackageReference Include="Npgsql" PrivateAssets="all" />
+    <PackageReference Include="MySqlConnector" PrivateAssets="all" />
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
     <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\PalDDD.EventLog\PalDDD.EventLog.csproj" />

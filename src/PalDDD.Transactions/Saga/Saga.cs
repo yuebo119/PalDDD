@@ -60,15 +60,22 @@ public enum CompensationPolicy
 /// </remarks>
 public abstract class Saga<TState> where TState : SagaState, new()
 {
-    /// <summary>已注册的步骤 — Dictionary 确保 O(1) 按键查找，替代 List.Find 的 O(n)</summary>
-    private readonly Dictionary<string, SagaStep> _stepsByKey = [];
+    /// <summary>已注册的步骤 — 以 (状态名, 事件名) 元组为键，查找期零字符串拼接。
+    /// 持久化 key（"State|EventName"）在注册期固化到 <see cref="SagaStepRegistration"/>，
+    /// 仍用于 ExecutedStepKeys/StepStartedAt 与观察者事件，线格式不变。</summary>
+    private readonly Dictionary<(string State, string? EventName), SagaStepRegistration> _stepsByKey = [];
+
+    /// <summary>持久化 key 索引——动态路由按完整 key 查找时使用（仅注册期写入）。</summary>
+    private readonly Dictionary<string, SagaStep> _stepsByStringKey = new(StringComparer.Ordinal);
 
     /// <summary>保持原始注册顺序（v29 P3 勘正：注册顺序由本 List 维护——Dictionary 枚举序无保证）。
     /// v39 P3 勘正用途声明：本 List 供超时检测（<see cref="TimeoutDetector"/>）与
     /// <see cref="Steps"/> 消费——补偿顺序由 <see cref="SagaState.ExecutedStepKeys"/> 承载，非本 List</summary>
-    private readonly List<(string Key, SagaStep Step)> _stepsInOrder = [];
+    private readonly List<SagaStepRegistration> _stepsInOrder = [];
 
-    private FrozenDictionary<string, SagaStep>? _frozen;
+    private FrozenDictionary<(string State, string? EventName), SagaStepRegistration>? _frozen;
+    private FrozenDictionary<string, SagaStep>? _frozenByStringKey;
+    private IReadOnlyList<(string Key, SagaStep Step)>? _stepsView;
 
     // ═══════════════════════════════════════════════════════════════
     // 策略组件（内部组合，非多态替换）
@@ -79,13 +86,24 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
     // v65 P3（策略快照声明）：_compensation 惰性创建一次——构造时捕获当时的
     // CompensationPolicy（值快照）；此后修改 CompensationPolicy 不会传导到已缓存的
-    // SagaCompensation 实例（其内部保留旧策略）。_stepsByKey 按引用捕获，注册期新增步骤可见，
-    // 但须在首次 ProcessEventAsync 前完成注册（见 When 的启动期单线程约束）。
+    // SagaCompensation 实例（其内部保留旧策略）。2026-10-21：查找表改为冻结索引，
+    // Register 会同时失效 _compensation/_timeoutDetector，注册期新增步骤仍可见；
+    // 支持范围不变，仍须在首次 ProcessEventAsync 前完成注册（见 When 的启动期单线程约束）。
     private SagaCompensation<TState> Compensation
-        => _compensation ??= new(CompensationPolicy, _stepsByKey);
+        => _compensation ??= new(CompensationPolicy, GetFrozenByStringKey());
 
     private SagaTimeoutDetector<TState> TimeoutDetector
         => _timeoutDetector ??= new(_stepsInOrder);
+
+    /// <summary>计算状态的下一次超时检查时间（M1 回填/测试入口）。</summary>
+    internal DateTimeOffset? ComputeNextCheckAt(TState state)
+        => TimeoutDetector.ComputeNextCheckAt(state);
+
+    /// <summary>写入状态时同步 NextCheckAt；活动态无待检查超时时写哨兵，终态清空。</summary>
+    private void UpdateNextCheckAt(TState state)
+        => state.NextCheckAt = state.Status is SagaStatus.Active or SagaStatus.AwaitingHumanDecision
+            ? TimeoutDetector.ComputeNextCheckAt(state) ?? SagaState.NoPendingTimeout
+            : null;
 
     // ═══════════════════════════════════════════════════════════════
     // 策略配置
@@ -167,7 +185,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
     protected virtual void OnRetryDelayComputationFailed(Exception ex) { }
 
     /// <summary>获取所有已注册的步骤（按注册顺序）</summary>
-    protected IReadOnlyList<(string Key, SagaStep Step)> Steps => _stepsInOrder;
+    /// <remarks>2026-10-21：注册项改为内部结构后按需投影一次并缓存，注册时失效；
+    /// 该属性不在热路径，缓存避免调用方每次触发交付投影。</remarks>
+    protected IReadOnlyList<(string Key, SagaStep Step)> Steps
+        => _stepsView ??= _stepsInOrder.Select(static r => (r.Key, r.Step)).ToArray();
 
     // ═══════════════════════════════════════════════════════════════
     // Saga 管理器（中断恢复 + 子 Saga 执行）
@@ -175,7 +196,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
     /// <summary>
     /// Saga 管理器——提供中断恢复和子 Saga 执行能力。<br/>
-    /// 可由 DI 注入或手动设置。若为 null，ChildSagaStep 和恢复流程将不可用。<br/>
+    /// 可由 DI 注入或手动设置。若为 null，<c>ChildSagaStep</c> 仍会由临时
+    /// <see cref="DefaultSagaManager"/> 执行；但子 Saga 内含 <see cref="InterruptStep"/> 时，
+    /// 决策条目注册到该临时实例并在返回时丢弃（决策不可达，Saga 滞留
+    /// <see cref="SagaStatus.AwaitingHumanDecision"/>）。恢复流程需要非 null 的 manager。<br/>
     /// ⚠️ <b>中断后果（P3 声明·十七轮；三十四轮兜底落地）</b>：<see cref="InterruptStep"/> 执行时若本属性为 null
     /// （或非 <see cref="DefaultSagaManager"/> 类型），中断条目无处注册——该 Saga 状态已被置为
     /// <see cref="SagaStatus.AwaitingHumanDecision"/> 且无人能消费后续人工决策，将<b>滞留</b>在中断态。
@@ -215,29 +239,38 @@ public abstract class Saga<TState> where TState : SagaState, new()
     /// 并发调用可能导致状态不一致或 FrozenDictionary 构建时的数据损坏。
     /// </remarks>
     internal void When(string state, Type eventType, SagaStep step)
-    {
-        var key = MakeKey(state, eventType);
-        // P3 修复（八轮）：重复注册同 key 时先移除旧步骤再追加——否则 _stepsInOrder
-        // 残留已作废步骤（补偿/超时扫描会执行它），且顺序列表与 _stepsByKey 不一致
-        _stepsInOrder.RemoveAll(existing => existing.Key == key);
-        _stepsByKey[key] = step;             // O(1) 查找
-        _stepsInOrder.Add((key, step));       // 保持补偿顺序
-        _frozen = null;
-    }
+        => Register(state, eventType, step);
 
     /// <summary>定义状态转换——泛型版本，消除 typeof(TEvent) 样板</summary>
     protected void When<TEvent>(string state, SagaStep step)
-        => When(state, typeof(TEvent), step);
+        => Register(state, typeof(TEvent), step);
 
     /// <summary>定义状态转换（简化版 — 不指定事件类型，任何事件触发）</summary>
     protected internal void When(string state, SagaStep step)
+        => Register(state, null, step);
+
+    /// <summary>
+    /// 注册（或覆盖）一个步骤。key 在注册期固化，运行期按 (state, eventType) 元组查找，
+    /// 不再为每个事件拼接 "State|EventName" 字符串。重复注册同（状态, 事件）时先移除旧项，
+    /// 防止超时扫描执行已作废步骤。
+    /// </summary>
+    private void Register(string state, Type? eventType, SagaStep step)
     {
-        var key = MakeKey(state, null);
-        // P3 修复（八轮）：同上——重复注册同 key 时移除旧步骤，避免补偿/超时执行作废步骤
-        _stepsInOrder.RemoveAll(existing => existing.Key == key);
-        _stepsByKey[key] = step;             // O(1) 查找
-        _stepsInOrder.Add((key, step));       // 保持补偿顺序
+        var key = SagaKey.Make(state, eventType);
+        // 事件段沿用旧字符串键的 Type.Name 语义：ChildSagaInputEvent 是嵌套泛型类型，
+        // 父/子 Saga 的泛型实例不同但 Name 相同，按 Type 引用匹配会断开父子路由。
+        var eventName = eventType?.Name;
+        var registration = new SagaStepRegistration(state, eventName, key, step);
+        _stepsInOrder.RemoveAll(existing => existing.State == state && existing.EventName == eventName);
+        _stepsByKey[(state, eventName)] = registration;
+        _stepsByStringKey[key] = step;
+        _stepsInOrder.Add(registration);
         _frozen = null;
+        _frozenByStringKey = null;
+        _stepsView = null;
+        // 策略组件持有查找表快照：注册后重建，保持"注册期单线程、首次执行前完成"契约下的可见性。
+        _compensation = null;
+        _timeoutDetector = null;
     }
 
     /// <summary>注册动态路由步骤——运行时根据状态决定下一步 key。</summary>
@@ -271,14 +304,16 @@ public abstract class Saga<TState> where TState : SagaState, new()
         ArgumentNullException.ThrowIfNull(@event);
 
         var eventType = @event.GetType();
-        var requestedStepKey = MakeKey(current.CurrentState, eventType);
 
-        // 查找实际命中的注册步骤：精确匹配使用 state|event，通配匹配使用 state。
-        var match = FindStep(current, requestedStepKey);
+        // 查找实际命中的注册步骤：精确匹配 (state, eventType)，通配匹配 (state, null)。
+        // 2026-10-21：元组查找替代 "State|EventName" 字符串构造，每事件少一次字符串分配。
+        var match = FindStep(current, eventType);
         if (match is null)
             return current; // P3-SRC-101 宽容语义；注：此路径发生在 SafeObserveStarted 前，观察端零观测（v17 声明的不对称，刻意保留以兼容无匹配静默跳过的既有消费形态）
 
-        var (stepKey, step) = match.Value;
+        var registration = match.Value;
+        var stepKey = registration.Key;
+        var step = registration.Step;
         var wasCompleted = current.Status == SagaStatus.Completed;
 
         // 记录实际命中步骤的开始时间，用于精确超时计算。
@@ -290,6 +325,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
             startedAt = Clock.GetUtcNow();
             current.StepStartedAt[stepKey] = startedAt;
         }
+        // M1：当前步骤开始后立即刷新到期时间；步骤返回的新状态在 RecordExecutedStep 再算一次。
+        UpdateNextCheckAt(current);
 
         var observer = SagaExecutionObserver.Current;
 
@@ -324,7 +361,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         }
     }
 
-    private static void RecordExecutedStep(TState current, TState result, string stepKey, DateTimeOffset startedAt)
+    private void RecordExecutedStep(TState current, TState result, string stepKey, DateTimeOffset startedAt)
     {
         // R3（P1-3）：TryAdd 单哈希查找替代 ContainsKey+索引器双查（语义等价：已存在不覆盖）
         result.StepStartedAt.TryAdd(stepKey, startedAt);
@@ -341,10 +378,17 @@ public abstract class Saga<TState> where TState : SagaState, new()
             foreach (var key in current.ExecutedStepKeys)
                 if (existing.Add(key))
                     result.ExecutedStepKeys.Add(key);
+            // R14：同步合并前序步骤开始时间——原实现只 TryAdd 当前步骤，跨实例路径下前序
+            // 时间戳全部丢失 → ComputeNextCheckAt 返回 null → NextCheckAt 写哨兵，超时兜底静默关闭。
+            foreach (var pair in current.StepStartedAt)
+                result.StepStartedAt.TryAdd(pair.Key, pair.Value);
         }
 
         if (!result.ExecutedStepKeys.Contains(stepKey))
             result.ExecutedStepKeys.Add(stepKey);
+
+        // M1：步骤完成后的状态可能已切换；按新状态/新步骤重算到期时间，终态写 null。
+        UpdateNextCheckAt(result);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -622,6 +666,21 @@ public abstract class Saga<TState> where TState : SagaState, new()
                     resolved, childState, childEvent, token).ConfigureAwait(false);
                 var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
 
+                // R14 F3：子 Saga 停在 AwaitingHumanDecision（含 InterruptStep 的子流程）时
+                // 既未完成也未失败；原实现直接 ApplyOutput + RecordExecutedStep，把父步骤记为
+                // 成功并继续后续步骤——静默越过未获人工批准的审批子流程。子 Saga 的中断条目
+                // 挂在 manager 内且子状态不持久化，父继续后无法再恢复它，故必须失败可见。
+                // 只拦 AWD：正常成功的子 Saga 保持 Active（终态由用户回调决定），不能按
+                // Completed 判定，否则误伤现有 ChildSaga 成功路径。
+                if (finalChildState.Status == SagaStatus.AwaitingHumanDecision)
+                {
+                    throw new InvalidOperationException(
+                        $"Child saga step '{stepKey}' cannot proceed: child saga '{resolved.GetType().Name}' "
+                        + $"is AwaitingHumanDecision (parent saga '{current.SagaId}'). Human-in-the-loop "
+                        + "InterruptStep is not supported inside a ChildSagaStep; model the approval at the "
+                        + "parent saga level or run the child saga as an independent top-level saga.");
+                }
+
                 // Apply child output back to parent
                 childStep.ApplyOutput(current, finalChildState);
 
@@ -651,13 +710,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // A8（S1 轮，2026-10-15）：非泛型查找静态缓存一次 + MakeGenericMethod 结果按子状态
         // 类型缓存——原每 attempt 一次 GetMethod + MakeGenericMethod + Invoke，查找与构造
         // 部分按类型稳定对应，缓存消重复成本（Invoke 语义不变）。
-#pragma warning disable S3011 // 子 Saga 解析是 AOT 非目标反射路径（RequiresUnreferencedCode/RequiresDynamicCode 已声明）
-        var method = typeof(Saga<TState>).GetMethod(
-            nameof(ResolveChildSaga),
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
-            null, Type.EmptyTypes, null);
-#pragma warning restore S3011
-
+        // 2026-10-20：GetMethod 移入静态字段（原每 attempt 仍重做一次查找）。
+        var method = s_resolveChildSagaMethod;
         if (method is not null)
         {
             var generic = ResolveChildSagaGenericByStateType.GetOrAdd(childStateType, static (t, m) => m.MakeGenericMethod(t), method);
@@ -666,6 +720,14 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
         return null;
     }
+
+#pragma warning disable S3011 // 子 Saga 解析是 AOT 非目标反射路径（RequiresUnreferencedCode/RequiresDynamicCode 已声明）
+    private static readonly System.Reflection.MethodInfo? s_resolveChildSagaMethod =
+        typeof(Saga<TState>).GetMethod(
+            nameof(ResolveChildSaga),
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
+            null, Type.EmptyTypes, null);
+#pragma warning restore S3011
 
     // A8（S1 轮）：MakeGenericMethod 结果按子状态类型缓存（Saga<TState> 每闭合泛型一份，
     // ChildSaga 每 attempt 原各一次构造）。
@@ -817,8 +879,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 $"DynamicStep '{step.Name}' 路由函数执行失败", routeFailures);
         }
 
-        // 在已注册步骤中查找
-        var dict = GetFrozen();
+        // 在已注册步骤中查找（动态路由以完整 key 为输入，走字符串索引）
+        var dict = GetFrozenByStringKey();
         if (!dict.TryGetValue(targetKey, out var routedStep))
         {
             // P3-SRC-101 设计意图声明：未注册 key 静默返回 current 为刻意宽容——对比下方
@@ -909,8 +971,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(@event);
 
-        var stepKey = MakeKey(current.CurrentState, @event.GetType());
-        var match = FindStep(current, stepKey);
+        var match = FindStep(current, @event.GetType());
         if (match is null) return current;
 
         // 修复覆盖残留（ITM-069 只守卫了 ProcessEventAsync 路由路径）：本入口同样
@@ -922,18 +983,16 @@ public abstract class Saga<TState> where TState : SagaState, new()
         return (TState)await match.Value.Step.ExecuteAsync(current, @event, ct).ConfigureAwait(false);
     }
 
-    /// <summary>查找匹配步骤（不执行），返回实际命中的注册键。</summary>
-    private (string Key, SagaStep Step)? FindStep(TState current, string stepKey)
+    /// <summary>查找匹配步骤（不执行）：先精确匹配 (state, eventType)，再通配 (state, null)。</summary>
+    private SagaStepRegistration? FindStep(TState current, Type eventType)
     {
         var dict = GetFrozen();
 
-        // 先精确匹配（state + eventType），再按状态通配匹配。
-        if (dict.TryGetValue(stepKey, out var step))
-            return (stepKey, step);
+        if (dict.TryGetValue((current.CurrentState, eventType.Name), out var exact))
+            return exact;
 
-        var wildcardKey = MakeKey(current.CurrentState, null);
-        return dict.TryGetValue(wildcardKey, out step)
-            ? (wildcardKey, step)
+        return dict.TryGetValue((current.CurrentState, null), out var wildcard)
+            ? wildcard
             : null;
     }
 
@@ -986,9 +1045,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
     // 内部辅助
     // ═══════════════════════════════════════════════════════════════
 
-    private static string MakeKey(string state, Type? eventType)
-        => SagaKey.Make(state, eventType);
+    private FrozenDictionary<(string State, string? EventName), SagaStepRegistration> GetFrozen()
+        => _frozen ??= _stepsByKey.ToFrozenDictionary();
 
-    private FrozenDictionary<string, SagaStep> GetFrozen()
-        => _frozen ??= _stepsByKey.ToFrozenDictionary(StringComparer.Ordinal);
+    /// <summary>持久化 key 索引（动态路由用）——注册期写入，首次使用时冻结。</summary>
+    private FrozenDictionary<string, SagaStep> GetFrozenByStringKey()
+        => _frozenByStringKey ??= _stepsByStringKey.ToFrozenDictionary(StringComparer.Ordinal);
 }

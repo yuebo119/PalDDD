@@ -22,7 +22,8 @@ public interface IDomainEventDispatcher
 /// <summary>迭代式领域事件派发器配置</summary>
 public sealed class DomainEventDispatcherOptions
 {
-    /// <summary>最大迭代次数 — 防止无限事件循环（默认 1000）</summary>
+    /// <summary>单次派发的初始事件数上限 — 超出即拒绝派发（默认 1000）。
+    /// 注意：只比较初始批大小，不是循环迭代上限（2026-10-21 勘正）。</summary>
     public int MaxIterations { get; set; } = 1000;
 }
 
@@ -37,11 +38,13 @@ public sealed class DomainEventDispatcherOptions
 /// </remarks>
 internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
 {
-    private readonly FrozenDictionary<Type, ImmutableArray<IEventHandler>> _handlers;
+    private FrozenDictionary<Type, ImmutableArray<IEventHandler>>? _handlers;
+    private readonly IEnumerable<IEventHandler> _handlersSource;
+    private readonly Lock _handlersLock = new();
     private readonly DomainEventDispatcherOptions _options;
     private readonly IPalLogger<IterativeDomainEventDispatcher>? _logger;
 
-    /// <summary>构造函数 — 注入所有 IEventHandler，按 EventType 分组索引</summary>
+    /// <summary>构造函数 — 保存处理器源，首次派发时再分组索引（未派发事件的 scope 零建表成本）。</summary>
     public IterativeDomainEventDispatcher(
         IEnumerable<IEventHandler> handlers,
         DomainEventDispatcherOptions? options = null,
@@ -49,15 +52,34 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
     {
         ArgumentNullException.ThrowIfNull(handlers);
 
-        _handlers = handlers
-            .GroupBy(h => h.EventType)
-            .ToFrozenDictionary(g => g.Key, g => g.ToImmutableArray());
+        _handlersSource = handlers;
         _options = options ?? new DomainEventDispatcherOptions();
         // ITM-166 修复：MaxIterations 非正数会在下方循环中形成 0 次迭代或负循环
         // （for 条件恒 false/语义错乱），事件静默不派发——入口 fail-fast。
         if (_options.MaxIterations <= 0)
             throw new ArgumentOutOfRangeException(nameof(options), "DomainEventDispatcherOptions.MaxIterations must be greater than zero.");
         _logger = logger;
+    }
+
+    /// <summary>处理器映射（首次派发时构建一次；scope 内后续派发复用）。</summary>
+    private FrozenDictionary<Type, ImmutableArray<IEventHandler>> GetHandlers()
+    {
+        var handlers = Volatile.Read(ref _handlers);
+        if (handlers is not null)
+            return handlers;
+
+        lock (_handlersLock)
+        {
+            handlers = _handlers;
+            if (handlers is not null)
+                return handlers;
+
+            handlers = _handlersSource
+                .GroupBy(h => h.EventType)
+                .ToFrozenDictionary(g => g.Key, g => g.ToImmutableArray());
+            Volatile.Write(ref _handlers, handlers);
+            return handlers;
+        }
     }
 
     public async ValueTask DispatchAsync(IReadOnlyList<Core.DomainEvent> events, CancellationToken ct = default)
@@ -123,7 +145,7 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
 
         try
         {
-            if (_handlers.TryGetValue(@event.GetType(), out var handlers))
+            if (GetHandlers().TryGetValue(@event.GetType(), out var handlers))
             {
                 foreach (var h in handlers)
                 {

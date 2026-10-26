@@ -58,6 +58,24 @@ public sealed class ExceptionMiddlewareTests
     }
 
     [Test]
+    public async Task InvokeAsync_BadHttpRequestException413_PreservesStatusCode()
+    {
+        // R12 C-12 回归锁：宿主请求体超限抛 413 时不得被改写成 500。
+        var middleware = new ExceptionMiddleware(
+            next: _ => throw new BadHttpRequestException(
+                "Request body too large.", StatusCodes.Status413PayloadTooLarge),
+            logger: NullPalLogger<ExceptionMiddleware>.Instance);
+
+        var context = CreateContext();
+        await middleware.InvokeAsync(context);
+
+        await Assert.That(context.Response.StatusCode).IsEqualTo(StatusCodes.Status413PayloadTooLarge);
+        var body = ReadBody(context);
+        await Assert.That(body).Contains("Content Too Large");
+        await Assert.That(body).Contains("413");
+    }
+
+    [Test]
     public async Task InvokeAsync_UnhandledException_Returns500WithGenericProblemDetails()
     {
         var middleware = new ExceptionMiddleware(

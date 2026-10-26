@@ -135,7 +135,8 @@ public sealed class DapperStoreTests
                 trace_parent    TEXT,
                 trace_state     TEXT
             );
-            CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until);
+            CREATE INDEX idx_outbox_due ON outbox_messages(next_attempt_at, created_at) WHERE status = 0;
+            CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until);
 
             CREATE TABLE inbox_messages (
                 id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,6 +161,7 @@ public sealed class DapperStoreTests
                 error_at      TEXT,
                 version       INTEGER NOT NULL DEFAULT 0,
                 saga_data     TEXT,
+                next_check_at TEXT,
                 leased_by     TEXT,
                 leased_until  TEXT
             );
@@ -167,6 +169,7 @@ public sealed class DapperStoreTests
             CREATE TABLE events (
                 global_position INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_id        TEXT NOT NULL,
+                event_id_bin    BLOB,
                 event_name      TEXT NOT NULL,
                 stream_name     TEXT NOT NULL,
                 stream_version  INTEGER NOT NULL,
@@ -217,6 +220,9 @@ public sealed class DapperStoreTests
         await Assert.That(pending).Count().IsEqualTo(1);
         await Assert.That(pending[0].Type).IsEqualTo("test.event.v1");
         await Assert.That(pending[0].Status).IsEqualTo(OutboxStatus.Pending);
+        // 新建消息的可用时刻在写入时赋值（显式调度时保留调用方值）。
+        await Assert.That(msg.NextAttemptAt!.Value).IsLessThanOrEqualTo(TimeProvider.System.GetUtcNow());
+        await Assert.That(pending[0].NextAttemptAt).IsEqualTo(msg.NextAttemptAt);
     }
 
     [Test]
@@ -369,6 +375,8 @@ public sealed class DapperStoreTests
         await Assert.That(leased).Count().IsEqualTo(1);
         await Assert.That(leased[0].LockedBy).IsEqualTo("test-owner");
         await Assert.That(leased[0].LockedUntil).IsNotNull();
+        // 可用时刻折叠：租约期间 NextAttemptAt 必须等于 LockedUntil，租约过期前不会重新可租。
+        await Assert.That(leased[0].NextAttemptAt).IsEqualTo(leased[0].LockedUntil);
     }
 
     [Test]
@@ -652,6 +660,40 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task Inbox_TryStartProcessing_ReclaimsFailedAndExpiredLease(CancellationToken cancellationToken)
+    {
+        // 2026-10-22 性能轮：单条认领合并为一条 UPSERT 后，可重入情形（Failed、租约过期
+        // Processing）必须与旧的三段式路径语义一致：Attempts 递增、状态回 Processing、
+        // last_error 清空。
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = TimeProvider.System.GetUtcNow();
+
+        var failed = await store.TryStartProcessingAsync(
+                "test-consumer", "msg-failed", now, TimeSpan.FromMinutes(5), cancellationToken)
+            ?? throw new InvalidOperationException("首次认领必须成功");
+        await store.MarkFailedAsync(failed, "boom", cancellationToken);
+
+        var reclaimed = await store.TryStartProcessingAsync(
+                "test-consumer", "msg-failed", now.AddSeconds(1), TimeSpan.FromMinutes(5), cancellationToken)
+            ?? throw new InvalidOperationException("Failed 行必须可重入");
+        await Assert.That(reclaimed.Attempts).IsEqualTo(2);
+        await Assert.That(reclaimed.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(reclaimed.LastError).IsNull();
+
+        // 租约过期（6 分钟 > 5 分钟超时）后另一 worker 可接管。
+        var active = await store.TryStartProcessingAsync(
+                "test-consumer", "msg-expired", now, TimeSpan.FromMinutes(5), cancellationToken)
+            ?? throw new InvalidOperationException("首次认领必须成功");
+        await Assert.That(active.Attempts).IsEqualTo(1);
+
+        var takeover = await store.TryStartProcessingAsync(
+                "test-consumer", "msg-expired", now.AddMinutes(6), TimeSpan.FromMinutes(5), cancellationToken)
+            ?? throw new InvalidOperationException("租约过期行必须可接管");
+        await Assert.That(takeover.Attempts).IsEqualTo(2);
+        await Assert.That(takeover.Status).IsEqualTo(InboxStatus.Processing);
+    }
+
+    [Test]
     public async Task Inbox_MarkProcessedAsync(CancellationToken cancellationToken)
     {
         var store = new DapperInboxStore(_conn, _dbType);
@@ -663,6 +705,11 @@ public sealed class DapperStoreTests
         await Assert.That(result).IsNotNull();
 
         await store.MarkProcessedAsync(result, now, cancellationToken);
+
+        // R11 F16：成功命中必须同步入参对象（对齐 PalORM/EF）。
+        await Assert.That(result.Status).IsEqualTo(InboxStatus.Processed);
+        await Assert.That(result.ProcessedAt).IsEqualTo(now);
+        await Assert.That(result.LastError).IsNull();
 
         var after = await store.TryStartProcessingAsync(
             "test-consumer", "msg-001", now, TimeSpan.FromMinutes(5),
@@ -682,6 +729,10 @@ public sealed class DapperStoreTests
         await Assert.That(result).IsNotNull();
 
         await store.MarkFailedAsync(result, "simulated crash", cancellationToken);
+
+        // R11 F16：失败标记同样同步入参对象。
+        await Assert.That(result.Status).IsEqualTo(InboxStatus.Failed);
+        await Assert.That(result.LastError).Contains("simulated crash");
 
         var retry = await store.TryStartProcessingAsync(
             "test-consumer", "msg-001", now.AddSeconds(1), TimeSpan.FromMinutes(5),
@@ -708,6 +759,128 @@ public sealed class DapperStoreTests
             "SELECT status FROM inbox_messages WHERE id=$id",
             ("$id", first.Id));
         await Assert.That(status).IsEqualTo((long)InboxStatus.Processed);
+    }
+
+    [Test]
+    public async Task Inbox_Batch_ClaimMarkAndSkip(CancellationToken cancellationToken)
+    {
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = TimeProvider.System.GetUtcNow();
+        string[] ids = ["batch-1", "batch-2", "batch-3"];
+
+        var claimed = await store.TryStartProcessingManyAsync(
+            "test-consumer", ids, now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(claimed).Count().IsEqualTo(3);
+        await Assert.That(string.Join(",", claimed.Select(m => m.MessageId).OrderBy(static x => x, StringComparer.Ordinal)))
+            .IsEqualTo("batch-1,batch-2,batch-3");
+
+        var duplicate = await store.TryStartProcessingManyAsync(
+            "test-consumer", ids, now.AddSeconds(1), TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(duplicate).IsEmpty();
+
+        var marked = await store.MarkProcessedManyAsync(
+            "test-consumer", claimed, now.AddSeconds(2), cancellationToken);
+        await Assert.That(marked).IsEqualTo(3);
+
+        var after = await store.TryStartProcessingManyAsync(
+            "test-consumer", ids, now.AddSeconds(3), TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(after).IsEmpty();
+    }
+
+    [Test]
+    public async Task Inbox_BatchMark_MixedConsumerNames_ThrowsInsteadOfSilentSkip(CancellationToken cancellationToken)
+    {
+        // R13 F19：批量标记按 ConsumerName 静默过滤异消费者元素——被过滤的消息停留
+        // Processing 至租约到期后被重处理（副作用重复），返回值只少不报。
+        // 契约要求同批同消费者，异消费者元素应在入口 fail-fast。
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = DateTimeOffset.UtcNow;
+        var claimed = await store.TryStartProcessingManyAsync(
+            "test-consumer", ["mix-1", "mix-2"], now, TimeSpan.FromMinutes(5), cancellationToken);
+        var mixed = new List<InboxMessage>
+        {
+            claimed[0],
+            new()
+            {
+                MessageId = claimed[1].MessageId,
+                ConsumerName = "other-consumer",
+                ProcessingStartedAt = claimed[1].ProcessingStartedAt,
+            },
+        };
+
+        await Assert.That(async () => await store.MarkProcessedManyAsync(
+                "test-consumer", mixed, now.AddSeconds(1), cancellationToken))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Inbox_Batch_ReclaimsFailedAndExpiredLease(CancellationToken cancellationToken)
+    {
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = TimeProvider.System.GetUtcNow();
+
+        var failed = await store.TryStartProcessingAsync(
+            "test-consumer", "batch-failed", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(failed!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(failed.Attempts).IsEqualTo(1);
+        await store.MarkFailedAsync(failed, "boom", cancellationToken);
+
+        var active = await store.TryStartProcessingAsync(
+            "test-consumer", "batch-active", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(active!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(active.Attempts).IsEqualTo(1);
+
+        var expired = await store.TryStartProcessingAsync(
+            "test-consumer", "batch-expired", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(expired!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(expired.Attempts).IsEqualTo(1);
+        await _conn.ExecuteAsync(
+            "UPDATE inbox_messages SET processing_started_at=@old WHERE consumer_name=@c AND message_id=@m",
+            new
+            {
+                old = now.AddMinutes(-10).ToString("O", CultureInfo.InvariantCulture),
+                c = "test-consumer",
+                m = "batch-expired"
+            });
+
+        var claimed = await store.TryStartProcessingManyAsync(
+            "test-consumer", ["batch-failed", "batch-active", "batch-expired"],
+            now, TimeSpan.FromMinutes(5), cancellationToken);
+
+        await Assert.That(claimed).Count().IsEqualTo(2);
+        await Assert.That(string.Join(",", claimed.Select(m => m.MessageId).OrderBy(static x => x, StringComparer.Ordinal)))
+            .IsEqualTo("batch-expired,batch-failed");
+        await Assert.That(claimed[0].Attempts).IsEqualTo(2);
+        await Assert.That(claimed[1].Attempts).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Inbox_Batch_MarkProcessed_StaleLeaseTokenIgnored(CancellationToken cancellationToken)
+    {
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = TimeProvider.System.GetUtcNow();
+        var claimed = await store.TryStartProcessingManyAsync(
+            "test-consumer", ["batch-stale"], now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(claimed).Count().IsEqualTo(1);
+
+        // 模拟超时后被另一 worker 接管：processing_started_at 改写为新令牌。
+        await _conn.ExecuteAsync(
+            "UPDATE inbox_messages SET processing_started_at=@updated WHERE consumer_name=@c AND message_id=@m",
+            new
+            {
+                updated = now.AddSeconds(1).ToString("O", CultureInfo.InvariantCulture),
+                c = "test-consumer",
+                m = "batch-stale"
+            });
+
+        var marked = await store.MarkProcessedManyAsync(
+            "test-consumer", claimed, now.AddSeconds(2), cancellationToken);
+        await Assert.That(marked).IsEqualTo(0);
+
+        var status = await ReadScalarAsync<long>(
+            "SELECT status FROM inbox_messages WHERE consumer_name=$c AND message_id=$m",
+            ("$c", "test-consumer"), ("$m", "batch-stale"));
+        await Assert.That(status).IsEqualTo((long)InboxStatus.Processing);
     }
 
     [Test]
@@ -819,6 +992,117 @@ public sealed class DapperStoreTests
         await Assert.That(r1.Version).IsEqualTo(2); // 插入 0（DB 默认）→ 租约 +1 → 释放 +1
         var r2 = await store.GetByIdAsync(s2.SagaId, cancellationToken);
         await Assert.That(r2!.LeasedBy).IsNull();
+    }
+
+    [Test]
+    public async Task Saga_BatchAdvanceAndSaveMany_Sqlite(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var first = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Initial",
+            Status = SagaStatus.Active,
+            CreatedAt = TimeProvider.System.GetUtcNow()
+        };
+        var second = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Initial",
+            Status = SagaStatus.Active,
+            CreatedAt = TimeProvider.System.GetUtcNow()
+        };
+        await store.SaveChangesAsync(first, cancellationToken);
+        await store.SaveChangesAsync(second, cancellationToken);
+
+        var leased = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leased.Count).IsEqualTo(2);
+        var nextCheck = DateTimeOffset.UtcNow.AddMinutes(3);
+        foreach (var saga in leased)
+            saga.NextCheckAt = nextCheck;
+
+        var advanced = await store.AdvanceNextCheckAtAsync("owner-A", leased, cancellationToken);
+        await Assert.That(advanced).IsEqualTo(2);
+        var reloaded = await store.GetByIdAsync(leased[0].SagaId, cancellationToken);
+        await Assert.That(reloaded!.NextCheckAt).IsEqualTo(nextCheck);
+
+        var foreign = await store.AdvanceNextCheckAtAsync("owner-B", leased, cancellationToken);
+        await Assert.That(foreign).IsEqualTo(0);
+
+        foreach (var saga in leased)
+        {
+            saga.Status = SagaStatus.Completed;
+            saga.CurrentState = "Completed";
+        }
+        var results = await store.SaveManyAsync(leased, cancellationToken);
+        await Assert.That(results.Count).IsEqualTo(2);
+        await Assert.That(results[0]).IsEqualTo(1);
+        await Assert.That(results[1]).IsEqualTo(1);
+        var final = await store.GetByIdAsync(leased[0].SagaId, cancellationToken);
+        await Assert.That(final!.Status).IsEqualTo(SagaStatus.Completed);
+    }
+
+    [Test]
+    public async Task Saga_SaveMany_RunsAcrossChunkBoundary(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var created = new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);
+        for (var i = 0; i < 100; i++)
+        {
+            await store.SaveChangesAsync(new TestSagaState
+            {
+                SagaId = PalUlid.New(),
+                CurrentState = "Initial",
+                Status = SagaStatus.Active,
+                CreatedAt = created.AddSeconds(i)
+            }, cancellationToken);
+        }
+
+        var leased = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 200, cancellationToken);
+        await Assert.That(leased.Count).IsEqualTo(100);
+        foreach (var saga in leased)
+        {
+            saga.Status = SagaStatus.Completed;
+            saga.CurrentState = "Completed";
+        }
+
+        // SQLite 每块 90 行：100 行必然跨两条 UPDATE，覆盖 UNION ALL 派生表与分块计数。
+        var results = await store.SaveManyAsync(leased, cancellationToken);
+        await Assert.That(results.Count).IsEqualTo(100);
+        await Assert.That(results.All(r => r == 1)).IsTrue();
+
+        var reloaded = await store.GetByIdAsync(leased[99].SagaId, cancellationToken);
+        await Assert.That(reloaded!.Status).IsEqualTo(SagaStatus.Completed);
+        await Assert.That(reloaded.CurrentState).IsEqualTo("Completed");
+        await Assert.That(reloaded.Version).IsEqualTo(leased[99].Version);
+    }
+
+    [Test]
+    public async Task Saga_ScanCursor_RotatesReleasedBatchToBack(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var created = new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);
+        for (var i = 0; i < 3; i++)
+        {
+            await store.SaveChangesAsync(new TestSagaState
+            {
+                SagaId = PalUlid.New(),
+                CurrentState = "Initial",
+                Status = SagaStatus.Active,
+                CreatedAt = created.AddSeconds(i)
+            }, cancellationToken);
+        }
+
+        var first = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(first.Count).IsEqualTo(1);
+
+        var released = await store.ReleaseLeasesAsync(
+            "owner-A", first, DateTimeOffset.UtcNow.AddSeconds(-1), cancellationToken);
+        await Assert.That(released).IsEqualTo(1);
+
+        var second = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(second.Count).IsEqualTo(1);
+        await Assert.That(second[0].SagaId).IsNotEqualTo(first[0].SagaId);
     }
 
     [Test]
@@ -1216,6 +1500,65 @@ public sealed class DapperStoreTests
         await Assert.That(result.FirstStreamVersion).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task EventLog_AppendAsync_DualWritesEventIdBin_AndBinaryReadReturnsSameId(CancellationToken cancellationToken)
+    {
+        var log = new DapperEventLog(_conn, null, _dbType);
+        var eventId = PalUlid.New();
+        var events = new List<EventData>
+        {
+            new(
+                eventId,
+                "test.event.v1",
+                schemaVersion: 1,
+                contentType: "application/json",
+                payload: "{}"u8.ToArray(),
+                metadata: "{}"u8.ToArray(),
+                audit: EventAuditMetadata.Empty)
+        };
+
+        await log.AppendAsync("bin-stream", ExpectedStreamVersion.NoStream, events, cancellationToken);
+
+        var bin = await ReadScalarAsync<byte[]>(
+            "SELECT event_id_bin FROM events WHERE stream_name = @name", ("@name", "bin-stream"));
+        await Assert.That(bin).Count().IsEqualTo(16);
+
+        log.UseBinaryEventId = true;
+        var read = new List<RecordedEvent>();
+        await foreach (var recorded in log.ReadStreamAsync("bin-stream", 0, 10, cancellationToken))
+        {
+            read.Add(recorded);
+            break;
+        }
+        await Assert.That(read).Count().IsEqualTo(1);
+        await Assert.That(read[0].EventId).IsEqualTo(eventId);
+    }
+
+    [Test]
+    public async Task EventLog_BinaryRead_MissingBackfill_Throws(CancellationToken cancellationToken)
+    {
+        var log = new DapperEventLog(_conn, null, _dbType);
+        await log.AppendAsync(
+            "bin-missing",
+            ExpectedStreamVersion.NoStream,
+            [new EventData(PalUlid.New(), "test.event.v1", 1, "application/json",
+                "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)],
+            cancellationToken);
+        await _conn.ExecuteAsync("UPDATE events SET event_id_bin = NULL WHERE stream_name = 'bin-missing'");
+
+        log.UseBinaryEventId = true;
+        await Assert.That(async () => await ReadAllEventsAsync(log.ReadStreamAsync("bin-missing", 0, 10, cancellationToken)))
+            .Throws<InvalidOperationException>();
+    }
+
+    private static async Task<List<RecordedEvent>> ReadAllEventsAsync(IAsyncEnumerable<RecordedEvent> events)
+    {
+        var result = new List<RecordedEvent>();
+        await foreach (var e in events)
+            result.Add(e);
+        return result;
+    }
+
     /// <summary>
     /// A12（S1 轮，2026-10-15）：SQLite k&gt;1 多行 VALUES + RETURNING 批量化——单语句完成
     /// k 事件追加（原 k 次 INSERT..RETURNING 各一往返）。锁定行为：版本连续、位置首末
@@ -1266,8 +1609,8 @@ public sealed class DapperStoreTests
     {
         var clock = new FixedTimeProvider(DateTimeOffset.Parse("2026-06-27T10:00:00Z", CultureInfo.InvariantCulture));
         var store = new DapperOutboxStore(_conn, _dbType, timeProvider: clock);
-        await store.AddMessageAsync(CreateOutboxMessage("a.v1"));
-        await store.AddMessageAsync(CreateOutboxMessage("b.v1"));
+        await store.AddMessageAsync(CreateOutboxMessage("a.v1", clock.GetUtcNow()));
+        await store.AddMessageAsync(CreateOutboxMessage("b.v1", clock.GetUtcNow()));
 
         var first = await store.LeasePendingMessagesAsync(
             1, "owner-1", TimeSpan.FromMinutes(5), new OutboxOptions().MaxRetryCount, cancellationToken);
@@ -1544,7 +1887,57 @@ public sealed class DapperStoreTests
     {
         // 接口赋值——若 DapperEventLog 丢失 : IEventLog 声明，本行编译失败（CS0029；v10 勘正——泛型约束码 CS0311 不适用）
         PalDDD.EventLog.IEventLog log = new DapperEventLog(_conn, dbType: _dbType);
-        await Assert.That(log).IsNotNull();
+        await Assert.That(log).IsTypeOf<DapperEventLog>();
+    }
+
+    [Test]
+    public async Task ResumePositionCastFailure_OnlyPgCastSqlStatesAreTreatedAsDirtyData()
+    {
+        // R13 F14：续读聚合原 catch 全部 DbException——连接中断/超时被误判为
+        // 「无可续读位置」并触发全量回放。只有 PG 的 22P02/22007 属脏 Position。
+        var method = typeof(DapperProjectionCheckpointStore)
+            .GetMethod("IsPositionCastFailure", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+        await Assert.That((bool)method.Invoke(null, [new FakeDbException("22P02")])!).IsTrue();
+        await Assert.That((bool)method.Invoke(null, [new FakeDbException("22007")])!).IsTrue();
+        await Assert.That((bool)method.Invoke(null, [new FakeDbException("08006")])!).IsFalse();
+    }
+
+    private sealed class FakeDbException : System.Data.Common.DbException
+    {
+        private readonly string _sqlState;
+
+        public FakeDbException() : base("fake") => _sqlState = "";
+
+        public FakeDbException(string sqlState) : base("fake") => _sqlState = sqlState;
+
+        public FakeDbException(string message, Exception innerException) : base(message, innerException) => _sqlState = "";
+
+        public override string? SqlState => _sqlState;
+    }
+
+    [Test]
+    public async Task SagaInsertPG_UsesOnConflictDoNothing_ForOptimisticConflictContract()
+    {
+        // R13 F11：PG 的 23505 会把事务标记 aborted，catch 后无法继续（25P02）。
+        // UPSERT 冲突路径必须用 ON CONFLICT DO NOTHING 把冲突转成 0 行写入。
+        await Assert.That(PalDDD.Dapper.SqlTemplates.SagaInsertPG)
+            .Contains("ON CONFLICT (saga_id) DO NOTHING");
+    }
+
+    [Test]
+    public async Task DateTimeOffsetHandler_LocalKind_PreservesUtcWallClock()
+    {
+        // R13 F5：MySQL 连接串 DateTimeKind=Local 时 provider 返回 Kind=Local 的 UTC 墙钟；
+        // 旧实现 new DateTimeOffset(dt) 给墙钟套本地偏移（-8h），store 再用 .UtcDateTime
+        // 编码 fence 参数 → locked_until/processing_started_at 谓词恒不命中。
+        // 库内始终是 UTC 墙钟（写入用 .UtcDateTime），读回必须给它零偏移。
+        var localWall = new DateTime(2026, 10, 22, 2, 0, 0, DateTimeKind.Local);
+
+        var parsed = new PalDDD.Dapper.SqliteDateTimeOffsetTypeHandler().Parse(localWall);
+
+        await Assert.That(parsed.Offset).IsEqualTo(TimeSpan.Zero);
+        await Assert.That(parsed.UtcDateTime).IsEqualTo(new DateTime(2026, 10, 22, 2, 0, 0, DateTimeKind.Utc));
     }
 }
 

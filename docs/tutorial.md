@@ -63,7 +63,7 @@
 │  ✅ 消息兼容 → Schema Evolution 显式升级管道 + 编译期版本校验       │
 │  ✅ AOT 兼容 → 源码生成器 + 泛型 + JsonTypeInfo 零反射             │
 │  ✅ 编译期防错 → Analyzer 15 条诊断规则，写错代码直接编译不过      │
-│  ✅ 可观测 → 28 个预定义指标 + 12 种 Activity，零配置              │
+│  ✅ 可观测 → 30 个预定义指标 + 12 种 Activity，零配置              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -463,20 +463,31 @@ await _eventBus.PublishAsync(new OrderCreated(...), ct);  // 这里崩溃 → �
 **Outbox 模式：**
 
 ```csharp
-// 1. 注册 Outbox 拦截器（在 SaveChanges 事务内写领域事件到 Outbox）
-builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
-// 2. 注册 Outbox 后台处理器（轮询 OutboxMessages 表 → 发布到 Broker）
-builder.Services.AddPalOutbox();
-// 3. 注册 Outbox Store（EF Core 方式：继承已验证方言基类，此处 PostgreSQL）
+// 1. 业务上下文直接继承已验证方言基类（此处 PostgreSQL）：它同时是 DbContext 与
+//    IPalOutboxStore，拦截器跟踪的 outbox 实体由同一个 SaveChanges 持久化。
 //    方言基类已实现抽象的 LeasePendingMessagesAsync（原子租约）；直接继承 OutboxDbContext
 //    则必须自行实现该抽象成员。
-//    定义 AppOutboxDbContext：
-//    public sealed class AppOutboxDbContext(DbContextOptions<AppOutboxDbContext> options)
-//        : PostgreSqlOutboxDbContext(options);
-builder.Services.AddDbContext<AppOutboxDbContext>(o =>
-    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
-builder.Services.AddScoped<IPalOutboxStore>(sp => sp.GetRequiredService<AppOutboxDbContext>());
+public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
+    : PostgreSqlOutboxDbContext(options)
+{
+    public DbSet<Order> Orders => Set<Order>();
+}
+
+// 2. 注册 DbContext，并把拦截器挂到它的 options（同一次配置调用）
+builder.Services.AddDbContext<AppDbContext>((sp, o) => o
+    .UseNpgsql(builder.Configuration.GetConnectionString("Default"))
+    .UsePalOutboxInterceptor(sp));
+
+// 3. 注册工作单元 + 拦截器；泛型约束要求 AppDbContext 实现 IPalOutboxStore
+builder.Services.AddPalOutboxUnitOfWorkForContext<AppDbContext>();
+// 4. 注册 Outbox 后台处理器（轮询 OutboxMessages 表 → 发布到 Broker）
+builder.Services.AddPalOutbox();
 ```
+
+> ⚠️ 不要为 outbox 单独建一个 `AppOutboxDbContext` 再注册成 `IPalOutboxStore`：拦截器的
+> `AddMessageAsync` 只是把消息跟踪到那个独立上下文，业务上下文的 `SaveChanges` 不会保存
+> 它，领域事件会静默丢失。`AddPalOutboxUnitOfWorkForContext` 在解析工作单元时会校验「同一实例 +
+> 拦截器已挂接」，错误装配直接抛异常。
 
 **发生了什么？** 当 `SaveChangesAsync` 被调用时：
 
@@ -710,7 +721,7 @@ public async ValueTask<OrderId> HandleAsync(CreateOrderCommand command, Cancella
 ```
 EventLog 的 GlobalPosition 是全局单调递增的位置号，用于全量回放时定位。
 过去用 Serializable 事务保护分配 → 全局串行化瓶颈。
-现在用 Hi/Lo 段分配器 → 进程内缓存 100 个位置，仅 1/100 触发 DB。
+现在用 Hi/Lo 段分配器 → 进程内缓存 1000 个位置，仅 1/1000 触发 DB。
 CAS（Revision 令牌）替代 Serializable → 事务降为 ReadCommitted。
 ```
 
@@ -848,7 +859,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddPalCoreStack();
 builder.Services.AddPalJsonSerialization(catalog => { ... });
 builder.Services.AddPalCommandHandler<...>();
-builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
+// AppDbContext 须按 §4.6 配置：继承 PostgreSqlOutboxDbContext + UsePalOutboxInterceptor(sp)
+builder.Services.AddPalOutboxUnitOfWorkForContext<AppDbContext>();
 builder.Services.AddPalOutbox();
 builder.Services.AddPalHealthChecks();      // 注册 Broker + Outbox 健康检查（Build 前调用）
 
@@ -881,14 +893,14 @@ app.Run();
 
 ### 4.14 可观测性：指标与追踪
 
-**框架解决的问题：** 生产环境出问题了，你先要知道的是：命令执行了多少？失败了几个？发件箱积压了多少？Pal.DDD 内建了 28 个 OpenTelemetry 指标和 12 种 Activity，零配置即可采集。
+**框架解决的问题：** 生产环境出问题了，你先要知道的是：命令执行了多少？失败了几个？发件箱积压了多少？Pal.DDD 内建了 30 个 OpenTelemetry 指标和 12 种 Activity，零配置即可采集。
 
 ```csharp
 // 一行代码接入
 builder.Services.AddOpenTelemetry()
     .WithMetrics(meterProviderBuilder =>
         meterProviderBuilder
-            .AddMeter("PalDDD")                          // 内建 28 个指标
+            .AddMeter("PalDDD")                          // 内建 30 个指标
             .AddPrometheusExporter())
     .WithTracing(tracerProviderBuilder =>
         tracerProviderBuilder
@@ -896,7 +908,7 @@ builder.Services.AddOpenTelemetry()
             .AddConsoleExporter());
 ```
 
-**内建的 28 个指标**（ITM-229 移除 7 个无记录路径死指标后的现行清单；死信指标 3.0.0 起从 `failed` 独立；流式读五项 `paldd.stream.*` 2026-10-18 增）：
+**内建的 30 个指标**（ITM-229 移除 7 个无记录路径死指标后的现行清单；死信指标 3.0.0 起从 `failed` 独立；流式读五项 `paldd.stream.*` 2026-10-18 增，断线续跑附着/缺口两项 2026-10-19 增）：
 
 ```
 paldd.event_handlers.handled     // 事件处理器成功调用数
@@ -927,9 +939,11 @@ paldd.stream.completed           // 流式查询正常完成数
 paldd.stream.failed              // 流式查询失败数（中途异常，错误率口径）
 paldd.stream.cancelled           // 流式查询取消数（客户端断开，非错误）
 paldd.stream.items               // 流式查询产出项总数（完成与取消路径累计）
+paldd.stream.attached            // 断线续跑成功附着数（含首次附着、重连与接管）
+paldd.stream.gap                 // 断线续跑缓冲缺口数（gap 帧写出次数）
 ```
 
-> 流式读的 **TTFT（首 token 延迟）** 不走指标：`Stream Query` Activity 上的 `first-item` 事件时间戳与 span 起点之差即 TTFT（计数器零 tag 纪律下直方图无处放维度，事件时间戳天然落在 trace 侧）。
+> 流式读的 **TTFT（首 token 延迟）** 不走指标：`Stream Query` Activity 上的 `first-item` 事件时间戳与 span 起点之差即 TTFT（计数器零 tag 纪律下直方图无处放维度，事件时间戳天然落在 trace 侧）。普通流式读与断线续跑共用该 Activity 与五个终态计数；`attached`/`gap` 只在断线续跑路径产生。
 
 ### 4.15 AOT 发布与构建检查
 
@@ -980,15 +994,14 @@ builder.Services.AddPalCommandHandler<CreateOrderCommand, OrderId, CreateOrderHa
 builder.Services.AddPalQueryHandler<GetOrderQuery, OrderDto, GetOrderHandler>();
 builder.Services.AddPalEventHandler<OrderPaid, OrderPaidHandler>();
 
-// ── Outbox（可靠事件发布）──
-builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
-builder.Services.AddPalOutbox();
+// ── EF Core（业务上下文 = Outbox 上下文；拦截器挂到同一 options）──
+builder.Services.AddDbContext<AppDbContext>((sp, o) => o
+    .UseNpgsql(builder.Configuration.GetConnectionString("Default"))
+    .UsePalOutboxInterceptor(sp));
 
-// ── EF Core ──
-builder.Services.AddDbContext<AppDbContext>(o =>
-    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
-builder.Services.AddDbContext<AppOutboxDbContext>(o =>
-    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+// ── Outbox（可靠事件发布）──
+builder.Services.AddPalOutboxUnitOfWorkForContext<AppDbContext>();
+builder.Services.AddPalOutbox();
 
 builder.Services.AddPalHealthChecks();
 

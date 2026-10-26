@@ -50,6 +50,11 @@ public class PalOrmEventLog<TProvider> : IEventLog
 
     private readonly TimeProvider _clock;
 
+    /// <summary>
+    /// 读取时优先使用 event_id_bin（M4）。默认 false 回退文本列；存量行回填后置 true。
+    /// </summary>
+    public bool UseBinaryEventId { get; set; }
+
     /// <summary>构造 EventLog。</summary>
     public PalOrmEventLog(DataSession<TProvider> session, TimeProvider? clock = null)
     {
@@ -83,6 +88,12 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 写路径非迭代器、异常直接上抛，失败路径不计数与姊妹语义一致，无需 finally）。
         using var activity = PalActivitySource.StartEventLogAppend(streamName, events.Count);
 
+        // 单事件 PG 快路径：INSERT ... SELECT MAX+1 ... RETURNING，一次往返完成
+        // 版本判定与写入（守卫失匹零行，冲突路径再查）。批量与其它方言保持原路径。
+        if (events.Count == 1 && TProvider.Dialect == SqlDialect.PostgreSql)
+            return await AppendSinglePostgreSqlAsync(
+                streamName, expectedVersion, events[0], _clock.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+
         // 步骤 1：乐观并发检查 —— 读当前最大 StreamVersion
         var currentMax = await Session.ScalarAsync<long?>(
             $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
@@ -105,8 +116,17 @@ public class PalOrmEventLog<TProvider> : IEventLog
         long lastGlobalPos;
         if (TProvider.SupportsReturningClause)
         {
-            (firstGlobalPos, lastGlobalPos) = await InsertBatchWithReturningAsync(
-                streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+            var rowLimit = TProvider.Dialect == SqlDialect.Sqlite ? 2047 : 4095;
+            if (events.Count <= rowLimit)
+            {
+                (firstGlobalPos, lastGlobalPos) = await InsertBatchWithReturningAsync(
+                    streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                (firstGlobalPos, lastGlobalPos) = await InsertBatchWithReturningChunkedAsync(
+                    streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+            }
         }
         else if (events.Count <= MySqlBatchRowLimit)
         {
@@ -115,8 +135,9 @@ public class PalOrmEventLog<TProvider> : IEventLog
             // 版本区间回查 MIN/MAX」三往返达成（MAX 预检 + INSERT + 回查，较逐行 k+1 在
             // k≥3 净胜）；② innodb_autoinc_lock_mode=2 下已知行数多行 VALUES 的自增块
             // 连续（wslc mysql84 8.4.11 实测：5 行 LAST_INSERT_ID=首行值、min/max=1/5
-            // 无间隙），且本实现不依赖连续性（区间回查按版本区间）。行上限 4000（15 参/行
-            // = 60000 < MySQL 65535 占位符上限），超出回落逐行（与 Dapper B2 同口径）。
+            // 无间隙），且本实现不依赖连续性（区间回查按版本区间）。行上限 4000
+            //（16 参/行 × 4000 = 64000 < MySQL 65535 占位符上限；2026-10-21 勘正原 60000），
+            // 超出回落逐行（与 Dapper B2 同口径）。
             (firstGlobalPos, lastGlobalPos) = await InsertBatchMySqlAsync(
                 streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
         }
@@ -134,10 +155,178 @@ public class PalOrmEventLog<TProvider> : IEventLog
         return new AppendEventsResult(streamName, firstStreamVersion, lastStreamVersion, firstGlobalPos, lastGlobalPos);
     }
 
+    // PG 单事件追加 SQL：四种守卫各有完整编译期常量。2026-10-21：原实现每次追加把
+    // 约 700 字符的前缀、守卫与 RETURNING 在运行时拼成一个新字符串（约 1.4KB 分配），
+    // 常量拼接由编译器折叠，运行期零分配。
+    private const string AppendSinglePostgreSqlPrefix =
+        "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+        "SELECT @p0, @p1, @p2, @p3, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) + 1, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14";
+
+    private const string AppendSinglePostgreSqlReturning =
+        " RETURNING global_position, stream_version";
+
+    private const string AppendSinglePostgreSqlNoStreamGuard =
+        " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) = -1";
+
+    private const string AppendSinglePostgreSqlStreamExistsGuard =
+        " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) >= 0";
+
+    private const string AppendSinglePostgreSqlExactGuard =
+        " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) = @p15";
+
+    /// <summary>
+    /// PG 单事件原子追加：服务端 <c>COALESCE(MAX(stream_version),-1)+1</c> 加版本守卫，
+    /// 单往返返回 global_position 与 stream_version。守卫失匹零行时重查实际版本转统一
+    /// 并发异常；唯一冲突先探 EventId，重复 ID 原样上抛，其余转并发异常。
+    /// </summary>
+    private async ValueTask<AppendEventsResult> AppendSinglePostgreSqlAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        EventData e,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var sql = expectedVersion.Kind switch
+        {
+            ExpectedStreamVersionKind.NoStream =>
+                AppendSinglePostgreSqlPrefix + AppendSinglePostgreSqlNoStreamGuard + AppendSinglePostgreSqlReturning,
+            ExpectedStreamVersionKind.StreamExists =>
+                AppendSinglePostgreSqlPrefix + AppendSinglePostgreSqlStreamExistsGuard + AppendSinglePostgreSqlReturning,
+            ExpectedStreamVersionKind.Exact =>
+                AppendSinglePostgreSqlPrefix + AppendSinglePostgreSqlExactGuard + AppendSinglePostgreSqlReturning,
+            _ => AppendSinglePostgreSqlPrefix + AppendSinglePostgreSqlReturning,
+        };
+
+        var eventIdText = e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+        await using var cmd = CreateRawCommand();
+#pragma warning disable S2077 // sql 仅含 @pN 占位符，值全部经 AddParam 参数化绑定
+        cmd.CommandText = sql;
+#pragma warning restore S2077
+        AddParam(cmd, "@p0", eventIdText);
+        AddParam(cmd, "@p1", e.EventId.ToByteArray());
+        AddParam(cmd, "@p2", e.EventName);
+        AddParam(cmd, "@p3", streamName);
+        AddParam(cmd, "@p4", e.SchemaVersion);
+        AddParam(cmd, "@p5", e.ContentType);
+        AddParam(cmd, "@p6", e.PayloadArray);
+        AddParam(cmd, "@p7", e.MetadataArray);
+        AddParam(cmd, "@p8", now);
+        AddParam(cmd, "@p9", e.Audit.ActorId ?? (object)DBNull.Value);
+        AddParam(cmd, "@p10", e.Audit.Reason ?? (object)DBNull.Value);
+        AddParam(cmd, "@p11", e.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture) ?? (object)DBNull.Value);
+        AddParam(cmd, "@p12", e.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture) ?? (object)DBNull.Value);
+        AddParam(cmd, "@p13", e.Audit.TraceParent ?? (object)DBNull.Value);
+        AddParam(cmd, "@p14", e.Audit.TraceState ?? (object)DBNull.Value);
+        if (expectedVersion.Kind == ExpectedStreamVersionKind.Exact)
+            AddParam(cmd, "@p15", expectedVersion.Version);
+
+        try
+        {
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var globalPosition = reader.GetInt64(0);
+                var streamVersion = reader.GetInt64(1);
+                PalMetrics.EventLogAppended.Add(1);
+                return new AppendEventsResult(
+                    streamName, streamVersion, streamVersion, globalPosition, globalPosition);
+            }
+        }
+        catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
+        {
+            // 2026-10-21 评审（PalOrmEventLog:179）：重查失败不得吞掉原始唯一冲突——
+            // PG 在 IUnitOfWork 环境事务内撞唯一约束后事务已 aborted，重查抛 25P02；
+            // 原实现让 25P02 替换真实冲突（EventStreamConcurrencyException 与原异常均丢失）。
+            try
+            {
+                var idExists = await Session.ScalarAsync<int>(
+                    $"SELECT COUNT(*) FROM events WHERE event_id = {eventIdText}",
+                    ct: ct).ConfigureAwait(false) > 0;
+                if (idExists)
+                    throw; // EventId 重复：与两往返路径同语义，原样上抛
+                var actual = await Session.ScalarAsync<long?>(
+                    $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
+                    ct: ct).ConfigureAwait(false);
+                throw new EventStreamConcurrencyException(streamName, expectedVersion, actual ?? -1);
+            }
+            catch (DbException recheckEx) when (!ReferenceEquals(recheckEx, ex))
+            {
+                ex.Data["UniqueConflictRecheckError"] = recheckEx.Message;
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex).Throw();
+                throw; // 不可达：EDI.Throw 已抛出原始异常
+            }
+        }
+
+        // 守卫失匹（零行插入）：重查实际版本转统一并发异常（对齐预查 Matches 失败）。
+        var after = await Session.ScalarAsync<long?>(
+            $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
+            ct: ct).ConfigureAwait(false);
+        throw new EventStreamConcurrencyException(streamName, expectedVersion, after ?? -1);
+    }
+
+    /// <summary>
+    /// 大批量 RETURNING 追加：按方言参数上限分块，并在无 ambient 事务时用本地事务保证
+    /// 多块全成或全败。PG 每行 16 参，4095 行 65520 参；SQLite 2047 行 32752 参。
+    /// ambient 事务存在时不自行提交，失败由调用方回滚。
+    /// </summary>
+    private async ValueTask<(long First, long Last)> InsertBatchWithReturningChunkedAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        long currentVersion,
+        IReadOnlyList<EventData> events,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var chunkRows = TProvider.Dialect == SqlDialect.Sqlite ? 2047 : 4095;
+        var ambient = PalOrmAmbientTransaction.TryGet(Session);
+        DbTransaction? ownTx = null;
+        if (ambient is null)
+        {
+            ownTx = await Session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
+            PalOrmAmbientTransaction.Set(Session, ownTx);
+        }
+
+        try
+        {
+            var first = long.MaxValue;
+            var last = long.MinValue;
+            for (var offset = 0; offset < events.Count; offset += chunkRows)
+            {
+                var count = Math.Min(chunkRows, events.Count - offset);
+                var chunk = new EventData[count];
+                for (var i = 0; i < count; i++)
+                    chunk[i] = events[offset + i];
+
+                var chunkExpected = offset == 0
+                    ? expectedVersion
+                    : ExpectedStreamVersion.Exact(currentVersion + offset);
+                var (chunkFirst, chunkLast) = await InsertBatchWithReturningAsync(
+                    streamName, chunkExpected, currentVersion + offset, chunk, now, ct).ConfigureAwait(false);
+                if (chunkFirst < first) first = chunkFirst;
+                if (chunkLast > last) last = chunkLast;
+            }
+
+            if (ownTx is not null)
+                await ownTx.CommitAsync(ct).ConfigureAwait(false);
+            return (first, last);
+        }
+        finally
+        {
+            if (ownTx is not null)
+            {
+                try { await ownTx.DisposeAsync().ConfigureAwait(false); }
+                catch (Exception ex) when (ex is InvalidOperationException or DbException) { /* 事务已失效/已释放 */ }
+                Session.UseTransaction(null);
+                PalOrmAmbientTransaction.Set(Session, null);
+            }
+        }
+    }
+
     /// <summary>
     /// A11（S1 轮，2026-10-15）：多行 VALUES INSERT ... RETURNING（PG/SQLite）——k 事件由
-    /// k 次往返降为 1 次（加 MAX 预检共 2）。RETURNING 全部列映射 EventLogRow，取
-    /// GlobalPosition 的 min/max 作首末（返回值只需首末，行序映射非必需——PALORM005 的
+    /// k 次往返降为 1 次（加 MAX 预检共 2）。RETURNING <b>仅回传 global_position</b>
+    ///（2026-10-21 勘正：原文「全部列映射 EventLogRow」失实，16 列物化已于 2026-10-19 移除），
+    /// 取 min/max 作首末（返回值只需首末——PALORM005 的
     /// 「无法保证单调有序」顾虑对 min/max 口径不成立）。冲突分类（ITM-075）与逐行形态
     /// 同款：唯一索引冲突 → 重查 MAX 分类（并发写入转统一并发异常 / 否则原样上抛），
     /// 批粒度用本批首事件版本作门槛（INSERT 原子失败，无部分写入）。
@@ -150,14 +339,29 @@ public class PalOrmEventLog<TProvider> : IEventLog
         DateTimeOffset now,
         CancellationToken ct)
     {
-        var (sql, args) = BuildBatchInsert(streamName, currentVersion, events, now);
-        sql.Append(" RETURNING global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state");
+        var (sqlBuilder, args) = BuildBatchInsert(streamName, currentVersion, events, now);
+        // 2026-10-19 性能实施轮：调用方只取 min/max 全局位置，RETURNING 只回传位置列。
+        // 原实现经 EventLogRow 回传全部 16 列（含 payload/metadata），且 PalORM 的
+        // ColumnOrderValidator 要求全列映射；改走 raw reader 直接读 long，既免回传载荷，
+        // 也免 DTO 物化。{N} 孔转换为 @pN 参数（一孔一参数，与原绑定形态一致）。
+        var sql = sqlBuilder.ToString()
+            .Replace("{", "@p", StringComparison.Ordinal)
+            .Replace("}", string.Empty, StringComparison.Ordinal)
+            + " RETURNING global_position";
 
-        List<EventLogRow> inserted;
+        var positions = new List<long>(events.Count);
         try
         {
-            inserted = await Session.QueryAsync<EventLogRow>(
-                FormattableStringFactory.Create(sql.ToString(), args.ToArray()), ct: ct).ConfigureAwait(false);
+            await using var cmd = CreateRawCommand();
+#pragma warning disable S2077 // sql 仅含 @pN 占位符，值全部经 AddParam 参数化绑定
+            // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- sql 由 BuildBatchInsert 构造：表/列名为字面量，值全部 @pN 参数化
+            cmd.CommandText = sql;
+#pragma warning restore S2077
+            for (var i = 0; i < args.Count; i++)
+                AddParam(cmd, "@p" + i.ToString(System.Globalization.CultureInfo.InvariantCulture), args[i] ?? DBNull.Value);
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                positions.Add(reader.GetInt64(0));
         }
         catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
         {
@@ -165,16 +369,16 @@ public class PalOrmEventLog<TProvider> : IEventLog
             throw await ClassifyBatchConflictAsync(streamName, expectedVersion, currentVersion, ex, ct).ConfigureAwait(false);
         }
 
-        if (inserted.Count == 0)
+        if (positions.Count == 0)
             throw new InvalidOperationException(
                 $"Batch INSERT ... RETURNING returned no rows for stream '{streamName}' ({events.Count} event(s) submitted).");
 
         var first = long.MaxValue;
         var last = long.MinValue;
-        foreach (var row in inserted)
+        foreach (var position in positions)
         {
-            if (row.GlobalPosition < first) first = row.GlobalPosition;
-            if (row.GlobalPosition > last) last = row.GlobalPosition;
+            if (position < first) first = position;
+            if (position > last) last = position;
         }
         return (first, last);
     }
@@ -224,7 +428,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         return (reader.GetInt64(0), reader.GetInt64(1));
     }
 
-    /// <summary>B11：MySQL 批量化行上限——15 参/行 × 4000 = 60000 &lt; MySQL 65535 占位符上限
+    /// <summary>B11：MySQL 批量化行上限——16 参/行 × 4000 = 64000 &lt; MySQL 65535 占位符上限
     ///（与 Dapper MySqlBatchRowLimit 同口径）；超出回落逐行路径。</summary>
     private const int MySqlBatchRowLimit = 4000;
 
@@ -261,7 +465,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         string streamName, long currentVersion, IReadOnlyList<EventData> events, DateTimeOffset now)
     {
         var sql = new System.Text.StringBuilder(
-            "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES ");
+            "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES ");
         var args = new List<object?>(events.Count * 15);
         for (var i = 0; i < events.Count; i++)
         {
@@ -270,7 +474,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
             sql.Append('(');
             object?[] values =
             [
-                e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture), e.EventName, streamName, currentVersion + 1 + i,
+                e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture), e.EventId.ToByteArray(), e.EventName, streamName, currentVersion + 1 + i,
                 e.SchemaVersion, e.ContentType, e.PayloadArray, e.MetadataArray,
                 now, e.Audit.ActorId, e.Audit.Reason,
                 e.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), e.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
@@ -337,6 +541,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
             var row = new EventLogRow
             {
                 EventId = e.EventId,
+                EventIdBin = e.EventId.ToByteArray(),
                 EventName = e.EventName,
                 StreamName = streamName,
                 StreamVersion = streamVersion,
@@ -407,7 +612,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 参数化在 PG 有边界问题）；等于 int.MaxValue（默认"不设上限"）时不加 LIMIT，由下方
         // 客户端计数兜底。字面量经 FormattableStringFactory.Create 编入 format 文本而非参数。
         var readStreamSql = FormattableStringFactory.Create(
-            "SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = {0} AND stream_version >= {1} ORDER BY stream_version"
+            "SELECT global_position, event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = {0} AND stream_version >= {1} ORDER BY stream_version"
                 + (maxCount != int.MaxValue ? $" LIMIT {maxCount}" : string.Empty),
             streamName, fromVersion);
         using var activity = PalActivitySource.StartEventLogReadStream(streamName, fromVersion);
@@ -418,18 +623,34 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 计数在 yield 前（对齐 InMemoryEventLog ITM-120）。
         try
         {
+            if (UseBinaryEventId)
+            {
+                var binarySql = FormattableStringFactory.Create(
+                    "SELECT global_position, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = {0} AND stream_version >= {1} ORDER BY stream_version"
+                        + (maxCount != int.MaxValue ? $" LIMIT {maxCount}" : string.Empty),
+                    streamName, fromVersion);
+                await foreach (var row in Session.QueryAsyncEnumerable<EventLogBinaryRow>(
+                    binarySql, readFromReplica: true, ct: cancellationToken).ConfigureAwait(false))
+                {
+                    if (--maxCount < 0) yield break;
+                    checked { read++; }
+                    yield return ToRecorded(row);
+                }
+                yield break;
+            }
+
             // 使用流式 QueryAsyncEnumerable —— 恒定内存读取（重要：超长事件流场景）
             // v66 P3：ConfigureAwait(false) 补齐（对齐文件内其余 await）——库代码避免捕获
             // 调用方 SyncContext；对 IAsyncEnumerable 用 ConfiguredAsyncEnumerable 扩展。
             // 读副本标注（2026-09-25 特性审计裁决）：纯读流无 read-after-write 依赖——
-            // 上游契约（6.5.0 XML 复核，2026-10-11 三升；6.4.x 系列前核）：readFromReplica=true 且未配置 ReadConnectionString 时
-            // 逐位回落主库（未配置=行为不变）；配置后本读流可走副本。6.4.0 ARCH-001 读路由收口（READ-002 opt-in 教义 6.5.0 XML 明示不回归，与 6.4.x 逐字同文）
+            // 上游契约（6.6.0 XML 复核，2026-10-20 升位；6.4.x 系列前核）：readFromReplica=true 且未配置 ReadConnectionString 时
+            // 逐位回落主库（未配置=行为不变）；配置后本读流可走副本。6.4.0 ARCH-001 读路由收口（READ-002 opt-in 教义 6.6.0 XML 明示不回归，与 6.4.x 逐字同文）
             // （2026-10-06）后 opt-in 教义明示不回归（CreateReadRoutedCommandAsync 分支③——本调用无事务无并行作用域）。
             await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(readStreamSql, readFromReplica: true, ct: cancellationToken).ConfigureAwait(false))
             {
                 if (--maxCount < 0) yield break; // P3 修复：先减后判（maxCount=0 时零产出，对齐 EFCore ThrowIfLessThan(1)）
                 checked { read++; }
-                yield return ToRecorded(row, streamName);
+                yield return ToRecorded(row, streamName, UseBinaryEventId);
             }
         }
         finally
@@ -453,7 +674,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
         // ITM-079 修复：SQL LIMIT 下推（同 ReadStreamAsync——语义与字面量拼接方式一致）
         var readAllSql = FormattableStringFactory.Create(
-            "SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= {0} ORDER BY global_position"
+            "SELECT global_position, event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= {0} ORDER BY global_position"
                 + (maxCount != int.MaxValue ? $" LIMIT {maxCount}" : string.Empty),
             fromPosition);
         using var activity = PalActivitySource.StartEventLogReadAll(fromPosition);
@@ -462,12 +683,28 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 对齐 EventLogDbContext/InMemoryEventLog）。
         try
         {
+            if (UseBinaryEventId)
+            {
+                var binarySql = FormattableStringFactory.Create(
+                    "SELECT global_position, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= {0} ORDER BY global_position"
+                        + (maxCount != int.MaxValue ? $" LIMIT {maxCount}" : string.Empty),
+                    fromPosition);
+                await foreach (var row in Session.QueryAsyncEnumerable<EventLogBinaryRow>(
+                    binarySql, readFromReplica: true, ct: cancellationToken).ConfigureAwait(false))
+                {
+                    if (--maxCount < 0) yield break;
+                    checked { read++; }
+                    yield return ToRecorded(row);
+                }
+                yield break;
+            }
+
             // 读副本标注（同 ReadStreamAsync——纯读流无 read-after-write 依赖，未配置读串时回落主库）
             await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(readAllSql, readFromReplica: true, ct: cancellationToken).ConfigureAwait(false))
             {
                 if (--maxCount < 0) yield break; // P3 修复（八轮评审）：先减后判——对齐 ReadStreamAsync 结构
                 checked { read++; }
-                yield return ToRecorded(row, row.StreamName);
+                yield return ToRecorded(row, row.StreamName, UseBinaryEventId);
             }
         }
         finally
@@ -478,7 +715,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
     }
 
     /// <summary>EventLogRow → RecordedEvent 领域类型（零拷贝路径，payload/metadata 直接引用 byte[]）。</summary>
-    private static RecordedEvent ToRecorded(EventLogRow row, string streamName)
+    private static RecordedEvent ToRecorded(EventLogRow row, string streamName, bool useBinaryEventId)
     {
         // P2 定案：审计 6 字段全量还原（此前 4 个追踪字段回填 null，备份/迁移往返后追踪链断）
         var audit = string.IsNullOrEmpty(row.ActorId) && string.IsNullOrEmpty(row.Reason)
@@ -491,9 +728,33 @@ public class PalOrmEventLog<TProvider> : IEventLog
 
         // P2 修复（零拷贝真化）：Rehydrate 会 ToArray 复制 payload/metadata；
         // InternalsVisibleTo 补 PalORM 后走 RehydrateFromBytes（真零拷贝，与 EFCore/StoredEvent 同路径）
+        var eventId = useBinaryEventId && row.EventIdBin is { Length: 16 }
+            ? Ulid.New(row.EventIdBin)
+            : row.EventId;
         return RecordedEvent.RehydrateFromBytes(
             streamName, row.StreamVersion, row.GlobalPosition, row.RecordedAt,
-            row.EventId, row.EventName, row.SchemaVersion, row.ContentType,
+            eventId, row.EventName, row.SchemaVersion, row.ContentType,
+            row.Payload, row.Metadata, audit);
+    }
+
+    /// <summary>二进制投影行 → RecordedEvent；NULL/非 16 字节直接失败，不静默回退。</summary>
+    private static RecordedEvent ToRecorded(EventLogBinaryRow row)
+    {
+        var audit = string.IsNullOrEmpty(row.ActorId) && string.IsNullOrEmpty(row.Reason)
+            && string.IsNullOrEmpty(row.CorrelationId) && string.IsNullOrEmpty(row.CausationId)
+            && string.IsNullOrEmpty(row.TraceParent) && string.IsNullOrEmpty(row.TraceState)
+            ? EventAuditMetadata.Empty
+            : new EventAuditMetadata(row.ActorId, row.Reason,
+                ParseUlid(row.CorrelationId), ParseUlid(row.CausationId),
+                row.TraceParent, row.TraceState);
+
+        if (row.EventIdBin is not { Length: 16 })
+            throw new InvalidOperationException(
+                $"Event at global position {row.GlobalPosition} has no 16-byte event_id_bin; run the M4 backfill before enabling binary reads.");
+
+        return RecordedEvent.RehydrateFromBytes(
+            row.StreamName, row.StreamVersion, row.GlobalPosition, row.RecordedAt,
+            Ulid.New(row.EventIdBin), row.EventName, row.SchemaVersion, row.ContentType,
             row.Payload, row.Metadata, audit);
     }
 

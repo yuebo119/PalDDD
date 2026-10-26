@@ -10,6 +10,10 @@
 //   ｜ 输入/输出通过选择器函数从父/子状态中提取，保持类型安全。
 //   ｜ 子 Saga 完成后父 Saga 继续执行后续步骤。
 //   ｜ 子 Saga 失败时触发父 Saga 的补偿链。
+//   ｜ ⚠️ 子 Saga 必须同步完成：含 InterruptStep / HITL 的子流程停在
+//   ｜    AwaitingHumanDecision 时，父步骤以明确异常失败（不记为成功、不继续后续
+//   ｜    步骤）。人工审批请建模为父 Saga 的 InterruptStep，或让子流程作为独立
+//   ｜    顶层 Saga 运行（2026-10-22 R14 F3）。
 // ─────────────────────────────────────────────────────────────
 
 namespace PalDDD.Transactions;
@@ -49,7 +53,8 @@ public sealed class ChildSagaStep<TChildState, TInput, TOutput> : SagaStep, IInt
     /// <param name="key">步骤 key</param>
     /// <param name="inputSelector">从父 Saga 状态提取子 Saga 输入</param>
     /// <param name="outputSelector">从子 Saga 状态提取输出写回父状态</param>
-    /// <param name="outputApplier">可选的输出应用器——将输出写回父状态。若为 null，输出仅被提取但不自动应用。</param>
+    /// <param name="outputApplier">可选的输出应用器——将输出写回父状态。若为 null，
+    /// <paramref name="outputSelector"/> 不会被求值：输出既不提取也不应用。</param>
     /// <param name="compensate">补偿动作（可选）</param>
     public ChildSagaStep(
         string key,

@@ -82,8 +82,10 @@ public sealed class EventLogPositionReserver
     private readonly SemaphoreSlim _dbSemaphore = new(1, 1);
 
     /// <summary>使用指定的区块大小创建预留器。</summary>
-    /// <param name="chunkSize">每次持久化分配的位置数量。值越大数据库往返越少，但崩溃时潜在间隙也越多。</param>
-    public EventLogPositionReserver(int chunkSize = 100)
+    /// <param name="chunkSize">每次持久化分配的位置数量。默认 1000：块耗尽时所有追加者会在
+    /// 信号量上排队等一次 SELECT+SaveChanges；100 的默认值让该停摆每 100 次追加出现一次。
+    /// 值越大数据库往返越少，但崩溃时潜在间隙也越多（ReadAll &gt;= 语义兼容）。</param>
+    public EventLogPositionReserver(int chunkSize = 1000)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(chunkSize, 1);
         _chunkSize = chunkSize;
@@ -135,6 +137,19 @@ public sealed class EventLogPositionReserver
         await _dbSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // 2026-10-19 性能实施轮：信号量唤醒后复查块缓存。块边界上多个并发追加者
+            // 同时走慢路径排队；首个分配成功后，其余等待者必须复用新块，否则每个
+            // 等待者各取一整块（32 并发约 64 次串行往返 + 31 个块的浪费）。
+            lock (_lock)
+            {
+                if (_initialized && _lo + count <= _hi)
+                {
+                    var cachedAfterWait = _lo;
+                    _lo += count;
+                    return cachedAfterWait;
+                }
+            }
+
             const int maxRetries = 5;
             for (var attempt = 0; attempt < maxRetries; attempt++)
             {
@@ -155,6 +170,9 @@ public sealed class EventLogPositionReserver
                 try
                 {
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    // 2026-10-21：成功保存后立即精确 Detach allocator，避免 EventLogDbContext
+                    // 每次 append 的清理阶段再扫描一次 ChangeTracker.Entries<Allocator>()。
+                    context.Entry(allocator).State = EntityState.Detached;
                 }
                 catch (DbUpdateException ex) when (ex is not DbUpdateConcurrencyException
                     && !IsUniqueConstraintViolation(ex))

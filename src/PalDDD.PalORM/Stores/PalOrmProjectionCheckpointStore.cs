@@ -24,7 +24,7 @@ namespace PalDDD.PalORM.Stores;
 /// 未挂 cmd.Transaction 的命令抛 InvalidOperationException（MySqlConnector 严格校验）。
 /// </para>
 /// </summary>
-public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointStore, IResumableProjectionCheckpointStore
+public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointStore, IResumableProjectionCheckpointStore, IProjectionLeaseRenewalStore
     where TProvider : IDbProvider
 {
     [SuppressMessage("Performance", "CA1051:Do not declare visible instance fields",
@@ -192,9 +192,16 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
             global::PalORM.SqlDialect.MySql => "SIGNED", // MySQL CAST 目标为 SIGNED/UNSIGNED（无裸 INTEGER）
             _ => "INTEGER",
         };
+        // R11 F4：与 Dapper 实现同款 round-trip 守卫——SQLite/MySQL 的 CAST 对 "99abc"
+        // 截断为 99，必须把 CAST 结果再转文本与原文比对；任一不匹配回退全量。PG 的
+        // CAST 本身抛错，由下方 catch 兜底。
+        var textType = TProvider.Dialect == global::PalORM.SqlDialect.MySql ? "CHAR" : "TEXT";
+        var invalidPositionsExpr = TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql
+            ? "CAST(0 AS BIGINT)"
+            : $"COALESCE(SUM(CASE WHEN CAST(CAST(position AS {castType}) AS {textType}) <> position THEN 1 ELSE 0 END), 0)";
         await using var cmd = CreateRawCommand();
-#pragma warning disable S2077 // castType 为方言常量（BIGINT/SIGNED/INTEGER），值侧参数化
-        cmd.CommandText = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END), MAX(CAST(position AS {castType})) FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1";
+#pragma warning disable S2077 // castType/textType 为方言常量（BIGINT/SIGNED/INTEGER/CHAR/TEXT），值侧参数化
+        cmd.CommandText = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END), MAX(CAST(position AS {castType})), {invalidPositionsExpr} FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1";
 #pragma warning restore S2077
         AddParam(cmd, "@p0", projectionName);
         AddParam(cmd, "@p1", sourceName);
@@ -203,6 +210,8 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
                 return null; // 理论不可达（聚合恒返一行）——防御性按无行处理
+            if (reader.GetInt64(2) > 0)
+                return null; // 非数值/非规范 Position——数值契约外，回退全量
             long? firstIncomplete = reader.IsDBNull(0) ? null : reader.GetInt64(0);
             long? maxPosition = reader.IsDBNull(1) ? null : reader.GetInt64(1);
             var resume = firstIncomplete ?? (maxPosition is { } max ? max + 1 : (long?)null);
@@ -210,12 +219,44 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
                 ? value.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : null;
         }
-        catch (System.Data.Common.DbException)
+        catch (System.Data.Common.DbException ex) when (IsPositionCastFailure(ex))
         {
-            // PG 对非数值 Position 串 CAST 抛错（22007 族）——数值契约外的脏数据，
-            // 续读是优化面：回退全量回放（对齐 Dapper 实现同款口径）
+            // R11 F4 + R13 F14：只有 PG 的「非数值 Position → CAST」失败（22P02/22007）
+            // 才按脏数据回退全量；连接中断/超时等其他 DbException 必须上抛
+            //（与 EF 栈已收窄的口径对齐）。
             return null;
         }
+    }
+
+    /// <summary>R13 F14：Position CAST 失败判定（与 EF/Dapper 同口径）。</summary>
+    internal static bool IsPositionCastFailure(System.Data.Common.DbException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return exception.SqlState is "22P02" or "22007";
+    }
+
+    /// <summary>R12 C-02：心跳续租——revision + Processing 守卫，只更新租约/更新时间。</summary>
+    public async ValueTask<bool> RenewLeaseAsync(
+        ProjectionCheckpoint checkpoint,
+        DateTimeOffset now,
+        TimeSpan processingTimeout,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+        // MA0015：异常 paramName 指向入参 checkpoint（字段来自它），不指向字段本身。
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.ProjectionName, nameof(checkpoint));
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.SourceName, nameof(checkpoint));
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.Position, nameof(checkpoint));
+
+        var leaseUntil = now + processingTimeout;
+        var affected = await Session.ExecuteAsync(
+            $"UPDATE projection_checkpoints SET updated_at = {now}, lease_until = {leaseUntil} WHERE projection_name = {checkpoint.ProjectionName} AND source_name = {checkpoint.SourceName} AND position = {checkpoint.Position} AND revision = {checkpoint.Revision} AND status = {(int)ProjectionCheckpointStatus.Processing}",
+            ct).ConfigureAwait(false);
+        if (affected == 0)
+            return false;
+        return true;
     }
 
     private static void AddParam(DbCommand cmd, string name, object value)

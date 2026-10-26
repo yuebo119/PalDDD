@@ -28,6 +28,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using PalDDD.Transactions;
 using PalDDD.Idempotency;
 using PalDDD.EventLog;
@@ -131,8 +132,9 @@ public static class DapperServiceCollectionExtensions
     /// <summary>
     /// P2/P3 修复（十七轮）：为 Saga 快照持久化（saga_data 列）提供便捷注册。<br/>
     /// <see cref="AddPalDapperTransactions"/> 的开放泛型注册 <c>DapperSagaStateStore&lt;&gt;</c>
-    /// 无 <c>JsonTypeInfo</c> 传入通道——jsonTypeInfo 恒 null，用户自定义 TState 的业务字段
-    /// 不持久化（saga_data 列写 NULL，重启即丢，仅恢复 SagaId/状态等元数据列）。<br/>
+    /// 无 <c>JsonTypeInfo</c> 传入通道——未调用本方法时 <c>SerializeState</c> 在保存首个
+    /// Saga 状态时 <b>fail-fast 抛 <see cref="InvalidOperationException"/></b>
+    ///（decision-2026-09-19；原文「写 NULL、重启即丢」与实际实现对错）。<br/>
     /// 此方法以<b>具体泛型</b>注册覆盖开放泛型（MS DI 具体泛型优先于开放泛型解析），
     /// 闭包构造传入 <paramref name="jsonTypeInfo"/>（STJ source-generated）。
     /// <para>
@@ -165,6 +167,27 @@ public static class DapperServiceCollectionExtensions
                 timeProvider: sp.GetService<TimeProvider>(),
                 dbType: sp.GetRequiredService<DapperDbType>()));
 
+        return services;
+    }
+
+    /// <summary>
+    /// 注册历史表保留清理（2026-10-20 性能轮，可选）。默认不注册、不运行；显式调用后
+    /// 后台服务按 <see cref="RetentionOptions.PollInterval"/> 分批删除已处理 Outbox/Inbox
+    /// 行与已过期幂等记录。建议与 <see cref="AddPalDapperTransactions"/> 同 scope 使用。
+    /// </summary>
+    /// <param name="services">DI 服务集合。</param>
+    /// <param name="type">数据库方言（与 Store 注册一致）。</param>
+    /// <param name="configure">可选保留策略配置。</param>
+    public static IServiceCollection AddPalDapperRetention(
+        this IServiceCollection services,
+        DapperDbType type,
+        Action<RetentionOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddPalRetention(configure);
+        services.TryAddScoped<IRetentionStore>(sp =>
+            new DapperRetentionStore(sp.GetRequiredService<DbConnection>(), type));
         return services;
     }
 }

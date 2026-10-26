@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using PalDDD.CQRS;
 using System.Text.Json.Serialization;
@@ -61,6 +62,89 @@ public sealed partial class StreamRunRegistryTests
     }
 
     [Test]
+    public async Task Register_ConcurrentAtCapacity_NeverExceedsMax()
+    {
+        // R11 F19 回归锁：容量判定必须是原子占位。多轮并发注册，任何一轮都不得
+        // 出现两个成功者。
+        for (var round = 0; round < 10; round++)
+        {
+            using var registry = CreateRegistry(out _, maxConcurrentRuns: 1);
+            var successes = 0;
+            var tasks = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+            {
+                try
+                {
+                    registry.Register(new RegQuery("p"), null, null, new BlockingHandler());
+                    Interlocked.Increment(ref successes);
+                }
+                catch (StreamRunCapacityExceededException)
+                {
+                }
+            })).ToArray();
+
+            await Task.WhenAll(tasks);
+            await Assert.That(successes).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task RegisterDeferred_AttachBeforeStart_PreservesPrefix()
+    {
+        // R12 C-11 回归锁：启动端点必须先登记并附着、再启动泵。快速同步生产者在附着前
+        // 填满缓冲会让首个响应以 gap 开局并丢失前缀；延迟启动后附着起点固定为 0。
+        var options = new DetachedStreamOptions
+        {
+            MaxBufferedItems = 2,
+            MaxItems = 100_000,
+            MaxConcurrentRuns = 10,
+            DetachGrace = TimeSpan.FromSeconds(30),
+            MaxRunDuration = TimeSpan.FromMinutes(1),
+        };
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IStreamQueryHandler<RegQuery, RegChunk>>(new FixedHandler(10));
+        using var provider = services.BuildServiceProvider();
+        using var registry = new StreamRunRegistry(
+            options, provider.GetRequiredService<IServiceScopeFactory>());
+
+        var runId = registry.RegisterDeferred<RegQuery, RegChunk>(
+            new RegQuery("p"), null, null, out var registeredRun);
+        var run = registeredRun!;
+        await Assert.That(runId).IsNotEmpty();
+        await Assert.That(run.BufferedCount).IsEqualTo(0);
+        await Assert.That(run.State).IsEqualTo(StreamRunState.Running);
+
+        await Assert.That(run.TryBeginAttach(null, out var startIndex, out var gap, out _)).IsTrue();
+        await Assert.That(startIndex).IsEqualTo(0);
+        await Assert.That(gap).IsFalse();
+
+        run.StartFromServices(new RegQuery("p"), null, null);
+        await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
+
+        await Assert.That(run.OldestAvailable).IsEqualTo(8);
+        await run.ReleaseAttachmentAsync();
+    }
+
+    [Test]
+    public async Task TerminalRuns_RetentionIsBoundedByMaxConcurrentRuns()
+    {
+        // R12 PF-1 回归锁：终态 run 不受 MaxConcurrentRuns 约束时，内存随“完成速率 ×
+        // 保留时长”增长，文档上界失效。20 个短 run 串行完成后，总跟踪数不得超过 2×上限
+        //（运行中 + 保留终态各至多 MaxConcurrentRuns）。
+        using var registry = CreateRegistry(out var options, maxBufferedItems: 4, maxConcurrentRuns: 2);
+        options.RetentionAfterCompletion = TimeSpan.FromMinutes(10);
+
+        for (var i = 0; i < 20; i++)
+        {
+            var runId = registry.Register(new RegQuery("p"), null, null, new FixedHandler(1));
+            var run = await WaitForRunAsync(registry, runId);
+            await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
+        }
+
+        await Assert.That(registry.TrackedCount).IsLessThanOrEqualTo(4);
+    }
+
+    [Test]
     public async Task Cancel_UnknownRun_ReturnsFalse()
     {
         using var registry = CreateRegistry(out _);
@@ -101,7 +185,7 @@ public sealed partial class StreamRunRegistryTests
         var run = await WaitForRunAsync(registry, runId);
 
         await Assert.That(run.TryBeginAttach(null, out _, out _, out _)).IsTrue();
-        run.ReleaseAttachment();
+        await run.ReleaseAttachmentAsync();
 
         await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
         await Assert.That(run.State).IsEqualTo(StreamRunState.Cancelled);
@@ -124,7 +208,28 @@ public sealed partial class StreamRunRegistryTests
         await Assert.That(run.TryBeginAttach("evt-2", out var startIndex, out var gap, out _)).IsTrue();
         await Assert.That(startIndex).IsEqualTo(3); // evt-2 之后从 index 3 起
         await Assert.That(gap).IsFalse();
-        run.ReleaseAttachment();
+        await run.ReleaseAttachmentAsync();
+    }
+
+    [Test]
+    public async Task Attach_CustomNumericIds_DoNotFallBackToPositionParsing()
+    {
+        // R11 F20 回归锁：自定义数字 id（1000..1009）滚出缓冲后，Last-Event-ID=1000
+        // 不得被当成位置索引返回 1001（静默跳数据、无 gap），应从最旧可用位置重放并报 gap。
+        using var registry = CreateRegistry(out var options, maxBufferedItems: 3);
+        options.DetachGrace = TimeSpan.FromSeconds(30);
+        var runId = registry.Register(
+            new RegQuery("p"),
+            eventSelector: null,
+            idSelector: static chunk => (1000 + chunk.Index).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            handlerOverride: new FixedHandler(10));
+        var run = await WaitForRunAsync(registry, runId);
+        await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
+
+        await Assert.That(run.TryBeginAttach("1000", out var startIndex, out var gap, out _)).IsTrue();
+        await Assert.That(gap).IsTrue();
+        await Assert.That(startIndex).IsEqualTo(run.OldestAvailable);
+        await run.ReleaseAttachmentAsync();
     }
 
     [Test]
@@ -140,7 +245,7 @@ public sealed partial class StreamRunRegistryTests
         await Assert.That(run.TryBeginAttach("0", out var startIndex, out var gap, out _)).IsTrue();
         await Assert.That(gap).IsTrue();
         await Assert.That(startIndex).IsEqualTo(run.OldestAvailable);
-        run.ReleaseAttachment();
+        await run.ReleaseAttachmentAsync();
     }
 
     [Test]
@@ -153,7 +258,7 @@ public sealed partial class StreamRunRegistryTests
 
         await Assert.That(run.TryBeginAttach(null, out _, out _, out _)).IsTrue();
         await Assert.That(run.TryBeginAttach(null, out _, out _, out _)).IsFalse();
-        run.ReleaseAttachment();
+        await run.ReleaseAttachmentAsync();
     }
 
     [Test]
@@ -167,6 +272,82 @@ public sealed partial class StreamRunRegistryTests
         await Assert.That(run.TryBeginAttach(null, out _, out _, out var gen2)).IsTrue();
         await Assert.That(gen2).IsEqualTo(gen1 + 1);
         await Assert.That(run.AttachedCount).IsEqualTo(2); // 两连接并存直到旧者观测到代际变化
+    }
+
+    [Test]
+    public async Task StreamToAsync_CancelledWhileIdle_CompletesWithoutWaitingHeartbeat()
+    {
+        using var registry = CreateRegistry(out var options, detachGraceSeconds: 30);
+        options.DetachGrace = TimeSpan.FromSeconds(30);
+        var runId = registry.Register(new RegQuery("p"), null, null, new BlockingHandler());
+        var run = await WaitForRunAsync(registry, runId);
+        await Assert.That(run.TryBeginAttach(null, out var startIndex, out var gap, out var generation)).IsTrue();
+
+        using var cts = new CancellationTokenSource();
+        var context = new DefaultHttpContext();
+        context.RequestAborted = cts.Token;
+        context.Response.Body = new MemoryStream();
+
+        var streamTask = run.StreamToAsync(
+            context,
+            RegChunkJsonContext.Default.RegChunk,
+            generation,
+            startIndex,
+            gap,
+            keepAliveInterval: TimeSpan.FromSeconds(30));
+
+        await Task.Delay(100);
+        cts.Cancel();
+
+        // 旧实现 Monitor.Wait(30s) 不观察 RequestAborted，这里会超时；
+        // 新实现 WaitAsync(ms, ct) 在取消时立即返回（超时抛 TimeoutException 即判红）。
+        try
+        {
+            await streamTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (OperationCanceledException)
+        {
+            // 断线取消是正常收尾路径
+        }
+    }
+
+    [Test]
+    public async Task StreamToAsync_IdleWithKeepAlive_WritesHeartbeat()
+    {
+        using var registry = CreateRegistry(out var options, detachGraceSeconds: 30);
+        options.DetachGrace = TimeSpan.FromSeconds(30);
+        var runId = registry.Register(new RegQuery("p"), null, null, new BlockingHandler());
+        var run = await WaitForRunAsync(registry, runId);
+        await Assert.That(run.TryBeginAttach(null, out var startIndex, out var gap, out var generation)).IsTrue();
+
+        using var cts = new CancellationTokenSource();
+        var context = new DefaultHttpContext();
+        context.RequestAborted = cts.Token;
+        var body = new MemoryStream();
+        context.Response.Body = body;
+
+        var streamTask = run.StreamToAsync(
+            context,
+            RegChunkJsonContext.Default.RegChunk,
+            generation,
+            startIndex,
+            gap,
+            keepAliveInterval: TimeSpan.FromMilliseconds(30));
+
+        // 覆盖 3-4 个心跳窗口后取消；旧实现赋值后无条件 continue，心跳帧从未写出（S1854）
+        await Task.Delay(120);
+        await cts.CancelAsync();
+        try
+        {
+            await streamTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (OperationCanceledException)
+        {
+            // 断线取消是正常收尾路径
+        }
+
+        var text = System.Text.Encoding.UTF8.GetString(body.ToArray());
+        await Assert.That(text).Contains(":keepalive");
     }
 
     // ─── 夹具 ───
@@ -232,6 +413,9 @@ public sealed partial class StreamRunRegistryTests
 }
 
 internal sealed record RegChunk(int Index);
+
+[JsonSerializable(typeof(RegChunk))]
+internal sealed partial class RegChunkJsonContext : JsonSerializerContext;
 
 internal sealed record RegQuery(string Prompt) : IStreamQuery<RegChunk>;
 

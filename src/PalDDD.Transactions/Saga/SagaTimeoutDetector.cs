@@ -21,9 +21,9 @@ namespace PalDDD.Transactions;
 internal sealed class SagaTimeoutDetector<TState>
     where TState : SagaState
 {
-    private readonly IReadOnlyList<(string Key, SagaStep Step)> _stepsInOrder;
+    private readonly IReadOnlyList<SagaStepRegistration> _stepsInOrder;
 
-    public SagaTimeoutDetector(IReadOnlyList<(string Key, SagaStep Step)> stepsInOrder)
+    public SagaTimeoutDetector(IReadOnlyList<SagaStepRegistration> stepsInOrder)
     {
         // P3 守卫族对齐（SRC-108）：null stepsInOrder 原延迟到 IsTimedOut 的 foreach 才 NRE，
         // 失败点远离构造入口（对齐 PalOrmUnitOfWork ITM-281 三栈守卫同款口径）
@@ -49,52 +49,93 @@ internal sealed class SagaTimeoutDetector<TState>
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        // EPSL 地毯审计 2026-10-16 A 批 #13：常态（无超时）路径零分配化。旧码该路径
-        // 分配三笔（红证明实测 96B/次）：① try 外无条件空 List（~32B，本项主目标）；
-        // ② 下方 `[]` 集合表达式每次求值新建空数组（~32B，同路径同族，换 Array.Empty）；
-        // ③ foreach 经 IReadOnlyList 接口取枚举器（~32B，改下标循环）。三笔全消后
-        // 无超时路径零堆分配；有超时路径行为不变（首个命中才建 List）。
+        // 常态（无超时）路径零分配：下标循环 + 首个命中才建 List + Array.Empty 空视图。
         List<SagaStep>? list = null;
         for (var i = 0; i < _stepsInOrder.Count; i++)
         {
-            var (key, step) = _stepsInOrder[i];
-            // v43 P2 修复（判据三条件合取，三个既有测试语义矩阵一次保全）：
-            // ① E1-P2 场景（AWD + 普通步骤已成功 + 残留时间戳超期）→ 排除：StepStartedAt
-            //    只写不清（v17 声明），三十四轮 AWD 纳入扫描后同状态混注册（带 Timeout 普通
-            //    步骤 A 成功执行 + 无 Timeout InterruptStep 中断）时，A 的残留时间戳让
-            //    IsTimedOut 命中"早已成功"的 A，违背中断态"显式无限等待"契约；
-            // ② 三十四轮场景（InterruptStep 自带 Timeout 超期）→ 保留触发："等待人工决策
-            //    超时"是 InterruptStep 的设计能力（人工决策失踪由 Timeout 兜底回滚）；
-            // ③ Active 态普通步骤已成功 + 超期 → 保留触发：saga 卡死兜底
-            //    （RecordsCompensationFailedStatus 语义）。
-            // 排除条件 = AWD 态 ∧ 步骤已成功完成 ∧ 非 InterruptStep
-            var isAwdCompletedNonInterruptStep = state.Status == SagaStatus.AwaitingHumanDecision
-                && state.ExecutedStepKeys.Contains(key)
-                && step.DispatchKind != StepDispatchKind.Interrupt;
-            if (step.Timeout.HasValue
-                && state.CurrentState == SagaKey.ExtractState(key)
-                && state.StepStartedAt.TryGetValue(key, out var startedAt)
-                && (now - startedAt) > step.Timeout.Value
-                && !isAwdCompletedNonInterruptStep)
-            {
-                (list ??= []).Add(step);
-            }
+            var registration = _stepsInOrder[i];
+            if (IsTimedOutStep(state, registration, now))
+                (list ??= []).Add(registration.Step);
         }
 
-        // 无超时返回空视图（Array.Empty 单例，零分配）；有超时返回收集的列表
         timedOutSteps = (IReadOnlyList<SagaStep>?)list ?? Array.Empty<SagaStep>();
         return list is not null;
     }
+
+    /// <summary>
+    /// 计算下一次需要检查的时间（2026-10-19 M1）：当前状态中带 Timeout、已开始执行且
+    /// 未被 AWD 已成功步骤排除的步骤，取 <c>StepStartedAt + Timeout</c> 的最小值。
+    /// 无待检查步骤返回 null（Saga 在等待事件，不需要超时扫描）。
+    /// </summary>
+    public DateTimeOffset? ComputeNextCheckAt(TState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        DateTimeOffset? next = null;
+        for (var i = 0; i < _stepsInOrder.Count; i++)
+        {
+            var registration = _stepsInOrder[i];
+            if (!MatchesStep(state, registration)
+                || !state.StepStartedAt.TryGetValue(registration.Key, out var startedAt))
+                continue;
+
+            var timeout = registration.Step.Timeout!.Value;
+            // R13 F2：Timeout 只校验非负，TimeSpan.MaxValue（"永不过期"的自然写法）会让
+            // startedAt + timeout 溢出并抛 AOOR，步骤在开始执行前即失败。到期时刻不可
+            // 表示 = 实际永不到期——跳过该步骤（其余步骤仍取最小值）；全部跳过时返回
+            // null，调用方写 NoPendingTimeout 哨兵（MySQL DATETIME(6) 可存）。
+            if (timeout >= DateTimeOffset.MaxValue - startedAt)
+                continue;
+
+            var due = startedAt + timeout;
+            if (next is null || due < next.Value)
+                next = due;
+        }
+        return next;
+    }
+
+    /// <summary>
+    /// v43 P2 判据三条件合取：
+    /// ① AWD 态 + 普通步骤已成功 + 残留时间戳超期 → 排除（中断态显式无限等待契约）；
+    /// ② InterruptStep 自带 Timeout 超期 → 保留（人工决策失踪兜底）；
+    /// ③ Active 态普通步骤已成功 + 超期 → 保留（Saga 卡死兜底）。
+    /// 2026-10-21：状态名在注册期固化，扫描不再从 key 切分（原 ExtractState 每步一次分配）。
+    /// </summary>
+    private static bool MatchesStep(TState state, in SagaStepRegistration registration)
+    {
+        var isAwdCompletedNonInterruptStep = state.Status == SagaStatus.AwaitingHumanDecision
+            && state.ExecutedStepKeys.Contains(registration.Key)
+            && registration.Step.DispatchKind != StepDispatchKind.Interrupt;
+        return registration.Step.Timeout.HasValue
+            && state.CurrentState == registration.State
+            && !isAwdCompletedNonInterruptStep;
+    }
+
+    private static bool IsTimedOutStep(TState state, in SagaStepRegistration registration, DateTimeOffset now)
+        => MatchesStep(state, registration)
+           && state.StepStartedAt.TryGetValue(registration.Key, out var startedAt)
+           && (now - startedAt) > registration.Step.Timeout!.Value;
 }
 
-/// <summary>Saga key 工具——"state|EventType" 格式的解析。Saga 与 SagaTimeoutDetector 共用。</summary>
+/// <summary>
+/// 步骤注册项——注册期同时固化状态名、事件名与持久化 key。运行时查找与超时扫描只读
+/// 这三个值，不再按事件重建 "State|EventName" 字符串，也不从 key 切分状态名。
+/// </summary>
+internal readonly record struct SagaStepRegistration(
+    string State,
+    string? EventName,
+    string Key,
+    SagaStep Step);
+
+/// <summary>Saga key 工具——"state|EventType" 格式的构造与解析。Saga 注册期构造 key 使用
+/// <see cref="Make"/>；<see cref="ExtractState"/> 仅测试/兼容保留。</summary>
 /// <remarks>
 /// 💡 <b>key 格式（P3 声明·十七轮）</b>：事件精确匹配 key 为 <c>"State|EventName"</c>（如
 /// <c>"Approved|OrderCreated"</c>）；通配步骤 key 仅为 <c>"State"</c>（无事件段）。
 /// <para>
 /// ⚠️ <b>运行时校验：</b><see cref="Make"/> 在 state 包含 <c>|</c> 时抛出 <see cref="ArgumentException"/>，
-/// 因为含 <c>|</c> 的状态名会破坏 <see cref="ExtractState"/> 的状态名还原逻辑。
-/// 实际场景中状态名通常为 PascalCase 或 kebab-case，不会出现此字符。
+/// 因为 <c>|</c> 是 key 线格式的分隔符（超时扫描已改为注册期保存 State，不再从 key 切分；
+/// 该校验保留为线格式契约）。<see cref="ExtractState"/> 无生产调用点。
 /// <see cref="SagaState.CurrentState"/> 的 setter 同样执行此校验。
 /// </para>
 /// <para>
@@ -113,9 +154,11 @@ internal static class SagaKey
     /// </summary>
     /// <param name="state">Saga 状态名（不含 <c>|</c> 字符）</param>
     /// <param name="eventType">触发事件类型；null 表示通配步骤</param>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> 为 null 时抛出。</exception>
     /// <exception cref="ArgumentException"><paramref name="state"/> 包含 <c>|</c> 字符时抛出</exception>
     public static string Make(string state, Type? eventType)
     {
+        ArgumentNullException.ThrowIfNull(state);
         if (state.Contains('|'))
             throw new ArgumentException(
                 $"Saga 状态名不能包含 '|' 字符（当前值：\"{state}\"），因为 '|' 用作 key 分隔符。请使用 PascalCase 或 kebab-case。",

@@ -9,6 +9,21 @@ namespace PalDDD.DependencyInjection.Tests;
 public sealed class ServiceRegistrationTests
 {
     [Test]
+    public async Task AddPalDDD_SelfProvidesLoggerFacade()
+    {
+        // R11 F2 回归锁：AddPalDDD 是 usage 独立片段与 MapCommand 路径的基础注册，
+        // 应自带 IPalLogger 门面，使 ExceptionMiddleware 等组件级消费者可解析。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalDDD();
+        using var provider = services.BuildServiceProvider();
+
+        var loggers = provider.GetServices<PalDDD.Core.Logging.IPalLogger<object>>().ToArray();
+
+        await Assert.That(loggers.Length).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task AddPalDDD_DoesNotRegisterConcreteSerializerAdapter()
     {
         var services = new ServiceCollection();
@@ -84,6 +99,28 @@ public sealed class ServiceRegistrationTests
             && sd.ImplementationType?.Name == "HandlerRegistrar")).IsTrue();
     }
 
+    /// <summary>
+    /// 契约盘点 2026-10-21 回归：文档推荐路径 <c>AddPalCoreStack()</c> + <c>AddPalCommandHandler</c>
+    /// 必须在首个 dispatch 成功——管道行为依赖的 <c>IPalLogger&lt;T&gt;</c> 由管道注册自带，
+    /// 不再要求调用方额外调用 AddPalLogging（原实现在首个 SendAsync 抛解析异常）。
+    /// </summary>
+    [Test]
+    public async Task AddPalCoreStack_CommandDispatch_ResolvesLoggerFacade()
+    {
+        var services = new ServiceCollection();
+        services.AddPalCoreStack();
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+
+        await using var provider = services.BuildServiceProvider();
+        foreach (var hostedService in provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>())
+            await hostedService.StartAsync(CancellationToken.None);
+
+        var dispatcher = provider.GetRequiredService<Dispatcher>();
+        var result = await dispatcher.SendAsync(new TestCommand());
+
+        await Assert.That(result).IsEqualTo("ok");
+    }
+
     /// <summary>评审 P2-2 回归：AddPalLogging 默认不清除用户已配置的日志 Provider
     /// （追加语义）；clearProviders: true 时恢复独占式接管。</summary>
     [Test]
@@ -108,22 +145,9 @@ public sealed class ServiceRegistrationTests
             .Any(p => ReferenceEquals(p, userProvider))).IsTrue();
 
         var loggerFactory = provider.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>();
-        await Assert.That(loggerFactory).IsNotNull();
+        await Assert.That(loggerFactory).IsTypeOf<Microsoft.Extensions.Logging.LoggerFactory>();
         // 行为冒烟：追加语义下 IPalLogger 适配可用
         _ = provider.GetRequiredService<PalDDD.Core.Logging.IPalLogger<object>>();
-    }
-
-    [Test]
-    public async Task AddPalFullStack_EqualsCoreStackWithoutInfrastructureAdapters()
-    {
-        var services = new ServiceCollection();
-
-        services.AddPalFullStack();
-
-        using var provider = services.BuildServiceProvider();
-        _ = provider.GetRequiredService<Dispatcher>(); // GetRequiredService 失败即抛（恒真断言已删）
-        await Assert.That(provider.GetRequiredService<IMessageBroker>()).IsTypeOf<NullMessageBroker>();
-        await Assert.That(provider.GetService<IMessageSerializer>()).IsNull();
     }
 
     [Test]
@@ -364,6 +388,25 @@ public sealed class ServiceRegistrationTests
         // 值类型响应（int）也应自动闭合注册
         var behaviors = provider.GetServices<IPipelineBehavior<TestQuery, int>>().ToArray();
         await Assert.That(behaviors.Length).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task AddPalCoreStack_AfterClosedRegistration_OtherRequestTypesLoseBehaviors()
+    {
+        // R13 F8 范围锁：先注册任一闭合 behavior 后，AddPalCoreStack 的开放泛型注册整体
+        // 跳过——其他请求类型不会获得 Validation/Logging。remarks 已声明「先到先得」，
+        // 本测试锁定其实际范围（任意闭合注册 -> 全部其他类型），防止未来无意扩大/缩小。
+        var services = new ServiceCollection();
+        services.AddPalLogging();
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+        services.AddPalCoreStack();
+        using var provider = services.BuildServiceProvider();
+
+        var closed = provider.GetServices<IPipelineBehavior<TestCommand, string>>().ToArray();
+        var other = provider.GetServices<IPipelineBehavior<TestQuery, int>>().ToArray();
+
+        await Assert.That(closed.Length).IsEqualTo(2);
+        await Assert.That(other.Length).IsEqualTo(0);
     }
 
     private sealed class TestDomainEventHandler : IEventHandler<TestDomainEvent>

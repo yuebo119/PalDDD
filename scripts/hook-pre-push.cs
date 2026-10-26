@@ -2,6 +2,7 @@
 // hook-pre-push.cs——pre-push 钩子判定层（2026-10-08，C# 化替换 42 行 bash）
 // ① main 分支保护（merge-base --is-ancestor：dev 已合入 main 才允许从 main 推送）
 // ② 同步提示（ITM-808：多会话积压的验证债可见性，信息性不阻断）
+// ②b 方言面验证提示（2026-10-21：store/方言 SQL 改动未配置 PALDDD_TEST_* 时提示，不阻断）
 // ③ review 债阻断（2026-10-18 增：metrics 最后一轮 >30 天且 src 有变更且无有效豁免时阻断；
 //    判定逻辑在 scripts/review-freshness.cs，可被 gate-audit 以 --today/--src-date 隔离探针）
 // ④ gate-lite CI 预览（快速门禁降级路径）
@@ -53,6 +54,26 @@ if (upstream.Length > 0)
         Console.WriteLine($"⚠️  pre-push：本地落后 {upstream} {behind} 个提交——推送可能被拒或需先 rebase（多会话并行写冲突风险，open-items O-2）。");
     if (ahead >= 10)
         Console.WriteLine($"⚠️  pre-push：本次推送承载 {ahead} 个积压提交——CI（含 aot-verify 真发布）将首次验证这批代码，失败排查面较大；建议日常小批推送。");
+
+    // ── ②b 方言面验证提示（信息性不阻断，2026-10-21 契约盘点 R2 后续项）──
+    // 方言 SQL 改动在本地默认跳过 PG/MySQL 用例；提示开发者至少跑一次真库探针，
+    // 避免“本地全绿”与 CI dialect-probe 脱节。不阻断：无 Docker 的机器无法提供库。
+    var changedFiles = upstream.Length > 0
+        ? Git("diff", "--name-only", $"{upstream}..HEAD")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        : [];
+    var dialectSensitive = changedFiles.Any(p =>
+        p.Contains("/Stores/", StringComparison.Ordinal)
+        || p.EndsWith("SqlTemplates.cs", StringComparison.Ordinal)
+        || p.EndsWith("SqlErrorClassifier.cs", StringComparison.Ordinal)
+        || p.EndsWith(".sql", StringComparison.OrdinalIgnoreCase));
+    var pgConfigured = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PALDDD_TEST_PG"));
+    var mySqlConfigured = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PALDDD_TEST_MYSQL"));
+    if (dialectSensitive && (!pgConfigured || !mySqlConfigured))
+    {
+        Console.WriteLine("⚠️  pre-push：本次推送改动了 store/方言 SQL，但未设置 PALDDD_TEST_PG/PALDDD_TEST_MYSQL——"
+            + "本地 PG/MySQL 用例将跳过；建议按 docs/development.md「本地真库（wslc）」跑一次方言探针（CI dialect-probe 仍会执行）。");
+    }
 }
 
 // ── ③ review 债阻断（判定逻辑在 scripts/review-freshness.cs，可隔离探针）──

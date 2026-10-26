@@ -3,6 +3,8 @@
 // ─────────────────────────────────────────────────────────────
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using PalDDD.Core.Logging;
 using System.Diagnostics.CodeAnalysis;
 
 namespace PalDDD.Transactions;
@@ -10,10 +12,44 @@ namespace PalDDD.Transactions;
 /// <summary>事务基础设施注册。</summary>
 public static class ServiceCollectionExtensions
 {
+    /// <summary>
+    /// 注册历史表保留清理的处理器与后台服务（2026-10-20 性能轮）。本方法不注册
+    /// <see cref="IRetentionStore"/>，由各存储栈（Dapper/PalORM/EF Core）在各自的 DI
+    /// 入口注册。默认不调用；显式调用后才启动清理。
+    /// </summary>
+    /// <param name="services">DI 服务集合。</param>
+    /// <param name="configure">可选保留策略配置。</param>
+    public static IServiceCollection AddPalRetention(
+        this IServiceCollection services,
+        Action<RetentionOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddOptions<RetentionOptions>()
+            .Configure(configure ?? (static _ => { }))
+            .Validate(static options =>
+                    options.PollInterval > TimeSpan.Zero
+                    && options.OutboxRetention > TimeSpan.Zero
+                    && options.InboxRetention > TimeSpan.Zero
+                    && options.BatchSize > 0
+                    && options.MaxBatchesPerTick > 0,
+                "Retention options require positive intervals, batch size, and max batches per tick.")
+            .ValidateOnStart();
+        services.TryAddScoped<RetentionProcessor>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RetentionProcessorService>());
+        return services;
+    }
+
     /// <summary>注册发件箱发布器。调用方还需注册 <see cref="Serialization.IMessageSerializer"/>、<see cref="Serialization.IMessageCatalog"/> 和 <see cref="IPalOutboxStore"/>。</summary>
+    /// <remarks>
+    /// 2026-10-21 R7：本方法登记 <see cref="IPalLogger{T}"/> 门面（依赖宿主的
+    /// <c>ILogger&lt;T&gt;</c>），因此不与 <c>AddPalCoreStack()</c>/<c>AddPalPipelineBehaviors()</c>
+    /// 同用时也不会在宿主启动阶段抛「Unable to resolve service for type IPalLogger&lt;OutboxProcessor&gt;」。
+    /// </remarks>
     public static IServiceCollection AddPalOutbox(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        services.EnsurePalLoggerFacade();
 
         services.AddOptions<OutboxOptions>()
             .Validate(static options => options.BatchSize > 0, "Outbox batch size must be greater than zero.")
@@ -38,16 +74,31 @@ public static class ServiceCollectionExtensions
             .Validate(static options => options.MaxInFlightPublishes >= 1, "Outbox MaxInFlightPublishes must be at least 1.")
             // R4/P0-2（ADR-027，2026-10-14）：终态标记批量化阈值守卫——负值/零无意义（1 = 逐条默认）
             .Validate(static options => options.BatchMarkThreshold >= 1, "Outbox BatchMarkThreshold must be at least 1.")
+            // 2026-10-19 性能实施轮：时间界冲刷必须早于租约到期至少 3 倍，避免“标记还没落库，
+            // 租约已过期被另一 worker 重投”的重复窗口失控。
+            .Validate(static options => options.BatchMarkFlushInterval > TimeSpan.Zero,
+                "Outbox BatchMarkFlushInterval must be greater than zero.")
+            .Validate(static options =>
+                    options.BatchMarkFlushInterval <= TimeSpan.FromTicks(options.LeaseDuration.Ticks / 3),
+                "Outbox BatchMarkFlushInterval must be at most one third of LeaseDuration.")
             .ValidateOnStart();
+        // 2026-10-22 性能轮：进程内唤醒信号（写入方落库后通知处理循环立即续批）。
+        // TryAddSingleton：允许宿主替换为自己的实现（如跨进程信号桥）。
+        services.TryAddSingleton<IOutboxWakeUpSignal, OutboxWakeUpSignal>();
         services.TryAddScoped<OutboxBatchProcessor>();
         services.AddHostedService<OutboxProcessor>();
         return services;
     }
 
     /// <summary>注册收件箱幂等性处理器。</summary>
+    /// <remarks>
+    /// 2026-10-21 R7：本方法登记 <see cref="IPalLogger{T}"/> 门面（依赖宿主的
+    /// <c>ILogger&lt;T&gt;</c>），组件级注册可独立于 <c>AddPalCoreStack()</c> 使用。
+    /// </remarks>
     public static IServiceCollection AddPalInbox(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        services.EnsurePalLoggerFacade();
 
         services.AddOptions<InboxOptions>()
             .Validate(static options => !string.IsNullOrWhiteSpace(options.DefaultConsumerName), "Inbox default consumer name is required.")
@@ -74,6 +125,9 @@ public static class ServiceCollectionExtensions
         where TOrchestrator : Saga<TState>
     {
         ArgumentNullException.ThrowIfNull(services);
+        // 2026-10-21 R7：SagaProcessor 构造要求 IPalLogger<SagaProcessor<TState>>——
+        // 组件级注册同样自带门面，避免宿主启动阶段解析失败。
+        services.EnsurePalLoggerFacade();
 
         services.AddOptions<SagaProcessorOptions>()
             .Validate(static options => options.PollInterval > TimeSpan.Zero, "Saga poll interval must be greater than zero.")

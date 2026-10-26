@@ -27,6 +27,19 @@ public sealed class ValueObjectTests
     }
 
     [Test]
+    public async Task ValueObject_ImplementsIFormattable_FormatStringIsHonored()
+    {
+        // R13 F22：ToString(string, IFormatProvider) 已存在，但未声明 IFormattable——
+        // 复合格式（插值/string.Format）走 IFormattable 分派，缺失时回退无参
+        // ToString，格式串被静默忽略（{0:X4} 得 "255" 而非 "00FF"）。
+        var vo = new ValueObject<int>(255);
+
+        await Assert.That($"{vo:X4}").IsEqualTo("00FF");
+        await Assert.That(string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:X4}", vo))
+            .IsEqualTo("00FF");
+    }
+
+    [Test]
     public async Task ValueObject_MaxValue()
     {
         var vo = new ValueObject<int>(int.MaxValue);

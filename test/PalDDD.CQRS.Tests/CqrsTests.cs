@@ -195,6 +195,23 @@ public sealed class DispatcherTests
     }
 
     [Test]
+    public async Task Register_LowLevelNoScope_WithoutRootProvider_ThrowsAtRegistration()
+    {
+        // R12 C-16 回归锁：手构 Dispatcher 未提供根容器时，needsScope:false 的注册
+        // 原会在首个请求抛 NRE；现于注册期给出可操作异常。
+        var sp = CreateProvider();
+        var dispatcher = new Dispatcher(sp.GetRequiredService<IServiceScopeFactory>());
+
+        await Assert.That(() => dispatcher.Register(
+                typeof(CreateOrderCommand),
+                typeof(CreateOrderHandler),
+                typeof(Guid),
+                static (_, _, _) => ValueTask.FromResult<object?>(Guid.Empty),
+                needsScope: false))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task SendAsync_WithResponse_ReturnsCorrectType()
     {
         var sp = CreateProvider();
@@ -267,6 +284,25 @@ public sealed class DispatcherTests
 
         await dispatcher.SendAsync(new CreateOrderCommand("Instance", 1m));
         await Assert.That(root.Proxy.ScopeCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DIHandler_WithRequestServices_ReusesCallerScope()
+    {
+        var services = new ServiceCollection();
+        services.AddScoped<CreateOrderHandler>();
+        var sp = services.BuildServiceProvider();
+        var root = new CountingScopeRoot(sp);
+        var dispatcher = new Dispatcher(root.Proxy, root);
+        dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>();
+
+        using var requestScope = sp.CreateScope();
+        var result = await dispatcher.SendAsync(
+            new CreateOrderCommand("Scoped", 1m), requestScope.ServiceProvider);
+
+        await Assert.That(result).IsNotEqualTo(Guid.Empty);
+        // 端点传入的请求作用域被直接复用：不创建第二层 scope（原路径 +1）。
+        await Assert.That(root.Proxy.ScopeCount).IsEqualTo(0);
     }
 
     [Test]

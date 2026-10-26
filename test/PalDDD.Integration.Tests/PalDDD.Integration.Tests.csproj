@@ -36,6 +36,7 @@
     <ProjectReference Include="..\..\src\PalDDD.Compression.Native\PalDDD.Compression.Native.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Serialization.MemoryPack\PalDDD.Serialization.MemoryPack.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore\PalDDD.Hosting.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore.OutboxHealth\PalDDD.Hosting.AspNetCore.OutboxHealth.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.PalORM\PalDDD.PalORM.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.PalORM.MySql\PalDDD.PalORM.MySql.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.PalORM.PostgreSql\PalDDD.PalORM.PostgreSql.csproj" />
@@ -54,5 +55,11 @@
     <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="Testcontainers.MySql" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <!-- 测试项目不参与 AOT：Dapper.AOT 的 DAP005 只对发布程序集有意义（干净重建时才触发，
+         2026-10-21 契约盘点核实此前属增量构建掩盖的潜伏错误）。 -->
+    <NoWarn>$(NoWarn);DAP005</NoWarn>
+  </PropertyGroup>
 
 </Project>

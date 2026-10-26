@@ -31,6 +31,9 @@ namespace PalDDD.PalORM.Stores;
 public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
     where TProvider : IDbProvider
 {
+    /// <inheritdoc />
+    public bool RequiresSaveAfterMark => false;
+
     /// <summary>共享的 Scoped 数据库会话（事务自动传播源）。</summary>
     [SuppressMessage("Performance", "CA1051:Do not declare visible instance fields",
         Justification = "框架库基类 —— 派生类（方言包中间类）需直接访问 Session 以扩展方言特有能力。")]
@@ -41,12 +44,16 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         Justification = "框架库基类 —— 派生类需访问 Clock 以统一时间源。")]
     protected readonly TimeProvider Clock;
 
+    /// <summary>可选唤醒信号（2026-10-22 性能轮）——写入成功后通知处理循环立即续批。</summary>
+    private readonly IOutboxWakeUpSignal? _wakeUpSignal;
+
     /// <summary>构造 Outbox Store。</summary>
-    public PalOrmOutboxStore(DataSession<TProvider> session, TimeProvider? clock = null)
+    public PalOrmOutboxStore(DataSession<TProvider> session, TimeProvider? clock = null, IOutboxWakeUpSignal? wakeUpSignal = null)
     {
         ArgumentNullException.ThrowIfNull(session); // v22 C-1
         Session = session;
         Clock = clock ?? TimeProvider.System;
+        _wakeUpSignal = wakeUpSignal;
     }
 
     /// <inheritdoc />
@@ -68,7 +75,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         // 谓词不命中而返回 0 行（无害空批）；正确性由主库租约裁决保证。上游契约：未配置
         // ReadConnectionString 时逐位回落主库。Lease/回查等敏感点保持默认 false（见 :109/:116/:147）。
         var rows = await Session.QueryAsync<OutboxMessageRow>(
-            $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE status = {(int)OutboxStatus.Pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}",
+            $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE status = {(int)OutboxStatus.Pending} AND retry_count < {maxRetryCount} AND next_attempt_at <= {now} ORDER BY next_attempt_at, created_at LIMIT {batchSize}",
             readFromReplica: true, ct: ct).ConfigureAwait(false);
         return rows.Select(r => r.ToDomain()).ToList();
     }
@@ -100,6 +107,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
 
         // 核心原子租约 SQL —— 必须 QueryAsync/ExecuteAsync（QueryBuilder UPDATE 拒绝子查询+LIMIT+RETURNING 整行）
         // 方言分支：PG/SQLite 走 RETURNING 单语句；MySQL 走 UPDATE + SELECT 两步。
+        // 2026-10-21 评审 F15（C3）：新增第 4 方言需同步 8 个 SQL Store 文件（SqlErrorClassifier/
+        // Retention/EventLog/Idempotency/Inbox/Outbox/Projection/Saga）；本轮按 ADR-020 只做声明，
+        // 不做策略表迁移。
         if (TProvider.SupportsReturningClause)
         {
             // ITM-210 修复（三十二轮）：PG 子查询补 FOR UPDATE SKIP LOCKED——对齐
@@ -110,14 +120,14 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
             if (TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql)
             {
                 var rows = await Session.QueryAsync<OutboxMessageRow>(
-                    $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
+                    $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until}, next_attempt_at = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND next_attempt_at <= {now} ORDER BY next_attempt_at, created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
                     ct: ct).ConfigureAwait(false);
                 return rows.Select(r => r.ToDomain()).ToList();
             }
             else
             {
                 var rows = await Session.QueryAsync<OutboxMessageRow>(
-                    $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
+                    $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until}, next_attempt_at = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND next_attempt_at <= {now} ORDER BY next_attempt_at, created_at LIMIT {batchSize}) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
                     ct: ct).ConfigureAwait(false);
                 return rows.Select(r => r.ToDomain()).ToList();
             }
@@ -154,8 +164,8 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
             // DbParameter——上方已知限制同源），故 if/else 双完整模板（对齐本文件 PG/SQLite 分支风格）。
             var skipLocked = await MySqlSupportsSkipLockedAsync(ct).ConfigureAwait(false);
             FormattableString leaseSql = skipLocked
-                ? (FormattableString)$"UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by = {owner}, t.locked_until = {until}"
-                : (FormattableString)$"UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.id = sub.id SET t.locked_by = {owner}, t.locked_until = {until}";
+                ? (FormattableString)$"UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND next_attempt_at <= {now} ORDER BY next_attempt_at, created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by = {owner}, t.locked_until = {until}, t.next_attempt_at = {until}"
+                : (FormattableString)$"UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND next_attempt_at <= {now} ORDER BY next_attempt_at, created_at LIMIT {batchSize}) AS sub ON t.id = sub.id SET t.locked_by = {owner}, t.locked_until = {until}, t.next_attempt_at = {until}";
             await Session.ExecuteAsync(leaseSql, ct).ConfigureAwait(false);
             var rows = await Session.QueryAsync<OutboxMessageRow>(
                 $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE locked_by = {owner} AND locked_until = {until} ORDER BY created_at",
@@ -165,10 +175,10 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
     }
 
     /// <summary>
-    /// MySQL 版本探测（ADR-025）：首次 MySQL 租约时 SELECT VERSION() 一次并缓存于本实例——
-    /// DataSession 不暴露连接 ServerVersion 属性，QueryAsync 标量探针是可用通道；store 每
-    /// DI scope 一个实例，探测成本 = 每 scope 一次额外往返（与 GetPending 轮询同量级）。
-    /// 探测失败（映射不支持/连接异常）按空串处理 → fail-safe 回退无锁模板。
+    /// MySQL 版本探测（ADR-025）：首次 MySQL 租约读 <c>DbConnection.ServerVersion</c>
+    ///（握手包已带，零额外往返）并缓存于本实例。探测失败（连接异常）按空串处理 →
+    /// fail-safe 回退无锁模板。2026-10-21 评审勘正：原实现为 SELECT VERSION() 往返探针，
+    /// 已随 2026-10-19 性能轮改为 ServerVersion；配套的 <c>VersionProbeRow</c> 已删除。
     /// </summary>
     private string? _mySqlServerVersion;
 
@@ -178,8 +188,12 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         {
             try
             {
-                var versions = await Session.QueryAsync<VersionProbeRow>($"SELECT VERSION() AS v, VERSION() AS v2", ct: ct).ConfigureAwait(false);
-                _mySqlServerVersion = versions.FirstOrDefault()?.V ?? "";
+                // 2026-10-19 性能实施轮：DbConnection.ServerVersion 来自握手包，已连接时
+                // 零往返；连接未打开则先打开（后续租约查询本来也要打开同一连接）。
+                var connection = Session.GetRawConnection();
+                if (connection.State != System.Data.ConnectionState.Open)
+                    await connection.OpenAsync(ct).ConfigureAwait(false);
+                _mySqlServerVersion = connection.ServerVersion;
             }
 #pragma warning disable CA1031 // 探测失败按空串处理（fail-safe 回退无锁模板），不中断租约路径
             catch (Exception)
@@ -198,10 +212,13 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         ArgumentNullException.ThrowIfNull(message);
         // InsertAsync 对 [Key(AutoIncrement=false)] 的 Ulid 主键不回填 —— 实体已带 Id。
         // created_at 由领域对象在构造时赋值（init-only，Store 不覆盖）。
+        // 2026-10-21：next_attempt_at 是唯一可用时刻，新建消息默认在写入时立即可用。
+        message.NextAttemptAt = message.NextAttemptAt ?? Clock.GetUtcNow();
         // v4.0 ③（ADR-026）：原同步 AddMessage 内部对 Session.InsertAsync 阻塞桥接
         //（GetAwaiter().GetResult()）——接口异步化后桥接删除，直连异步原语
         var row = OutboxMessageRow.FromDomain(message);
         await Session.InsertAsync(row, ct).ConfigureAwait(false);
+        _wakeUpSignal?.Notify();
     }
 
     /// <inheritdoc />
@@ -210,10 +227,17 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         // ITM-163 修复：补 messages null 守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
+        var now = Clock.GetUtcNow();
+        foreach (var message in messages)
+            message.NextAttemptAt = message.NextAttemptAt ?? now;
         var rows = messages.Select(OutboxMessageRow.FromDomain).ToList();
-        // BulkInsertAsync 自动选方言最优路径（PG COPY / MySQL BulkCopy / SQLite 多值 INSERT）
+        // 6.6.0 单参重载：PG 取整段行数走单次 COPY（2 万行不再付 20 次 BeginBinaryImport/
+        // Complete），MySQL/SQLite 内部沿用 1000 批宽；需要限制单次 COPY/事务持锁行数时用
+        // 带 batchSize 的重载（本 store 的批量入口由调用方控制单次列表大小）。
         // v4.0 ④（ADR-026）：ct 传播进批量路径
-        return (int)await Session.BulkInsertAsync(rows, batchSize: 1000, ct: ct).ConfigureAwait(false);
+        var inserted = (int)await Session.BulkInsertAsync(rows, ct).ConfigureAwait(false);
+        _wakeUpSignal?.Notify();
+        return inserted;
     }
 
     /// <inheritdoc />
@@ -402,6 +426,14 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
 
+        // R11 F15：null 元素校验必须先于 messages[0] 解引用——原顺序对 [null] 抛 NRE，
+        // 而 Dapper/EF 抛 ArgumentNullException（同一契约异常类型分叉）。
+        foreach (var message in messages)
+        {
+            if (message is null)
+                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
+        }
+
         var owner = messages[0].LockedBy;
         var until = messages[0].LockedUntil;
         if (owner is null || until is null)
@@ -409,8 +441,6 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
                 "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
         foreach (var message in messages)
         {
-            if (message is null)
-                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
             if (message.LockedBy != owner || message.LockedUntil != until)
                 throw new InvalidOperationException(
                     "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");

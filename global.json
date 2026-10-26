@@ -7,5 +7,5 @@
   "test": {
     "runner": "Microsoft.Testing.Platform"
   },
-  "_comment": "ITM-060：SDK 锁定 .NET 11 rc.2（go-live 许可，API 冻结；2026-09-10 用户批准 rc.1 升级，2026-10-17 扶正 rc.2——包线 10-11 已随 rc.2，本机 rollForward 实际解析即 rc.2，钉扎与事实对齐；CI setup-dotnet 按本文件安装同版本）。GA SDK 升位随 2026-11 GA 轮（见 docs/migration/net11-ga-upgrade-plan.md）；GA 后清偿 NU5104 抑制并重评 TFM。"
+  "_comment": "ITM-060：SDK 锁定 .NET 11 rc.2（go-live 许可，API 冻结；2026-09-10 用户批准 rc.1 升级，2026-10-17 扶正 rc.2——本机 rollForward 实际解析即 rc.2，钉扎与事实对齐；CI setup-dotnet 按本文件安装同版本）。包线 2026-10-26 已随 rc.3（26522.148 批，31 处中央钉扎全批同移）——rc 阶段 API 已 go-live 冻结，包对 rc.2 SDK 兼容由构建+面板+AOT 双样本实证，与 2026-10-11「包先行 SDK 后随」同款；rc.3 SDK 已发（release metadata latest-sdk=11.0.100-rc.3.26522.148），本机安装后扶正钉扎。GA SDK 升位随 2026-11 GA 轮（见 docs/migration/net11-ga-upgrade-plan.md）；GA 后清偿 NU5104 抑制并重评 TFM。"
 }

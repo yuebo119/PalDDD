@@ -32,7 +32,7 @@ public abstract class SagaStateDbContext<
         | DynamicallyAccessedMemberTypes.PublicProperties
         | DynamicallyAccessedMemberTypes.NonPublicProperties
         | DynamicallyAccessedMemberTypes.Interfaces)]
-TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>
+TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, ISagaScanCursorStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TState : SagaState
 {
     /// <summary>Saga 状态表</summary>
@@ -62,18 +62,36 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
     }
 
     /// <inheritdoc/>
-    public async ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
+    public ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
         string owner,
         TimeSpan leaseDuration,
         int batchSize,
+        CancellationToken ct)
+        => LeaseSagasAsync(owner, leaseDuration, batchSize, dueBefore: null, GetUtcNow(), ct);
+
+    /// <inheritdoc/>
+    public ValueTask<IReadOnlyList<TState>> LeaseDueSagasAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        DateTimeOffset now,
+        CancellationToken ct)
+        => LeaseSagasAsync(owner, leaseDuration, batchSize, dueBefore: now, now, ct);
+
+    private async ValueTask<IReadOnlyList<TState>> LeaseSagasAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        DateTimeOffset? dueBefore,
+        DateTimeOffset now,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         // v25 P3 守卫族：leaseDuration 边界守卫——对照 Outbox 四方言 LeasePendingMessagesAsync
         //（MySql :77-85 / PG :56-62 / Sqlite :82-89，ITM-167/216 对齐系列）同型漏网——
-        // leaseDuration 非正时租约即刻过期/永不过期语义错乱；TotalSeconds 超过 int.MaxValue 时
-        // leasedUntil = now.Add(leaseDuration) 的秒数语义溢出。Options 层已校验正数，
+        // leaseDuration 非正时租约即刻过期/永不过期语义错乱；TotalSeconds 超过 int.MaxValue
+        // 时 leasedUntil = now.Add(leaseDuration) 的秒数语义溢出。Options 层已校验正数，
         // 此处是 Store 直调路径的防御性 fail-fast（与 Options 层校验各自覆盖
         // DI 启动期与运行时直调两类入口）。
         if (leaseDuration <= TimeSpan.Zero)
@@ -81,20 +99,21 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         if (leaseDuration.TotalSeconds > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LeasedUntil value.");
 
-        var now = GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
 
         // R7（EPSL 地毯审计 2026-10-11 P0-4，2026-10-15 性能实施轮）：SQLite 单语句租约下推——
         // v23 C1 起的"翻页物化 + 内存过滤 + 逐行 UPDATE"退化根因是 ITM-261（EF SQLite LINQ
-        // 不能翻译 DateTimeOffset 有序比较），而手写 SQL 不受其限（decision-2026-09-17
+        // 不能翻译 DateTimeOffset 有序比较），而手写 SQL 不受此限（decision-2026-09-17
         // shape 2 已在 SqliteOutboxDbContext 落地同族单语句租约，本案是其 Saga 面延续）。
-        // 本路径固定 2 条语句（集合式 UPDATE + 等值守卫回读）与批次大小无关（旧形态：一页
-        // 查询 + N 条逐行 UPDATE，且头部被活跃租约占满时叠加 O(跳过页) 次翻页往返）。
-        // 非 SQLite provider（含 InMemory）保底走下方跟踪分页路径；PG/MySQL/SQL Server 的
-        // 等价下推待 EF 真库车道（上游 provider 未发布 rc 线版本——既有登记，见
-        // docs/review/decision-2026-10-15-saga-lease-sqlite-single-statement.md）。
+        // 2026-10-20 性能轮：PG/MySQL 同样下沉为方言原生语句。PG 两条（子查询 UPDATE +
+        // 等值回读），MySQL 两条（JOIN-UPDATE + 等值回读），与 Dapper/PalORM 同形态。
+        // 只有无法识别 provider 或非关系型 provider 才回落跟踪分页。
         if (UsesSingleStatementSqliteLease())
-            return await LeaseViaSingleStatementSqliteAsync(owner, now, leasedUntil, batchSize, ct).ConfigureAwait(false);
+            return await LeaseViaSingleStatementSqliteAsync(owner, now, leasedUntil, batchSize, dueBefore, ct).ConfigureAwait(false);
+        if (IsPostgreSqlProvider())
+            return await LeaseViaPostgreSqlAsync(owner, leasedUntil, batchSize, dueBefore, now, ct).ConfigureAwait(false);
+        if (IsMySqlProvider())
+            return await LeaseViaMySqlAsync(owner, leasedUntil, batchSize, dueBefore, now, ct).ConfigureAwait(false);
 
         // v25 P2-1：翻页循环防饥饿（镜像 SqliteOutboxDbContext.QueryEligibleAsync 三十九轮形态）——
         // v23 C1 把 LeasedUntil 过滤移到内存后，头部 batchSize 条全为他实例活跃租约时
@@ -104,17 +123,30 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         var skip = 0;
         while (states.Count < batchSize)
         {
-            var page = await SagaStates
+            var query = SagaStates
             // 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision——中断态 Saga
             // 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor.IsTimedOut 门控补偿；
             // v44 勘正（对齐 InMemorySagaStateStore v43 勘正）：IsTimedOut 判据已含
             // "AWD 态已成功步骤"排除——残留时间戳不再触发中断态兜底补偿
             // v23 C1：EF SQLite 不支持 DateTimeOffset 有序比较/排序（ITM-261 姊妹）——
             // 等值比较（Status）可翻译，LeasedUntil <= now 改物化后内存过滤，OrderBy 改 SagaId
-            .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
-            .OrderBy(s => s.SagaId)
-            .Skip(skip).Take(batchSize)
-            .ToListAsync(ct).ConfigureAwait(false);
+            .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision);
+            if (dueBefore is { } due)
+            {
+                query = query
+                    // NULL = 迁移前存量行（尚无 NextCheckAt）——按到期处理，首次扫描后回填。
+                    .Where(s => s.NextCheckAt == null || s.NextCheckAt <= due)
+                    .OrderBy(s => s.NextCheckAt)
+                    .ThenBy(s => s.SagaId);
+            }
+            else
+            {
+                query = query.OrderBy(s => s.SagaId);
+            }
+
+            var page = await query
+                .Skip(skip).Take(batchSize)
+                .ToListAsync(ct).ConfigureAwait(false);
             if (page.Count == 0) break;
             // v27 P3 修复：翻页循环内对未选中实体 Detach——page 为 tracked 物化（LeasedUntil
             // 过滤在内存做），未被租约选中的实体（Unchanged）滞留 ChangeTracker 逐 tick 累积
@@ -187,14 +219,207 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
     }
 
     /// <summary>
-    /// 单语句租约启用判定（R7）：仅 SQLite provider——按 <c>Database.ProviderName</c> 精确匹配
+    /// 单语句租约启用判定（R7）：SQLite provider——按 <c>Database.ProviderName</c> 精确匹配
     ///（Microsoft.EntityFrameworkCore.Sqlite 注册的 provider 名），不引具体 provider 包
     ///（本适配包 csproj 零 provider 依赖）。SQL 形态（UPDATE…WHERE IN(SELECT…ORDER BY LIMIT)）
-    /// 为 SQLite 语法；其它方言的等价形态（PG 同族 / MySQL JOIN 两步）待真库车道开线后加。
+    /// 为 SQLite 语法。
     /// </summary>
     private bool UsesSingleStatementSqliteLease()
         => Database.IsRelational()
             && string.Equals(Database.ProviderName, "Microsoft.EntityFrameworkCore.Sqlite", StringComparison.Ordinal);
+
+    /// <summary>PG provider 判定（Npgsql.EntityFrameworkCore.PostgreSQL）。</summary>
+    private bool IsPostgreSqlProvider()
+        => Database.IsRelational()
+            && Database.ProviderName?.Contains("Npgsql", StringComparison.Ordinal) == true;
+
+    /// <summary>MySQL provider 判定（Pomelo 与 Oracle 两族 provider 名均含 MySql）。</summary>
+    private bool IsMySqlProvider()
+        => Database.IsRelational()
+            && Database.ProviderName?.Contains("MySql", StringComparison.OrdinalIgnoreCase) == true;
+
+    /// <summary>
+    /// PG 单语句租约（2026-10-20 性能轮）：<c>UPDATE ... WHERE saga_id IN (SELECT ... LIMIT ...
+    /// FOR UPDATE SKIP LOCKED)</c> + 按精确租约标识回读，两步与批次大小无关。语义与 SQLite
+    /// 单语句路径逐项对齐：资格谓词在子查询内、租约即换代（version + 1）、到期过滤、批次上限。
+    /// 回读走普通 LINQ SELECT（不依赖 provider 对 UPDATE..RETURNING 的组合翻译）。
+    /// </summary>
+    private async ValueTask<IReadOnlyList<TState>> LeaseViaPostgreSqlAsync(
+        string owner,
+        DateTimeOffset untilValue,
+        int batchSize,
+        DateTimeOffset? dueBefore,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var (sql, args) = BuildPostgreSqlLeaseSql(owner, untilValue, batchSize, dueBefore, now);
+        await Database.ExecuteSqlRawAsync(sql, args, ct).ConfigureAwait(false);
+
+        // 保持跟踪：SagaTimeoutProcessor 的补偿路径经 ISagaStateStore.SaveChangesAsync(state)
+        // 依赖 ChangeTracker；同一上下文若已跟踪同一 Saga（如先 GetById），回读会命中
+        // identity resolution 的陈旧实例，故回读后做租约字段修正。
+        var leased = await SagaStates
+            .Where(s => s.LeasedBy == owner
+                && s.LeasedUntil == untilValue
+                && (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision))
+            .OrderBy(s => s.SagaId)
+            .Take(batchSize)
+            .ToListAsync(ct).ConfigureAwait(false);
+        await RefreshStaleLeaseStatesAsync(leased, owner, untilValue, ct).ConfigureAwait(false);
+        return leased;
+    }
+
+    /// <summary>
+    /// MySQL 单语句租约（2026-10-20 性能轮）：JOIN 派生表 UPDATE + 按精确租约标识回读，两步
+    /// 与批次大小无关。SKIP LOCKED 按服务端版本启用（ADR-025 同一判定，旧版/MariaDB 回退
+    /// 无锁形态，行为与既有 EF MySQL Outbox 路径一致）。
+    /// </summary>
+    private async ValueTask<IReadOnlyList<TState>> LeaseViaMySqlAsync(
+        string owner,
+        DateTimeOffset untilValue,
+        int batchSize,
+        DateTimeOffset? dueBefore,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var skipLocked = await MySqlSupportsSkipLockedAsync(ct).ConfigureAwait(false);
+        var (sql, args) = BuildMySqlLeaseSql(owner, untilValue, batchSize, dueBefore, now, skipLocked);
+        await Database.ExecuteSqlRawAsync(sql, args, ct).ConfigureAwait(false);
+
+        var leased = await SagaStates
+            .Where(s => s.LeasedBy == owner
+                && s.LeasedUntil == untilValue
+                && (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision))
+            .OrderBy(s => s.SagaId)
+            .Take(batchSize)
+            .ToListAsync(ct).ConfigureAwait(false);
+        await RefreshStaleLeaseStatesAsync(leased, owner, untilValue, ct).ConfigureAwait(false);
+        return leased;
+    }
+
+    /// <summary>
+    /// 租约回读修正（2026-10-21 契约盘点 R5）：同一 DbContext 在租约前已跟踪同一 Saga 时
+    /// （如先 GetById），EF 的 identity resolution 会让回读返回陈旧实例（LeasedBy/LeasedUntil/
+    /// Version 未换代），后续 SaveChanges 因 Version 失配被误判为冲突。仅对与本次租约标识
+    /// 不一致的实体 Reload；Reload 会丢弃该实体的未提交改动——租约是 fencing 操作，
+    /// 调用方不应在租约时持有未提交改动。
+    /// </summary>
+    private async ValueTask RefreshStaleLeaseStatesAsync(
+        IReadOnlyList<TState> states,
+        string owner,
+        DateTimeOffset leasedUntil,
+        CancellationToken ct)
+    {
+        foreach (var state in states)
+        {
+            if (string.Equals(state.LeasedBy, owner, StringComparison.Ordinal)
+                && state.LeasedUntil == leasedUntil)
+                continue;
+            await Entry(state).ReloadAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>MySQL SKIP LOCKED 判定：连接已打开时 ServerVersion 来自握手包，零往返。</summary>
+    private async ValueTask<bool> MySqlSupportsSkipLockedAsync(CancellationToken ct)
+    {
+        var connection = Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+            await Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+        return MySqlLeasePolicy.UseSkipLocked(connection.ServerVersion);
+    }
+
+    /// <summary>PG 租约 SQL 构造：标识符取自 EF 模型映射，值全部走 ExecuteSqlRaw 参数占位符。</summary>
+    private (string Sql, object[] Args) BuildPostgreSqlLeaseSql(
+        string owner,
+        DateTimeOffset untilValue,
+        int batchSize,
+        DateTimeOffset? dueBefore,
+        DateTimeOffset now)
+    {
+        var ids = ResolveLeaseIdentifiers(mySql: false);
+        var dueClause = dueBefore is null
+            ? string.Empty
+            : $"AND ({ids.NextCheckAt} IS NULL OR {ids.NextCheckAt} <= {{6}})";
+        var orderBy = dueBefore is null
+            ? $"{ids.LeasedUntil} NULLS FIRST, {ids.SagaId}"
+            : $"{ids.NextCheckAt}, {ids.SagaId}";
+
+        var sql = $@"UPDATE {ids.Table}
+SET {ids.LeasedBy} = {{0}}, {ids.LeasedUntil} = {{1}}, {ids.Version} = {ids.Version} + 1
+WHERE {ids.SagaId} IN (
+    SELECT {ids.SagaId} FROM {ids.Table}
+    WHERE {ids.Status} IN ({{2}}, {{3}})
+      AND ({ids.LeasedUntil} IS NULL OR {ids.LeasedUntil} <= {{4}})
+      {dueClause}
+    ORDER BY {orderBy}
+    LIMIT {{5}}
+    FOR UPDATE SKIP LOCKED)";
+
+        return dueBefore is { } due
+            ? (sql, [owner, untilValue, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, batchSize, due])
+            : (sql, [owner, untilValue, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, batchSize]);
+    }
+
+    /// <summary>MySQL 租约 SQL 构造：JOIN 派生表 UPDATE，派生表内 SELECT 只取主键。</summary>
+    private (string Sql, object[] Args) BuildMySqlLeaseSql(
+        string owner,
+        DateTimeOffset untilValue,
+        int batchSize,
+        DateTimeOffset? dueBefore,
+        DateTimeOffset now,
+        bool skipLocked)
+    {
+        var ids = ResolveLeaseIdentifiers(mySql: true);
+        var dueClause = dueBefore is null
+            ? string.Empty
+            : $"AND ({ids.NextCheckAt} IS NULL OR {ids.NextCheckAt} <= {{6}})";
+        var orderBy = dueBefore is null
+            ? $"({ids.LeasedUntil} IS NULL) DESC, {ids.LeasedUntil}, {ids.SagaId}"
+            : $"{ids.NextCheckAt}, {ids.SagaId}";
+        var lockClause = skipLocked ? " FOR UPDATE SKIP LOCKED" : string.Empty;
+
+        var sql = $@"UPDATE {ids.Table} t
+JOIN (
+    SELECT {ids.SagaId} FROM {ids.Table}
+    WHERE {ids.Status} IN ({{2}}, {{3}})
+      AND ({ids.LeasedUntil} IS NULL OR {ids.LeasedUntil} <= {{4}})
+      {dueClause}
+    ORDER BY {orderBy}
+    LIMIT {{5}}{lockClause}
+) AS sub ON t.{ids.SagaId} = sub.{ids.SagaId}
+SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{ids.Version} + 1";
+
+        return dueBefore is { } due
+            ? (sql, [owner, untilValue, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, batchSize, due])
+            : (sql, [owner, untilValue, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, batchSize]);
+    }
+
+    /// <summary>租约 SQL 标识符解析（EF 模型映射；MySQL 用反引号，PG/SQLite 用双引号）。</summary>
+    private (string Table, string SagaId, string Status, string LeasedBy, string LeasedUntil, string Version, string NextCheckAt)
+        ResolveLeaseIdentifiers(bool mySql)
+    {
+        var entityType = Model.FindEntityType(typeof(TState))
+            ?? throw new InvalidOperationException($"Entity type '{typeof(TState).FullName}' is not mapped in this model.");
+        var quote = mySql ? (Func<string, string>)QuoteMySqlIdentifier : QuoteSqliteIdentifier;
+
+        var table = quote(entityType.GetTableName()
+            ?? throw new InvalidOperationException($"Entity type '{typeof(TState).FullName}' has no table mapping."));
+        if (entityType.GetSchema() is { } schema)
+            table = quote(schema) + "." + table;
+
+        return (
+            table,
+            quote(ColumnName(entityType, nameof(SagaState.SagaId))),
+            quote(ColumnName(entityType, nameof(SagaState.Status))),
+            quote(ColumnName(entityType, nameof(SagaState.LeasedBy))),
+            quote(ColumnName(entityType, nameof(SagaState.LeasedUntil))),
+            quote(ColumnName(entityType, nameof(SagaState.Version))),
+            quote(ColumnName(entityType, nameof(SagaState.NextCheckAt))));
+    }
+
+    /// <summary>MySQL 标识符加引号（反引号 + 反引号转义）。</summary>
+    private static string QuoteMySqlIdentifier(string identifier)
+        => "`" + identifier.Replace("`", "``", StringComparison.Ordinal) + "`";
 
     /// <summary>
     /// SQLite 单语句租约（R7）：集合式 UPDATE + 等值守卫回读。语义与跟踪分页路径逐项对齐——
@@ -207,37 +432,35 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         DateTimeOffset now,
         DateTimeOffset leasedUntil,
         int batchSize,
+        DateTimeOffset? dueBefore,
         CancellationToken ct)
     {
-        // 资格谓词在子查询内评估（与 Dapper/PalORM/Outbox 三栈同契约形态），ORDER BY + LIMIT
-        // 作用于过滤后集合——v25 P2-1 的"头部活跃租约占满窗口致饥饿"在谓词下推下结构性不成立
         await Database.ExecuteSqlAsync(
-            BuildSingleStatementLeaseCommand(owner, now, leasedUntil, batchSize), ct).ConfigureAwait(false);
+            BuildSingleStatementLeaseCommand(owner, now, leasedUntil, batchSize, dueBefore), ct).ConfigureAwait(false);
 
-        // 等值守卫回读（不重跑资格子查询）：按精确租约标识 (owner, until) 取回本批——同一 owner
-        // 同 tick 两次租约混批属姊妹栈既有已知限制（PalORM/EF-MySql 同款声明在案）。
-        // ⚠️ 保持跟踪（非 AsNoTracking）：租约返回实体的消费方（SagaTimeoutProcessor 补偿路径）
-        // 经 ISagaStateStore.SaveChangesAsync(state) 直存依赖 ChangeTracker（Detached→0 契约，
-        // 见本类显式实现）；Version 已在 SQL 内换代，物化值即 DB 真值（Unchanged），后续变更
-        // 保存的 WHERE Version=orig 与新行值匹配
-        return await SagaStates
+        // 等值守卫回读（不重跑资格子查询）：按精确租约标识 (owner, until) 取回本批。
+        // 保持跟踪：SagaTimeoutProcessor 的补偿路径经 SaveChangesAsync(state) 依赖 ChangeTracker；
+        // 已跟踪的陈旧实例回读后由 RefreshStaleLeaseStatesAsync 修正。
+        var leased = await SagaStates
             .Where(s => s.LeasedBy == owner
                 && s.LeasedUntil == leasedUntil
                 && (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision))
             .OrderBy(s => s.SagaId)
+            // 2026-10-21 评审 F12：与 PG/MySQL/SQL Server 回读及 Dapper 的 LIMIT @n 对齐——
+            // 冻结时钟下同 owner 同 until 连续两次租约时，原实现回读 2×batchSize 行。
+            .Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
+        await RefreshStaleLeaseStatesAsync(leased, owner, leasedUntil, ct).ConfigureAwait(false);
+        return leased;
     }
 
-    /// <summary>构造单语句租约命令（R7，SQLite 形态）——标识符取自 EF 模型映射（用户级
-    /// HasColumnName/ToTable 重映射同样生效；缺映射即异常而非静默回落属性名），值全部经
-    /// FormattableStringFactory 参数化（无字面量拼接注入面）。SQL 形态对齐
-    /// SqliteOutboxDbContext.LeasePendingMessagesAsync（decision-2026-09-17 shape 2 族）
-    /// 与 Dapper/PalORM 的 SagaLeaseActive。</summary>
+    /// <summary>构造单语句租约命令（R7，SQLite 形态）</summary>
     private FormattableString BuildSingleStatementLeaseCommand(
         string owner,
         DateTimeOffset now,
         DateTimeOffset leasedUntil,
-        int batchSize)
+        int batchSize,
+        DateTimeOffset? dueBefore)
     {
         var entityType = Model.FindEntityType(typeof(TState))
             ?? throw new InvalidOperationException($"Entity type '{typeof(TState).FullName}' is not mapped in this model.");
@@ -251,11 +474,22 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         var leasedByColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.LeasedBy)));
         var leasedUntilColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.LeasedUntil)));
         var versionColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.Version)));
+        var nextCheckAtColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.NextCheckAt)));
+
+        // 到期过滤（M1）仅在 LeaseDueSagasAsync 路径追加；空串保持旧 SQL 形状。
+        // 2026-10-21 评审 F6：NextCheckAt=NULL 视为到期（与 Dapper/PalORM/PG/MySQL/SQL Server
+        // 及 InMemory fallback 的 `IS NULL OR <= now` 对齐）——ADR-034 M1 惰性回填前，
+        // NULL 行在 SQLite 上原被永久排除，Saga 静默停滞。
+        var dueClause = dueBefore is null
+            ? string.Empty
+            : $"AND ({nextCheckAtColumn} IS NULL OR {nextCheckAtColumn} <= {{6}})";
+        // 到期过滤按最早到期取批，避免老创建但晚到期的行占满批次；无到期过滤保持 SagaId 序。
+        var orderBy = dueBefore is null
+            ? $"({leasedUntilColumn} IS NULL) DESC, {leasedUntilColumn}, {sagaIdColumn}"
+            : $"{nextCheckAtColumn}, {sagaIdColumn}";
 
         // {{…}} 是标识符插值（表/列名为受信标识符，已加引号）；{N} 是 FormattableStringFactory
-        // 占位符（值全部参数化）。DateTimeOffset 参数直传原生形态——与 EF 写入格式自洽由
-        // SqliteOutboxDbContext 的 2026-09-19 spike（谓词不恒真 + 等值回读命中）与本案
-        // 回归网双重实证
+        // 占位符（值全部参数化）。DateTimeOffset 参数直传原生形态。
         var format = $$"""
             UPDATE {{table}}
             SET {{leasedByColumn}} = {0}, {{leasedUntilColumn}} = {1}, {{versionColumn}} = {{versionColumn}} + 1
@@ -263,17 +497,15 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
                 SELECT {{sagaIdColumn}} FROM {{table}}
                 WHERE {{statusColumn}} IN ({2}, {3})
                   AND ({{leasedUntilColumn}} IS NULL OR {{leasedUntilColumn}} <= {4})
-                ORDER BY {{sagaIdColumn}}
+                  {{dueClause}}
+                ORDER BY {{orderBy}}
                 LIMIT {5})
             """;
-        return FormattableStringFactory.Create(
-            format,
-            owner,
-            leasedUntil,
-            (int)SagaStatus.Active,
-            (int)SagaStatus.AwaitingHumanDecision,
-            now,
-            batchSize);
+        return dueBefore is { } due
+            ? FormattableStringFactory.Create(
+                format, owner, leasedUntil, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, batchSize, due)
+            : FormattableStringFactory.Create(
+                format, owner, leasedUntil, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, batchSize);
     }
 
     /// <summary>列名解析（EF 模型映射）——缺映射即异常而非静默回落属性名（重映射下会生成错误 SQL）。</summary>
@@ -281,8 +513,7 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         => entityType.FindProperty(propertyName)?.GetColumnName()
             ?? throw new InvalidOperationException($"Property '{propertyName}' has no column mapping in the model.");
 
-    /// <summary>SQL 标识符加引号（双引号 + 双引号转义——SQLite/PG 标准形态；MySQL 反引号与
-    /// SQL Server 方括号待对应车道开线日加入）。</summary>
+    /// <summary>SQL 标识符加引号（双引号 + 双引号转义——SQLite/PG 标准形态；MySQL 反引号、SQL Server 方括号为独立形态）。</summary>
     private static string QuoteSqliteIdentifier(string identifier)
         => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
@@ -292,7 +523,8 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
 
     /// <inheritdoc/>
     /// <remarks>
-    /// EF Core 版：DbContext 变更跟踪自动检测修改，state 参数可选。
+    /// EF Core 版：<paramref name="state"/> 必须非空（ITM-163 守卫）；
+    /// 变更由 ChangeTracker 自动检测（无需显式 Update 调用）。
     /// ITM-072：对齐 <see cref="ISagaStateStore{TState}.SaveChangesAsync"/> 契约——
     /// 原实现直接透传 <c>await SaveChangesAsync(ct)</c> 返回"实际写入实体数"：
     /// 无变更保存返回 0（被调用方误判为乐观锁冲突）、多实体保存返回 N&gt;1（契约只定义 0/1）。
@@ -374,16 +606,36 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
     /// <see cref="DbUpdateConcurrencyException"/>；② 滞留变异会被后续保存幽灵提交。
     /// 故成功后全批 Detach（含 0 行路径——DB 已换代，跟踪快照同样作废）。
     /// </remarks>
-    public async ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    public ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+        => ReleaseLeasesCoreAsync(owner, sagas, checkedAt: null, ct);
+
+    /// <inheritdoc/>
+    /// <remarks>扫描轮转：leased_until 写成本次扫描时刻，legacy 租约按 NULLS FIRST 排序。</remarks>
+    public ValueTask<int> ReleaseLeasesAsync(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        DateTimeOffset checkedAt,
+        CancellationToken ct)
+        => ReleaseLeasesCoreAsync(owner, sagas, checkedAt, ct);
+
+    private async ValueTask<int> ReleaseLeasesCoreAsync(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        DateTimeOffset? checkedAt,
+        CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentNullException.ThrowIfNull(sagas);
         if (sagas.Count == 0) return 0;
 
         var ids = sagas.Select(static s => s.SagaId).ToList();
-        var affected = await SagaStates
-            .Where(s => s.LeasedBy == owner && ids.Contains(s.SagaId))
-            .ExecuteUpdateAsync(setters => setters
+        var query = SagaStates.Where(s => s.LeasedBy == owner && ids.Contains(s.SagaId));
+        var affected = checkedAt is { } at
+            ? await query.ExecuteUpdateAsync(setters => setters
+                .SetProperty(s => s.LeasedBy, (string?)null)
+                .SetProperty(s => s.LeasedUntil, at)
+                .SetProperty(s => s.Version, s => s.Version + 1), ct).ConfigureAwait(false)
+            : await query.ExecuteUpdateAsync(setters => setters
                 .SetProperty(s => s.LeasedBy, (string?)null)
                 .SetProperty(s => s.LeasedUntil, (DateTimeOffset?)null)
                 .SetProperty(s => s.Version, s => s.Version + 1), ct).ConfigureAwait(false);
@@ -395,6 +647,102 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
                 entry.State = EntityState.Detached;
         }
         return affected;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 2026-10-20 性能轮：整批一次 <see cref="DbContext.SaveChangesAsync(CancellationToken)"/>，
+    /// <see cref="BumpVersionOnModifiedSagaStates"/> 只扫描一次 ChangeTracker（原逐 Saga 保存
+    /// 在 256 批下叠加成 O(n²) 扫描）。只写入调用方已变异的 NextCheckAt；Version 并发令牌由
+    /// 提交前递增承担。失败整体按 0 返回，租约由 LeaseDuration 兜底。
+    /// </remarks>
+    public async ValueTask<int> AdvanceNextCheckAtAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        var eligible = 0;
+        foreach (var saga in sagas)
+        {
+            if (saga is null) continue;
+            var entry = Entry(saga);
+            if (entry.State == EntityState.Detached)
+                continue;
+            if (!string.Equals(saga.LeasedBy, owner, StringComparison.Ordinal))
+            {
+                entry.State = EntityState.Detached;
+                continue;
+            }
+            eligible++;
+        }
+        if (eligible == 0) return 0;
+
+        try
+        {
+            await SaveChangesAsync(ct).ConfigureAwait(false);
+            return eligible;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            DetachAll(sagas);
+            return 0;
+        }
+        catch
+        {
+            DetachAll(sagas);
+            throw;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<IReadOnlyList<int>> SaveManyAsync(IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return [];
+
+        var results = new int[sagas.Count];
+        for (var i = 0; i < sagas.Count; i++)
+        {
+            var saga = sagas[i];
+            if (saga is null) continue;
+            var entry = Entry(saga);
+            if (entry.State == EntityState.Detached) continue;
+            saga.Error = Core.FailureReason.Truncate(saga.Error, 2040);
+            results[i] = 1;
+        }
+
+        var eligible = 0;
+        foreach (var result in results)
+            eligible += result;
+        if (eligible == 0) return results;
+
+        try
+        {
+            await SaveChangesAsync(ct).ConfigureAwait(false);
+            return results;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            DetachAll(sagas);
+            return new int[sagas.Count];
+        }
+        catch
+        {
+            DetachAll(sagas);
+            throw;
+        }
+    }
+
+    private void DetachAll(IReadOnlyList<TState> sagas)
+    {
+        foreach (var saga in sagas)
+        {
+            if (saga is null) continue;
+            var entry = Entry(saga);
+            if (entry.State != EntityState.Detached)
+                entry.State = EntityState.Detached;
+        }
     }
 
     /// <summary>
@@ -442,8 +790,12 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
             // P2 修复（八轮评审·集群 T 新发现）：Ulid 主键需显式转换——关系型 provider 无
             // Ulid 原生映射，缺转换时 SaveChanges 抛"无法映射类型"（对齐 OutboxDbContext.Id 模式）
             e.Property(x => x.SagaId).HasConversion(v => v.ToString(null, System.Globalization.CultureInfo.InvariantCulture), v => PalUlid.Parse(v));
-            e.HasIndex(x => new { x.Status, x.CurrentState });
             e.HasIndex(x => new { x.Status, x.LeasedUntil, x.CreatedAt });
+            // 2026-10-21 审计 P1：PG/MySQL/SQLite/SQL Server 的租约回读按
+            // (leased_by, leased_until) 等值匹配；缺此索引时回读退化为全表扫描。
+            e.HasIndex(x => new { x.LeasedBy, x.LeasedUntil });
+            // M1：到期扫描索引；NextCheckAt 由 Saga 在状态变更时维护，NULL 表示无待检查超时。
+            e.HasIndex(x => new { x.Status, x.NextCheckAt });
             e.Property(x => x.CurrentState).HasMaxLength(256);
             e.Property(x => x.Version).IsConcurrencyToken();
             e.Property(x => x.Error).HasMaxLength(2048);
@@ -457,7 +809,8 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
                         ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal))
                 .Metadata.SetValueComparer(StepStartedAtComparer);
 
-            // Collection<string> → PrimitiveCollection（EF Core 11 原生 JSON 列支持）
+            // List<string> → PrimitiveCollection（EF Core 11 原生 JSON 列支持；ADR-035：
+            // Npgsql EF 物化返回 List<string>，属性类型同步为 List<string>）
             // 替代了手写 HasConversion + ValueComparer，由 EF Core 自动管理变更追踪
             e.PrimitiveCollection(x => x.ExecutedStepKeys).ElementType().HasMaxLength(256);
         });

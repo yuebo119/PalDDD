@@ -58,17 +58,41 @@ public sealed class IdempotencyProcessor
         policy.Validate(); // ITM-216：倒挂策略在 Processor 入口快速失败
         using var activity = PalActivitySource.StartIdempotencyExecute(operationName, key);
         var now = _timeProvider.GetUtcNow();
-        var existing = await _store.GetAsync(operationName, key, now, cancellationToken).ConfigureAwait(false);
-        if (existing is not null && !CanStartNewExecution(existing, now))
-            return SetActivityResult(activity, GetExistingResult(existing, deserializeResult));
 
-        var record = await _store.TryStartAsync(operationName, key, now, policy, cancellationToken).ConfigureAwait(false);
-        if (record is null)
+        IdempotencyRecord record;
+        if (_store is IIdempotencyStartOrGetStore fastStore)
         {
-            existing = await _store.GetAsync(operationName, key, _timeProvider.GetUtcNow(), cancellationToken).ConfigureAwait(false);
-            return SetActivityResult(activity, existing is null
-                ? new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Skipped, default)
-                : GetExistingResult(existing, deserializeResult));
+            var start = await fastStore.StartOrGetAsync(
+                operationName, key, now, policy, cancellationToken).ConfigureAwait(false);
+            if (start.Outcome == IdempotencyStartOutcome.Existing && start.Record is not null)
+                return SetActivityResult(activity, GetExistingResult(start.Record, deserializeResult));
+            if (start.Outcome != IdempotencyStartOutcome.Started || start.Record is null)
+            {
+                var existing = await _store.GetAsync(
+                    operationName, key, _timeProvider.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+                return SetActivityResult(activity, existing is null
+                    ? new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Skipped, default)
+                    : GetExistingResult(existing, deserializeResult));
+            }
+            record = start.Record;
+        }
+        else
+        {
+            var existing = await _store.GetAsync(operationName, key, now, cancellationToken).ConfigureAwait(false);
+            if (existing is not null && !CanStartNewExecution(existing, now))
+                return SetActivityResult(activity, GetExistingResult(existing, deserializeResult));
+
+            var started = await _store.TryStartAsync(
+                operationName, key, now, policy, cancellationToken).ConfigureAwait(false);
+            if (started is null)
+            {
+                existing = await _store.GetAsync(
+                    operationName, key, _timeProvider.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+                return SetActivityResult(activity, existing is null
+                    ? new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Skipped, default)
+                    : GetExistingResult(existing, deserializeResult));
+            }
+            record = started;
         }
 
         // 阶段 1：执行 handler。失败路径标记 Failed 并传播（副作用未发生，可重试）。

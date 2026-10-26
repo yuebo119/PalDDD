@@ -5,6 +5,7 @@ using MySqlConnector;
 using Npgsql;
 using PalDDD.Dapper;
 using PalDDD.EventLog;
+using PalDDD.Idempotency;
 using PalDDD.Testing;
 using PalDDD.Transactions;
 using Testcontainers.MySql;
@@ -100,6 +101,15 @@ public sealed partial class DialectProbeTests
         await CheckpointSmokeAsync(probe.Connection, DapperDbType.PostgreSql);
     }
 
+    /// <summary>Idempotency 族：TryStart→并发拒绝→完成→重放拒绝→GetAsync 终态。</summary>
+    [Test]
+    public async Task Idempotency_PostgreSql_TryStart_Complete_Replay()
+    {
+        EnsureTestcontainersEnabled(isPostgreSql: true);
+        await using var probe = await DialectProbeSession.CreatePostgreSqlAsync();
+        await IdempotencySmokeAsync(probe.Connection, DapperDbType.PostgreSql);
+    }
+
     /// <summary>AmbientTx 族（探针断言 #21）：DI 形态 Store 挂接 UoW 事务，回滚后无泄漏。</summary>
     [Test]
     public async Task AmbientTx_PostgreSql_Rollback_NoLeak()
@@ -154,6 +164,15 @@ public sealed partial class DialectProbeTests
         EnsureTestcontainersEnabled(isPostgreSql: false);
         await using var probe = await DialectProbeSession.CreateMySqlAsync();
         await CheckpointSmokeAsync(probe.Connection, DapperDbType.MySql);
+    }
+
+    /// <summary>Idempotency 族：TryStart→并发拒绝→完成→重放拒绝→GetAsync 终态。</summary>
+    [Test]
+    public async Task Idempotency_MySql_TryStart_Complete_Replay()
+    {
+        EnsureTestcontainersEnabled(isPostgreSql: false);
+        await using var probe = await DialectProbeSession.CreateMySqlAsync();
+        await IdempotencySmokeAsync(probe.Connection, DapperDbType.MySql);
     }
 
     /// <summary>AmbientTx 族（探针断言 #21）：DI 形态 Store 挂接 UoW 事务，回滚后无泄漏。</summary>
@@ -311,6 +330,22 @@ public sealed partial class DialectProbeTests
             new ReadOnlyMemory<byte>([9]), new ReadOnlyMemory<byte>([9]), audit);
         var b4R2 = await log.AppendAsync(b4Stream, ExpectedStreamVersion.StreamExists, [b4Second], default);
         await Assert.That(b4R2.FirstStreamVersion).IsEqualTo(1);
+
+        // 2026-10-20：PG 原子批路径行数上限回归——4,500 行超过 4,000 上限，必须回落
+        // 预检 + 分块路径（MySQL 同走分块）；断言版本跨度与读回条数。
+        var capStream = "probe-b4-cap";
+        var capEvents = new List<EventData>(4_500);
+        for (var i = 0; i < 4_500; i++)
+        {
+            capEvents.Add(new EventData(Ulid.New(), "probe.event.v1", 1, "application/json",
+                new ReadOnlyMemory<byte>([1]), new ReadOnlyMemory<byte>([1]), audit));
+        }
+        var capResult = await log.AppendAsync(capStream, ExpectedStreamVersion.NoStream, capEvents, default);
+        await Assert.That(capResult.FirstStreamVersion).IsEqualTo(0);
+        await Assert.That(capResult.LastStreamVersion).IsEqualTo(4_499);
+        var capRead = 0;
+        await foreach (var _ in log.ReadStreamAsync(capStream, 0, int.MaxValue, default)) capRead++;
+        await Assert.That(capRead).IsEqualTo(4_500);
     }
 
     /// <summary>原探针 SagaSmoke——3 项断言。</summary>
@@ -389,6 +424,38 @@ public sealed partial class DialectProbeTests
         await store.MarkFailedAsync(nextPos!, "probe-failure", clock.AddSeconds(3), default);
     }
 
+    /// <summary>Idempotency 族：活跃租约拒绝、完成后重放拒绝、终态可读（PG/MySQL 共用）。</summary>
+    private static async Task IdempotencySmokeAsync(DbConnection conn, DapperDbType dbType)
+    {
+        var store = new DapperIdempotencyStore(conn, dbType);
+        var now = DateTimeOffset.UtcNow;
+        var policy = IdempotencyPolicy.Default;
+
+        var started = await store.TryStartAsync("probe-op", "probe-key", now, policy, default);
+        await Assert.That(started).IsTypeOf<IdempotencyRecord>();
+        await Assert.That(started!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+
+        var concurrent = await store.TryStartAsync("probe-op", "probe-key", now.AddSeconds(1), policy, default);
+        await Assert.That(concurrent).IsNull();
+
+        await store.MarkCompletedAsync(started, "done"u8.ToArray(), now.AddSeconds(2), default);
+
+        var replay = await store.TryStartAsync("probe-op", "probe-key", now.AddSeconds(3), policy, default);
+        await Assert.That(replay).IsNull();
+
+        var loaded = await store.GetAsync("probe-op", "probe-key", now.AddSeconds(4), default);
+        await Assert.That(loaded).IsTypeOf<IdempotencyRecord>();
+        await Assert.That(loaded!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
+
+        // #43（2026-10-24）：StartOrGet 冲突路径必须返回带 payload 的 Existing；
+        // PG 走单语句 UPSERT，MySQL 走 INSERT + 整行读一次，两栈语义一致。
+        var startOrGet = store;
+        var existing = await startOrGet.StartOrGetAsync("probe-op", "probe-key", now.AddSeconds(5), policy, default);
+        await Assert.That(existing.Outcome).IsEqualTo(IdempotencyStartOutcome.Existing);
+        await Assert.That(existing.Record!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
+        await Assert.That(existing.Record.ResponsePayload?.ToArray()).IsEquivalentTo("done"u8.ToArray());
+    }
+
     /// <summary>原探针 AmbientTxDapperSmoke——1 项断言（二轮评审 T5 断链探针）。</summary>
     /// <remarks>
     /// DI 形态 store（transaction: null）+ DapperUnitOfWork.Begin → 写入必须进入活动事务
@@ -456,6 +523,14 @@ internal sealed class DialectProbeSession : IAsyncDisposable
 
     /// <summary>指向 probe 库的已打开连接（探针断言共用）。</summary>
     public DbConnection Connection { get; }
+
+    /// <summary>
+    /// 指向 probe 库的原始连接串（含凭据）。竞争连接必须用它构造：
+    /// <c>Connection.ConnectionString</c> 在连接打开后不含密码（Npgsql 默认
+    /// <c>Persist Security Info=false</c>），据此新建连接会以 SASL 认证失败
+    /// （2026-10-22 CI 首跑实证）。
+    /// </summary>
+    public string ConnectionString => _probeConnectionString;
 
     private readonly IAsyncDisposable _container;
     private readonly string _adminConnectionString;

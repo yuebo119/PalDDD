@@ -47,6 +47,20 @@ public sealed partial class StreamQueryEndpointTests
             "data: {\"Index\":2,\"Text\":\" world\"}\n\n");
     }
 
+    [Test]
+    public async Task MapStreamQuery_KeepAliveBeyondTaskDelayLimit_ThrowsAtMapTime()
+    {
+        // R11 F21 回归锁：超过 Task.Delay 上限的心跳间隔必须在映射期拒绝，而不是
+        // 每个请求 200 + event: error。
+        var provider = BuildProvider(new TokenStreamHandler());
+        var endpoints = new StreamTestEndpointRouteBuilder(provider);
+
+        await Assert.That(() => endpoints.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+                "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+                keepAliveInterval: TimeSpan.FromDays(60)))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
     // ─── happy path（POST）：JSON body 反序列化 + 帧序列 ───
 
     [Test]
@@ -460,6 +474,13 @@ public sealed partial class StreamQueryEndpointTests
                 .MapStreamQuery<TokenStreamQuery, TokenChunk>(
                     "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
                     keepAliveInterval: TimeSpan.FromSeconds(-1)))
+            .Throws<ArgumentOutOfRangeException>();
+        // R13 F18：亚毫秒间隔会被 Task.Delay 截断为 0，心跳竞速退化为紧循环
+        await Assert.That(() =>
+            new StreamTestEndpointRouteBuilder(BuildProvider(new TokenStreamHandler()))
+                .MapStreamQuery<TokenStreamQuery, TokenChunk>(
+                    "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+                    keepAliveInterval: TimeSpan.FromTicks(5000)))
             .Throws<ArgumentOutOfRangeException>();
     }
 

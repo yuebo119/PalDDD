@@ -32,6 +32,9 @@
     <ProjectReference Include="..\..\src\PalDDD.Projections\PalDDD.Projections.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Serialization.Evolution\PalDDD.Serialization.Evolution.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore\PalDDD.Hosting.AspNetCore.csproj" />
+    <!-- 2026-10-19 M3 量具：真 broker 上做 1/4/8 订阅 × 共享/独立 consumer channel 对照 -->
+    <ProjectReference Include="..\..\src\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Messaging.RabbitMQ\PalDDD.Messaging.RabbitMQ.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />

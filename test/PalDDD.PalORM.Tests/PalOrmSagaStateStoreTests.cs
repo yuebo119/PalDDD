@@ -84,6 +84,102 @@ public class PalOrmSagaStateStoreTests
         await Assert.That(after2!.LeasedBy).IsNull();
     }
 
+    [Test]
+    public async Task BatchAdvanceNextCheckAndSaveMany_CommitInOneTransaction()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteSagaStateStore<StoreTestSagaState>(session, Json);
+        var first = new StoreTestSagaState { CustomerId = "c1", CurrentState = "Active" };
+        var second = new StoreTestSagaState { CustomerId = "c2", CurrentState = "Active" };
+        await store.SaveChangesAsync(first, default);
+        await store.SaveChangesAsync(second, default);
+
+        var leased = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, default);
+        await Assert.That(leased.Count).IsEqualTo(2);
+        var nextCheck = DateTimeOffset.UtcNow.AddMinutes(3);
+        foreach (var saga in leased)
+            saga.NextCheckAt = nextCheck;
+
+        var advanced = await store.AdvanceNextCheckAtAsync("owner-A", leased, default);
+        await Assert.That(advanced).IsEqualTo(2);
+        var reloaded = await store.GetByIdAsync(leased[0].SagaId, default);
+        await Assert.That(reloaded!.NextCheckAt).IsEqualTo(nextCheck);
+
+        var foreign = await store.AdvanceNextCheckAtAsync("owner-B", leased, default);
+        await Assert.That(foreign).IsEqualTo(0);
+
+        foreach (var saga in leased)
+        {
+            saga.Status = SagaStatus.Completed;
+            saga.CurrentState = "Completed";
+        }
+        var results = await store.SaveManyAsync(leased, default);
+        await Assert.That(results.Count).IsEqualTo(2);
+        await Assert.That(results[0]).IsEqualTo(1);
+        await Assert.That(results[1]).IsEqualTo(1);
+        var final = await store.GetByIdAsync(leased[0].SagaId, default);
+        await Assert.That(final!.Status).IsEqualTo(SagaStatus.Completed);
+    }
+
+    [Test]
+    public async Task SaveMany_RunsAcrossChunkBoundary()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteSagaStateStore<StoreTestSagaState>(session, Json);
+        for (var i = 0; i < 100; i++)
+        {
+            await store.SaveChangesAsync(new StoreTestSagaState
+            {
+                CustomerId = $"c{i}",
+                CurrentState = "Active"
+            }, default);
+        }
+
+        var leased = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 200, default);
+        await Assert.That(leased.Count).IsEqualTo(100);
+        foreach (var saga in leased)
+        {
+            saga.Status = SagaStatus.Completed;
+            saga.CurrentState = "Completed";
+        }
+
+        // SQLite 每块 90 行：100 行必然跨两条 UPDATE。
+        var results = await store.SaveManyAsync(leased, default);
+        await Assert.That(results.Count).IsEqualTo(100);
+        await Assert.That(results.All(r => r == 1)).IsTrue();
+        var final = await store.GetByIdAsync(leased[99].SagaId, default);
+        await Assert.That(final!.Status).IsEqualTo(SagaStatus.Completed);
+        await Assert.That(final.CurrentState).IsEqualTo("Completed");
+    }
+
+    [Test]
+    public async Task ScanCursor_RotatesReleasedBatchToBack()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteSagaStateStore<StoreTestSagaState>(session, Json);
+        var created = new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);
+        for (var i = 0; i < 3; i++)
+        {
+            await store.SaveChangesAsync(new StoreTestSagaState
+            {
+                CustomerId = $"c{i}",
+                CurrentState = "Active",
+                CreatedAt = created.AddSeconds(i)
+            }, default);
+        }
+
+        var first = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, default);
+        await Assert.That(first.Count).IsEqualTo(1);
+
+        var released = await store.ReleaseLeasesAsync(
+            "owner-A", first, DateTimeOffset.UtcNow.AddSeconds(-1), default);
+        await Assert.That(released).IsEqualTo(1);
+
+        var second = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, default);
+        await Assert.That(second.Count).IsEqualTo(1);
+        await Assert.That(second[0].SagaId).IsNotEqualTo(first[0].SagaId);
+    }
+
     /// <summary>跨栈快照行为对照 · PalORM 侧（2026-09-19 系统优化增，镜像 Dapper 侧
     /// Saga_SaveChangesAsync_WithoutJsonTypeInfo_FailsFastWithGuidance）——两栈同红同绿
     /// 即「未注册 JsonTypeInfo → fail-fast 带指引」契约的行为对照测试化（第八流视角：

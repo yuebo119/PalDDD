@@ -26,6 +26,8 @@
 //    YAML 解析器——按缩进维护上下文栈，只认规则清单内的键与单行 flow 序列；
 //    多行 flow（`key: [` 换行列表 `]`）、锚点/别名、多文档结构不在覆盖面内。
 //    GitHub 的 Dependabot 配置检查仍是最终权威，本检查是本地前移防线。
+//    2026-10-26：dependabot.yml 已按单一版权裁决移除——文件缺失时检查 A 输出
+//    SKIP 而非违规，检查保留为再引入防线（文件回来即恢复校验）。
 //    规则清单：
 //    A1 groups.*.update-types 取值 ∈ {patch, minor, major}（块/内联两形态）
 //    A2 ignore[].update-types 取值 ∈ {version-update:semver-major/minor/patch}
@@ -84,15 +86,16 @@ var violations = new List<string>();
 violations.AddRange(CheckDependabot(root, staged));
 violations.AddRange(CheckDirectoryBuild(root, staged));
 violations.AddRange(CheckWorkflowPins(root, staged));
+violations.AddRange(CheckCiRequirements(root, staged));
 
 if (violations.Count > 0)
 {
-    Console.Error.WriteLine($"FAIL config-policy 违规 {violations.Count} 项（A=dependabot 词表/结构；B=Directory.Build Exec 构建期副作用；C=Actions 引用钉 SHA）：");
+    Console.Error.WriteLine($"FAIL config-policy 违规 {violations.Count} 项（A=dependabot 词表/结构；B=Directory.Build Exec 构建期副作用；C=Actions 引用钉 SHA；D=CI requirements 平台标记）：");
     foreach (var v in violations) Console.Error.WriteLine($"  {v}");
     return 1;
 }
 
-Console.WriteLine("PASS config-policy（A dependabot 词表/结构 + B Directory.Build Exec 副作用 + C Actions 引用钉 SHA）");
+Console.WriteLine("PASS config-policy（A dependabot 词表/结构 + B Directory.Build Exec 副作用 + C Actions 引用钉 SHA + D CI requirements 平台标记）");
 return 0;
 
 // ══════════════ 检查 A：dependabot 配置词表/结构 ══════════════
@@ -102,7 +105,14 @@ static List<string> CheckDependabot(string root, IReadOnlySet<string> staged)
     const string rel = ".github/dependabot.yml";
     var content = ReadPolicyFile(root, rel, staged);
     if (content is null)
-        return [$"{rel} —— 文件缺失或暂存内容不可读（fail-closed：策略文件删除须与本门禁同步显式裁决）"];
+    {
+        // 2026-10-26 裁决：移除 Dependabot 依赖升级（单一版权人裁决，升级走人工
+        // 核新轮）。文件缺失不再 fail-closed——本检查降为再引入防线：文件重新
+        // 出现（暂存或工作树）即恢复校验；A1–A7 规则、selftest 与 gate-audit
+        // 探针全部保留不变。
+        Console.WriteLine($"SKIP config-policy A：{rel} 不存在（2026-10-26 裁决移除 Dependabot；文件再引入时恢复校验）");
+        return [];
+    }
     return ValidateDependabot(content, rel);
 }
 
@@ -546,6 +556,63 @@ static int LineOf(string text, int index)
     int line = 1;
     for (int i = 0; i < index && i < text.Length; i++) if (text[i] == '\n') line++;
     return line;
+}
+
+// ══════════════ 检查 D：CI requirements 平台标记 ══════════════
+
+// 实践出处（2026-10-19 CI run 39220268700）：ci/requirements-semgrep.txt 在
+// Windows 上由 uv 生成，pywin32==311 没有平台标记；ubuntu-latest 的
+// `pip install --require-hashes` 在扫描前就报 No matching distribution，整个
+// semgrep job 失败。根因是「锁文件生成平台 ≠ CI 运行平台」：Windows 专用包
+// 必须用 sys_platform == "win32" 排除，否则 Linux 装不上。macOS 专用同理
+// （pyobjc 家族本仓未使用，先只守 Windows 名单，避免凭空误报）。
+static List<string> CheckCiRequirements(string root, IReadOnlySet<string> staged)
+{
+    var dir = Path.Combine(root, "ci");
+    if (!Directory.Exists(dir)) return [];
+    var files = Directory.GetFiles(dir, "requirements-*.txt", SearchOption.TopDirectoryOnly)
+        .OrderBy(f => f, StringComparer.Ordinal)
+        .ToArray();
+    if (files.Length == 0) return [];
+
+    var violations = new List<string>();
+    foreach (var abs in files)
+    {
+        var rel = Path.GetRelativePath(root, abs).Replace('\\', '/');
+        var content = ReadPolicyFile(root, rel, staged);
+        if (content is null)
+        {
+            violations.Add($"{rel} —— requirements 文件不可读（fail-closed）");
+            continue;
+        }
+        violations.AddRange(ValidateCiRequirements(content, rel));
+    }
+    return violations;
+}
+
+// 行式校验（纯函数，供 selftest 覆盖）：只认 `pkg==version` 起始行；注释、
+// --hash 续行与其他形态忽略。允许两种等价排除形态：
+//   pkg==ver ; sys_platform == "win32"
+//   pkg==ver ; platform_system == "Windows"
+static List<string> ValidateCiRequirements(string text, string fileLabel)
+{
+    string[] windowsOnly = ["pywin32", "pywin32-ctypes", "wincertstore", "pyreadline3", "windows-curses"];
+    var violations = new List<string>();
+    var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+    for (int i = 0; i < lines.Length; i++)
+    {
+        var trimmed = lines[i].Trim();
+        if (trimmed.Length == 0 || trimmed[0] == '#') continue;
+        var m = Regex.Match(trimmed, @"^([A-Za-z0-9_.-]+)==");
+        if (!m.Success) continue;
+        var package = m.Groups[1].Value;
+        if (!windowsOnly.Any(p => string.Equals(p, package, StringComparison.OrdinalIgnoreCase))) continue;
+        if (Regex.IsMatch(trimmed, @"sys_platform\s*==\s*[""']win32[""']", RegexOptions.IgnoreCase)
+            || Regex.IsMatch(trimmed, @"platform_system\s*==\s*[""']Windows[""']", RegexOptions.IgnoreCase))
+            continue;
+        violations.Add($"{fileLabel}:{i + 1} Windows 专用依赖 {package} 缺少平台标记（Linux CI 安装会失败；加 ; sys_platform == \"win32\"）");
+    }
+    return violations;
 }
 
 // ══════════════ 文件读取（暂存优先——提交什么查什么） ══════════════
@@ -1030,6 +1097,31 @@ static int SelfTest()
     var cBadNoRef = "      - uses: actions/checkout\n";
     Case("C1 负例：缺 @ref 必红",
         ValidateWorkflowPins(cBadNoRef, "w.yml").Exists(v => v.Contains("C1", StringComparison.Ordinal)));
+
+    // ── 检查 D 正例 / 负例 ──
+    var dGood = """
+        pywin32==311 ; sys_platform == "win32" \
+            --hash=sha256:abc
+        colorama==0.4.6 \
+            --hash=sha256:def
+        """;
+    Case("D 正例：Windows 专用依赖带 marker + 通用依赖放行",
+        ValidateCiRequirements(dGood, "ci/requirements-x.txt").Count == 0);
+
+    var dGoodPlatformSystem = "pywin32==311 ; platform_system == \"Windows\"\n";
+    Case("D 正例：platform_system 等价形态放行",
+        ValidateCiRequirements(dGoodPlatformSystem, "r.txt").Count == 0);
+
+    var dBad = """
+        pywin32==311 \
+            --hash=sha256:abc
+        """;
+    var d1 = ValidateCiRequirements(dBad, "ci/requirements-semgrep.txt");
+    Case("D 负例：Windows 专用依赖无 marker 必红（报行号）",
+        d1.Count == 1 && d1[0].Contains(":1", StringComparison.Ordinal) && d1[0].Contains("pywin32", StringComparison.Ordinal));
+
+    Case("D 负例：wincertstore 无 marker 必红",
+        ValidateCiRequirements("wincertstore==0.2\n", "r.txt").Count == 1);
 
     Console.WriteLine();
     Console.WriteLine($"SELFTEST {passed}/{total} 通过");

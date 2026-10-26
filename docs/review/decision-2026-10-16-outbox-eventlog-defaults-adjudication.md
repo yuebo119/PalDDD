@@ -15,7 +15,7 @@
 | 落盘日期 | 2026-10-16 |
 | 评审状态 | **已裁决**（2026-10-16）：三项经两轮论证（首轮方案论证 + 二轮重辩含红队），用户拍板「都不做」；无代码变更，本文件即裁决记录 |
 | 评审记录 | 重辩关键修正：①B1 的重复窗口不止崩溃路径——LeaseDuration 默认 2 分钟，一批 100 条发布耗时超租约即触发过期重投，放大倍数最高 99（慢 broker 场景重复最痛时放大最狠）；纯计数翻倍把窗口上界交给批次时长，不可控。②B2 首轮「乱序风险与 W=1 等价」的论断被自我推翻：Outbox 失败重试乱序确与 W 无关，但 W>1 新增 librdkafka 内部重试在 idempotence 关闭时的乱序面，W=1 下不存在；且 at-least-once 容忍重复不容忍乱序，B2 与 B1 不同性。③B1 收益面：裁决时点 PalORM 未实现 IBatchMarkOutboxStore（只覆盖 Dapper/EF/InMemory 三栈，ADR-027 延后段）；**2026-10-16 晚 PalORM 栈已补齐**（until 编码三方言探针实证后实施），收益面扩为四栈——不改变 B1 裁决（重复窗口性质与默认翻面的举证责任不变），仅覆盖面重估的前提已满足 |
-| 裁决记录 | B1（BatchMarkThreshold 默认 1→BatchSize）= 不做；B2（MaxInFlightPublishes 默认 1→16）= 不做；B3（EventLogPositionReserver 构造必传化）= 不做。维持现有默认（逐条标记/串行确认/可选 reserver），选项能力对需要的用户保持可用（opt-in 路径与文档已在） |
+| 裁决记录 | B1（BatchMarkThreshold 默认 1→BatchSize）= 不做；B2（MaxInFlightPublishes 默认 1→16）= 不做；B3（EventLogPositionReserver 构造必传化）= 不做。维持现有默认（逐条标记/串行确认/可选 reserver），选项能力对需要的用户保持可用（opt-in 路径与文档已在）。**2026-10-19 更新**：ADR-033 以 `DeliveryMode.Auto` 重新立项默认化，但只在不满足原反方前提时才升窗（时间界冲刷 + broker 能力声明 + Kafka 幂等探测）；`Serial` 保留本裁决的逐条行为。B3 仍未实施 |
 
 ## 证据锚点表
 

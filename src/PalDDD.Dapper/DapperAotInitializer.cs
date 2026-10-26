@@ -66,10 +66,14 @@ internal static class DapperAotInitializer
     public static object ToSqliteParameter(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// MySQL 方言时间参数（P2 修复）：DATETIME(6) 列与带时区偏移的 "O" 格式比较依赖
-    /// session tz 换算（8.0.19+ 才支持偏移字面量），非 UTC session 时租约判定漂移——
-    /// 统一用无偏移 UTC "yyyy-MM-dd HH:mm:ss.ffffff"。
+    /// MySQL 方言时间参数：统一为无偏移 UTC 的 <see cref="DateTime"/>（Kind=Unspecified）。
+    /// <para>
+    /// 语义与旧形态（"yyyy-MM-dd HH:mm:ss.ffffff" 字符串）逐位一致：写入 DATETIME(6) 的
+    /// 是无偏移 UTC 墙钟值，比较不依赖 session tz。改为原生 <see cref="DateTime"/> 后由
+    /// MySqlConnector 走二进制协议直接发送 ticks，省去每个时间参数一次 27 字符字符串分配。
+    /// Kind=Unspecified 明确禁止驱动侧做任何时区换算。
+    /// </para>
     /// </summary>
     public static object ToMySqlParameter(DateTimeOffset value)
-        => value.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
+        => DateTime.SpecifyKind(value.UtcDateTime, DateTimeKind.Unspecified);
 }

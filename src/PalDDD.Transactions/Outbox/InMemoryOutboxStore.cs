@@ -23,15 +23,21 @@ namespace PalDDD.Transactions;
 /// </remarks>
 public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
 {
+    /// <inheritdoc />
+    public bool RequiresSaveAfterMark => false;
+
     private readonly Lock _lock = new();
     private readonly List<OutboxMessage> _messages = [];
     private readonly TimeProvider _timeProvider;
+    private readonly IOutboxWakeUpSignal? _wakeUpSignal;
 
     /// <summary>创建内存发件箱存储。</summary>
     /// <param name="timeProvider">时间提供者（默认 <see cref="TimeProvider.System"/>），测试中可注入 <c>FakeTimeProvider</c></param>
-    public InMemoryOutboxStore(TimeProvider? timeProvider = null)
+    /// <param name="wakeUpSignal">可选唤醒信号（2026-10-22 性能轮）——写入成功后通知 <see cref="OutboxProcessor"/> 立即续批；null 时保持纯轮询</param>
+    public InMemoryOutboxStore(TimeProvider? timeProvider = null, IOutboxWakeUpSignal? wakeUpSignal = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _wakeUpSignal = wakeUpSignal;
     }
 
     /// <inheritdoc/>
@@ -93,7 +99,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
                     Status = OutboxStatus.Pending,
                     LockedBy = owner,
                     LockedUntil = now.Add(leaseDuration),
-                    NextAttemptAt = null,
+                    NextAttemptAt = now.Add(leaseDuration),
                     Error = null,
                     ProcessedAt = null
                 };
@@ -109,7 +115,9 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
     public ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
+        message.NextAttemptAt = message.NextAttemptAt ?? _timeProvider.GetUtcNow();
         lock (_lock) { _messages.Add(message); }
+        _wakeUpSignal?.Notify();
         return ValueTask.CompletedTask;
     }
 
@@ -142,11 +150,14 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
                         $"Duplicate OutboxMessage id '{msg.Id}' in the messages batch (Id must be unique, mirroring the DB primary-key constraint).",
                         nameof(messages));
             }
+            var now = _timeProvider.GetUtcNow();
             foreach (var msg in messages)
             {
+                msg.NextAttemptAt = msg.NextAttemptAt ?? now;
                 _messages.Add(msg);
             }
         }
+        _wakeUpSignal?.Notify();
         return ValueTask.FromResult(messages.Count);
     }
 
@@ -198,34 +209,61 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
         ct.ThrowIfCancellationRequested();
         if (messages.Count == 0) return ValueTask.FromResult(0);
 
+        // 2026-10-21 评审 F9/F11：契约前提校验前移到任何变更之前——null 元素、未租约批、
+        // 混合租约批在该处抛异常时 store 与入参均保持原状（对齐 EF/Dapper/PalORM 三真实栈）。
+        foreach (var message in messages)
+        {
+            if (message is null)
+                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
+        }
+
+        var owner = messages[0].LockedBy;
+        var until = messages[0].LockedUntil;
+        if (owner is null || until is null)
+            throw new InvalidOperationException(
+                "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
+        foreach (var message in messages)
+        {
+            if (message.LockedBy != owner || message.LockedUntil != until)
+                throw new InvalidOperationException(
+                    "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");
+        }
+
         var affected = 0;
         lock (_lock)
         {
+            // 先建一次引用集合：原实现对每条消息 Contains + RemoveAt 各 O(n)，
+            // 400 条批 × 1 万列表会放大到百万级比较/搬移。这里 O(n+m) 完成。
+            var current = new HashSet<OutboxMessage>(_messages, ReferenceEqualityComparer.Instance);
+            var marked = new HashSet<OutboxMessage>(ReferenceEqualityComparer.Instance);
             foreach (var message in messages)
             {
-                if (message is null)
-                    throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
-                if (!IsCurrentLeaseHolder(message))
-                    continue;
-
-                message.ProcessedAt = processedAt;
-                message.Status = OutboxStatus.Processed;
-                message.Error = null;
-                message.NextAttemptAt = null;
-                message.LockedBy = null;
-                message.LockedUntil = null;
-
-                // R1（P2-7）：Processed 终态按引用移除（同逐条路径 MarkProcessedAsync）
-                for (int i = 0; i < _messages.Count; i++)
+                if (message.Status != OutboxStatus.Pending
+                    || !current.Contains(message)
+                    || !marked.Add(message))
                 {
-                    if (ReferenceEquals(_messages[i], message))
-                    {
-                        _messages.RemoveAt(i);
-                        break;
-                    }
+                    continue;
                 }
                 affected++;
             }
+
+            // 全命中才回写入参六字段；部分拒绝时只移除 store 内条目、不改入参对象
+            //（对齐三真实栈的“部分接受零回写”契约）。
+            if (affected == messages.Count)
+            {
+                foreach (var message in messages)
+                {
+                    message.ProcessedAt = processedAt;
+                    message.Status = OutboxStatus.Processed;
+                    message.Error = null;
+                    message.NextAttemptAt = null;
+                    message.LockedBy = null;
+                    message.LockedUntil = null;
+                }
+            }
+
+            if (marked.Count > 0)
+                _messages.RemoveAll(marked.Contains);
         }
         return ValueTask.FromResult(affected);
     }
@@ -350,9 +388,10 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
         return _messages
             .Where(m => m.Status == OutboxStatus.Pending
                 && m.RetryCount < maxRetryCount
-                && (m.NextAttemptAt == null || m.NextAttemptAt <= now)
-                && (m.LockedUntil == null || m.LockedUntil <= now))
-            .OrderBy(m => m.CreatedAt)
+                && m.NextAttemptAt.HasValue
+                && m.NextAttemptAt <= now)
+            .OrderBy(m => m.NextAttemptAt)
+            .ThenBy(m => m.CreatedAt)
             .Take(batchSize)
             .ToList();
     }

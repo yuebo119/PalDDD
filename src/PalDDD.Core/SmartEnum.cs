@@ -103,8 +103,10 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
             if (cached is not null) return cached;
 
             // 先物化后缓存：未注册时 Dictionary getter 抛 InvalidOperationException，
-            // s_all 保持 null，异常形态与直接访问一致（且缓存写入必然发生在注册之后）
-            var snapshot = Dictionary.Values.ToArray();
+            // s_all 保持 null，异常形态与直接访问一致（且缓存写入必然发生在注册之后）。
+            // 2026-10-21 评审 F17：对外暴露只读包装而非数组本体——调用方强转写入一次
+            // （((TSelf[])All)[0] = null）会污染全进程后续枚举。
+            var snapshot = Array.AsReadOnly(Dictionary.Values.ToArray());
             Interlocked.CompareExchange(ref s_all, snapshot, null);
             return Volatile.Read(ref s_all);
         }

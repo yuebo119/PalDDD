@@ -219,15 +219,15 @@ internal static class SqliteFtsCore
     {
         ArgumentNullException.ThrowIfNull(definition);
         var source = SqliteSqlCore.QuoteAlias(sourceAlias, nameof(sourceAlias));
-        var map = SqliteSqlCore.QuoteAlias(mapAlias, nameof(mapAlias));
-        if (string.Equals(sourceAlias, mapAlias, StringComparison.Ordinal))
-            throw new ArgumentException("sourceAlias 与 mapAlias 不得相同。", nameof(mapAlias));
-
         var index = SqliteSqlCore.EscapeIdentifier(definition.IndexName);
         var key = SqliteSqlCore.EscapeIdentifier(definition.KeyColumn);
 
         if (definition.Kind == FtsIndexKind.ExternalContent)
             return $"JOIN {index} ON {index}.rowid = {source}.{key}";
+
+        var map = SqliteSqlCore.QuoteAlias(mapAlias, nameof(mapAlias));
+        if (string.Equals(sourceAlias, mapAlias, StringComparison.Ordinal))
+            throw new ArgumentException("sourceAlias 与 mapAlias 不得相同。", nameof(mapAlias));
 
         var mapping = SqliteSqlCore.EscapeIdentifier(definition.MappingTableName!);
         return $"JOIN {mapping} AS {map} ON {map}.\"source_key\" = CAST({source}.{key} AS TEXT) JOIN {index} ON {index}.rowid = {map}.\"fts_rowid\"";
@@ -575,6 +575,7 @@ internal static class SqliteFtsCore
     {
         using var command = connection.CreateCommand();
 #pragma warning disable S2077 // 表名经 EscapeIdentifier 双引号转义；PRAGMA 不支持参数绑定
+        // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- 表名经 EscapeIdentifier 双引号转义（内部双引号翻倍），PRAGMA 不支持参数绑定
         command.CommandText = "PRAGMA table_info(" + SqliteSqlCore.EscapeIdentifier(table) + ")";
 #pragma warning restore S2077
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);

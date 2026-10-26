@@ -7,10 +7,11 @@
 //   ｜ 各自内嵌了 SQL 语句。当需要切换数据库（PG→MySQL）或调整 SQL 时，
 //   ｜ 需要修改分散在 4 个文件中的 SQL 字符串，容易遗漏和不一致。
 //   ｜
-//   ｜ SqlTemplates 将所有 SQL 集中到一个文件：
-//   ｜   - 切换数据库 → 只需修改此文件
-//   ｜   - 审查 SQL   → 只需看一个文件
-//   ｜   - 保持业务逻辑代码不变
+//   ｜ SqlTemplates 集中 Outbox/Inbox/SagaState/EventLog 的 SQL：
+//   ｜   - 这四族切方言只需修改此文件
+//   ｜   - 幂等（DapperIdempotencyStore，10 条）与投影检查点
+//   ｜     （DapperProjectionCheckpointStore，9 条）因单消费者内联，未迁入本文件
+//   ｜     （2026-10-21 勘正原文「所有 SQL」失实；按 ADR-020 不做迁移）
 //   ｜
 //   ｜ 使用场景：
 //   ｜   DapperOutboxStore 引用 SqlTemplates.OutboxInsert
@@ -53,7 +54,7 @@ public static class SqlTemplates
     ///   ｜ 直接传入即可（v25 P3 勘正：原注释 "Guid.NewGuid()" 与实际 Id 类型 PalUlid 不符）。
     /// </summary>
     public const string OutboxInsert =
-        "INSERT INTO outbox_messages (id,type,payload,content_type,schema_version,status,created_at, correlation_id, causation_id, trace_parent, trace_state) VALUES (@Id,@Type,@Payload,@ContentType,@SchemaVersion,0,@CreatedAt, @CorrelationId, @CausationId, @TraceParent, @TraceState)";
+        "INSERT INTO outbox_messages (id,type,payload,content_type,schema_version,status,created_at,next_attempt_at, correlation_id, causation_id, trace_parent, trace_state) VALUES (@Id,@Type,@Payload,@ContentType,@SchemaVersion,0,@CreatedAt,@NextAttemptAt, @CorrelationId, @CausationId, @TraceParent, @TraceState)";
 
     /// <summary>
     /// 标记消息为"已处理"。<br/>
@@ -128,7 +129,7 @@ public static class SqlTemplates
     /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
     /// 消费方保留，删除前须按代码价值判定六项核查（docs 定位/roadmap/git 演进/测试覆盖）。</summary>
     public const string OutboxLeaseUpdate =
-        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN ";
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until, next_attempt_at=@until WHERE id IN ";
 
     /// <summary>
     /// MySQL 专用原子租约获取 — JOIN 形态。<br/>
@@ -138,9 +139,8 @@ public static class SqlTemplates
     /// </summary>
     public const string OutboxLeaseUpdateMySql =
         "UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
-        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
-        + " AND (locked_until IS NULL OR locked_until<=@now)"
-        + " ORDER BY created_at LIMIT @n) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
+        + " AND next_attempt_at<=@now"
+        + " ORDER BY next_attempt_at, created_at LIMIT @n) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until, t.next_attempt_at=@until";
 
     /// <summary>
     /// MySQL ≥8.0.18 专用原子租约获取 — JOIN 派生表 FOR UPDATE SKIP LOCKED（ADR-025，2026-10-09）。<br/>
@@ -151,9 +151,8 @@ public static class SqlTemplates
     /// </summary>
     public const string OutboxLeaseUpdateMySqlSkipLocked =
         "UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
-        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
-        + " AND (locked_until IS NULL OR locked_until<=@now)"
-        + " ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
+        + " AND next_attempt_at<=@now"
+        + " ORDER BY next_attempt_at, created_at LIMIT @n FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until, t.next_attempt_at=@until";
 
     /// <summary>
     /// PG 专用原子租约获取 — 单语句 UPDATE ... RETURNING *（子查询 FOR UPDATE SKIP LOCKED）。<br/>
@@ -167,11 +166,10 @@ public static class SqlTemplates
     /// SKIP LOCKED 语义：多 worker 并发租约互相跳过已锁行而非阻塞。
     /// </summary>
     public const string OutboxLeaseUpdatePG =
-        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until, next_attempt_at=@until WHERE id IN "
         + "(SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
-        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
-        + " AND (locked_until IS NULL OR locked_until<=@now)"
-        + " ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
+        + " AND next_attempt_at<=@now"
+        + " ORDER BY next_attempt_at, created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
 
     /// <summary>
     /// SQLite（及非 PG/MySQL 方言）原子租约获取 — IN 子查询形态（SQLite 支持子查询内 LIMIT）。<br/>
@@ -180,11 +178,10 @@ public static class SqlTemplates
     /// 产物与原拼接逐字一致（无 locking clause——SQLite 单写者库级串行，无并发抢占）。
     /// </summary>
     public const string OutboxLeaseUpdateSqlite =
-        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until, next_attempt_at=@until WHERE id IN "
         + "(SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
-        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
-        + " AND (locked_until IS NULL OR locked_until<=@now)"
-        + " ORDER BY created_at LIMIT @n)";
+        + " AND next_attempt_at<=@now"
+        + " ORDER BY next_attempt_at, created_at LIMIT @n)";
 
     /// <summary>
     /// A12（S1 轮，2026-10-15）：SQLite 单语句原子租约——<see cref="OutboxLeaseUpdateSqlite"/>
@@ -196,11 +193,10 @@ public static class SqlTemplates
     /// 与 PG 路径同语义。列集与 SELECT * 一致（Dapper 映射 OutboxMessage 同形）。
     /// </summary>
     public const string OutboxLeaseUpdateSqliteReturning =
-        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until, next_attempt_at=@until WHERE id IN "
         + "(SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
-        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
-        + " AND (locked_until IS NULL OR locked_until<=@now)"
-        + " ORDER BY created_at LIMIT @n) RETURNING *";
+        + " AND next_attempt_at<=@now"
+        + " ORDER BY next_attempt_at, created_at LIMIT @n) RETURNING *";
 
     /// <summary>按 ID 批量查询（用于 PG RETURNING * 替代路径）。
     /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
@@ -209,11 +205,11 @@ public static class SqlTemplates
         "SELECT * FROM outbox_messages WHERE id IN ";
 
     /// <summary>
-    /// 查询待处理消息（Pending + 未达重试上限 + 可重试/无租约/租约过期）。<br/>
+    /// 查询待处理消息（Pending + 未达重试上限 + 可用时刻已到）。<br/>
     /// 💡 供 <c>GetPendingMessagesAsync</c> 使用，与 <c>LeasePendingMessagesAsync</c> 的子查询条件一致。
     /// </summary>
     public const string OutboxSelectPending =
-        "SELECT * FROM outbox_messages WHERE status=@status AND retry_count<@maxRetryCount AND (next_attempt_at IS NULL OR next_attempt_at<=@now) AND (locked_until IS NULL OR locked_until<=@now) ORDER BY created_at LIMIT @n";
+        "SELECT * FROM outbox_messages WHERE status=@status AND retry_count<@maxRetryCount AND next_attempt_at<=@now ORDER BY next_attempt_at, created_at LIMIT @n";
 
     /// <summary>
     /// 按租约标识回读刚锁定的消息。<br/>
@@ -264,7 +260,7 @@ public static class SqlTemplates
     /// token 不匹配零命中，不再覆盖 B 正在处理的行（对齐 Outbox 租约 token 化）。
     /// </summary>
     public const string InboxMarkProcessed =
-        "UPDATE inbox_messages SET status=2,processed_at=@at WHERE id=@id AND status=1 AND processing_started_at=@startedAt";
+        "UPDATE inbox_messages SET status=2,processed_at=@at,last_error=NULL WHERE id=@id AND status=1 AND processing_started_at=@startedAt";
 
     /// <summary>
     /// 标记消息处理失败。<br/>
@@ -336,7 +332,7 @@ public static class SqlTemplates
         // v53 P2：租约即换代（version=version+1）——对齐 EFCore BumpVersion/InMemory v25 B1
         //（重租即换代）。旧持有者租约被抢后其内存 version 必然落后，SaveChanges 的
         // version 乐观锁真实拦截（修复前租约不动 version，旧持有者保存可穿透覆盖新租约）
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY (leased_until IS NULL) DESC, leased_until, created_at LIMIT @n)";
 
     /// <summary>
     /// PG 专用 Saga 租约获取 — 子查询行锁 <c>FOR UPDATE SKIP LOCKED</c>。<br/>
@@ -347,7 +343,7 @@ public static class SqlTemplates
     /// </summary>
     public const string SagaLeaseActivePG =
         // v53 P2：租约即换代（version=version+1），见 SagaLeaseActive 注释
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY leased_until NULLS FIRST, created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
 
     /// <summary>
     /// PG 专用 Saga 租约获取（RETURNING 单语句形态，EPSL 地毯审计 2026-10-16 B 批 #3）——
@@ -358,7 +354,7 @@ public static class SqlTemplates
     /// （ITM-134）由子查询谓词隐含满足，语义不减。镜像 <see cref="OutboxLeaseUpdatePG"/> 先例。
     /// </summary>
     public const string SagaLeaseActivePGReturning =
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY leased_until NULLS FIRST, created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
 
     /// <summary>
     /// SQLite 专用 Saga 租约获取（RETURNING 单语句形态，B 批 #3）——<see cref="SagaLeaseActive"/>
@@ -368,7 +364,7 @@ public static class SqlTemplates
     /// 形态对齐（SQLite 是双栈里的漏格）。
     /// </summary>
     public const string SagaLeaseActiveSqliteReturning =
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) RETURNING *";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY (leased_until IS NULL) DESC, leased_until, created_at LIMIT @n) RETURNING *";
 
     /// <summary>
     /// MySQL 专用 Saga 租约获取 — JOIN 形态。<br/>
@@ -380,7 +376,27 @@ public static class SqlTemplates
     /// </summary>
     public const string SagaLeaseActiveMySql =
         // v53 P2：租约即换代（version=version+1），见 SagaLeaseActive 注释
-        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1";
+        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY (leased_until IS NULL) DESC, leased_until, created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1";
+
+    // ── M1（2026-10-19）：NextCheckAt 到期租约变体 ──
+    // 活动 Saga 的 next_check_at 恒有值：有带 Timeout 的已开始步骤时为真实到期时刻，
+    // 否则为哨兵 9999-12-31（扫描自然跳过）。NULL 只出现在迁移前存量行——按到期处理，
+    // 首次扫描后由 SagaProcessor 回填（否则存量行永不进入超时扫描）。
+
+    public const string SagaLeaseActiveDue =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND (next_check_at IS NULL OR next_check_at <= @now) ORDER BY created_at LIMIT @n)";
+
+    public const string SagaLeaseActiveDuePG =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND (next_check_at IS NULL OR next_check_at <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
+
+    public const string SagaLeaseActiveDuePGReturning =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND (next_check_at IS NULL OR next_check_at <= @now) ORDER BY next_check_at, created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
+
+    public const string SagaLeaseActiveDueSqliteReturning =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND (next_check_at IS NULL OR next_check_at <= @now) ORDER BY next_check_at, created_at LIMIT @n) RETURNING *";
+
+    public const string SagaLeaseActiveDueMySql =
+        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND (next_check_at IS NULL OR next_check_at <= @now) ORDER BY next_check_at, created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1";
 
     /// <summary>
     /// 按本次租约回读刚获取的 Saga。<br/>
@@ -403,33 +419,58 @@ public static class SqlTemplates
     /// @completedAt——两套命名并存各自与调用方匹配（DapperSagaStateStore 两处匿名对象），
     /// 改名必须同轮同步调用方。</remarks>
     public const string SagaUpdate =
-        "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=@data,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
+        "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=@data,next_check_at=@nextCheckAt,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
 
     /// <summary>插入新的 Saga 状态。
     /// 💡 三十八轮 P3 声明：不写 version 列——依赖 DB DEFAULT 0 与 state.Version 初始值隐式对齐；
     /// schema 默认值漂移将致首次 UPDATE（version CAS）必冲突。</summary>
     public const string SagaInsert =
-        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,@data,@leasedBy,@leasedUntil)";
+        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,@data,@nextCheckAt,@leasedBy,@leasedUntil)";
 
     /// <summary>
     /// PG 专用 Saga 插入 — saga_data 显式 CAST 为 jsonb。<br/>
     /// P1 修复（十一轮·实测发现）：Npgsql 将 string 参数按 text OID 发送，PG 的
-    /// text→jsonb 无赋值转换（42804），实测 INSERT 直接报错。
+    /// text→jsonb 无赋值转换（42804），实测 INSERT 直接报错。<br/>
+    /// R13 F11（P1）：UPSERT 的 UPDATE 0 行 → INSERT 撞主键属常规乐观冲突路径。PG 在
+    /// 23505 后把整个事务标记 aborted，即使调用方 catch 也无法继续（下一条语句/commit
+    /// 抛 25P02）。用 ON CONFLICT DO NOTHING 把冲突变成 0 行写入，事务保持健康；
+    /// RETURNING saga_id 让 ExecuteNonQuery 的受影响行数保持 0/1 契约（守卫族要求
+    /// 冲突安全变体带行数信号，见 TechDebtGuard DialectSqlGuardFamilies）。
     /// </summary>
     public const string SagaInsertPG =
-        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@leasedBy,@leasedUntil)";
+        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@nextCheckAt,@leasedBy,@leasedUntil) ON CONFLICT (saga_id) DO NOTHING RETURNING saga_id";
 
     /// <summary>PG 专用 Saga 更新 — saga_data 同 SagaInsertPG 的 jsonb CAST。</summary>
     public const string SagaUpdatePG =
-        "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=CAST(@data AS jsonb),leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
+        "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=CAST(@data AS jsonb),next_check_at=@nextCheckAt,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
 
     /// <summary>
     /// 批量释放本 owner 的 Saga 租约（EPSL 地毯审计 2026-10-11 B-1）——仅租约列 + 换代，
     /// 不写业务字段；<c>leased_by=@owner</c> 守卫防抢占（租约被他实例重租换代或已终态保存时
-    /// 该行正确退化为不匹配）。三方言通用（IN 列表 + 单 UPDATE，无方言分派面）。
+    /// 该行正确退化为不匹配）。
     /// </summary>
+    /// <remarks>
+    /// legacy 常量：<c>IN @ids</c> 只适用于经典 Dapper 数组绑定。Dapper.AOT + Npgsql 会把
+    /// 数组绑成单个参数并生成 <c>IN $n</c>（PG 42601），因此 <c>DapperSagaStateStore</c>
+    /// 自 2026-10-21 起在运行时构造显式 <c>@idN</c> 参数列表。AOT 路径不要直接使用本常量。
+    /// </remarks>
     public const string SagaReleaseLeases =
         "UPDATE saga_states SET leased_by=NULL, leased_until=NULL, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids";
+
+    /// <summary>
+    /// 扫描轮转释放（2026-10-21 审计 P0）——清持有者，把 <c>leased_until</c> 写成本次扫描时刻
+    /// 作为轮转游标；legacy 租约按 <c>leased_until NULLS FIRST</c> 排序，已扫描行退后。
+    /// </summary>
+    /// <remarks>同 <see cref="SagaReleaseLeases"/>：legacy 常量，AOT 路径不使用。</remarks>
+    public const string SagaReleaseLeasesCheckedAt =
+        "UPDATE saga_states SET leased_by=NULL, leased_until=@checkedAt, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids";
+
+    /// <summary>
+    /// 批量推进 NextCheckAt（2026-10-20 性能轮）——只写到期列 + 换代，不重写业务快照；
+    /// <c>leased_by=@owner</c> 与 <c>version=@v</c> 双守卫防抢占/僵尸写。
+    /// </summary>
+    public const string SagaAdvanceNextCheckAt =
+        "UPDATE saga_states SET next_check_at=@nextCheckAt, version=version+1 WHERE saga_id=@id AND version=@v AND leased_by=@owner";
 
     /// <summary>
     /// Saga 存在性探测（EPSL 地毯审计 2026-10-11 B-3）——SaveChangesAsync 的 UPDATE 先行

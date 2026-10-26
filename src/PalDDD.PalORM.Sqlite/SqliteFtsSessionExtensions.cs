@@ -18,6 +18,8 @@ public static class SqliteFtsSessionExtensions
 {
     /// <summary>
     /// 校验并创建 FTS5 索引（CREATE TABLE/TRIGGER 均为 IF NOT EXISTS，可重复调用）。
+    /// <para>standalone 索引只由后续 DML 触发器维护；源表已有数据时须再调用
+    /// <see cref="RebuildIndexAsync"/> 回填，否则存量行不会被检索到。</para>
     /// </summary>
     public static async Task EnsureIndexAsync(
         this DataSession<SqliteProvider> session,
@@ -29,7 +31,7 @@ public static class SqliteFtsSessionExtensions
 
         var connection = await GetOpenConnectionAsync(session, cancellationToken).ConfigureAwait(false);
         await SqliteFtsCore.ValidateAsync(connection, definition.Core, cancellationToken).ConfigureAwait(false);
-        await ExecuteStatementsAsync(connection, definition.Statements, cancellationToken).ConfigureAwait(false);
+        await ExecuteStatementsAsync(session, connection, definition.Statements, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>重建索引：external-content 用 FTS5 rebuild，standalone 从源表全量重灌。</summary>
@@ -42,7 +44,7 @@ public static class SqliteFtsSessionExtensions
         ArgumentNullException.ThrowIfNull(definition);
 
         var connection = await GetOpenConnectionAsync(session, cancellationToken).ConfigureAwait(false);
-        await ExecuteStatementsAsync(connection, definition.RebuildStatements(), cancellationToken).ConfigureAwait(false);
+        await ExecuteStatementsAsync(session, connection, definition.RebuildStatements(), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>合并 FTS5 索引碎片。</summary>
@@ -55,7 +57,7 @@ public static class SqliteFtsSessionExtensions
         ArgumentNullException.ThrowIfNull(definition);
 
         var connection = await GetOpenConnectionAsync(session, cancellationToken).ConfigureAwait(false);
-        await ExecuteStatementsAsync(connection, definition.OptimizeStatements(), cancellationToken).ConfigureAwait(false);
+        await ExecuteStatementsAsync(session, connection, definition.OptimizeStatements(), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>删除索引的触发器、虚表；standalone 还删除映射表。</summary>
@@ -68,7 +70,7 @@ public static class SqliteFtsSessionExtensions
         ArgumentNullException.ThrowIfNull(definition);
 
         var connection = await GetOpenConnectionAsync(session, cancellationToken).ConfigureAwait(false);
-        await ExecuteStatementsAsync(connection, definition.DropStatements(), cancellationToken).ConfigureAwait(false);
+        await ExecuteStatementsAsync(session, connection, definition.DropStatements(), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>判断索引虚表是否存在于 <c>sqlite_master</c>。</summary>
@@ -129,16 +131,64 @@ public static class SqliteFtsSessionExtensions
         return connection;
     }
 
+    /// <summary>
+    /// 执行一组 DDL/DML 语句。
+    /// </summary>
+    /// <remarks>
+    /// 2026-10-21 评审 F16/F23：
+    /// ① 原实现逐条独立执行且不开事务——standalone Rebuild 的 DELETE 成功后 INSERT 遇
+    /// <c>SQLITE_BUSY</c> 会留下空索引；在已有事务中调用时新建命令未挂接 Transaction，
+    /// Microsoft.Data.Sqlite 抛 TransactionRequired。
+    /// ② 改为单条多语句命令（SQLite 支持）+ 事务：复用 PalORM 环境事务（存在时），
+    /// 否则新建并提交/回滚；N 条语句 1 次往返。
+    /// </remarks>
     private static async Task ExecuteStatementsAsync(
+        DataSession<SqliteProvider> session,
         DbConnection connection,
         IReadOnlyList<string> statements,
         CancellationToken cancellationToken)
     {
-        foreach (var statement in statements)
+        if (statements.Count == 0)
+            return;
+
+        var ambient = PalOrmAmbientTransaction.TryGet(session);
+        var transaction = ambient;
+        var ownsTransaction = false;
+        if (transaction is null)
         {
-            using var command = connection.CreateCommand();
-            command.CommandText = statement;
+            transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            ownsTransaction = true;
+        }
+
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- statements 由 SqliteFtsCore 生成（标识符经转义，来源为已校验的索引定义），无用户输入拼接
+            command.CommandText = string.Join(";\n", statements);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            if (ownsTransaction)
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (ownsTransaction)
+            {
+                try
+                {
+                    await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception rollbackEx) when (rollbackEx is InvalidOperationException or DbException)
+                {
+                    // 回滚是 best-effort；保留原始失败异常。
+                }
+            }
+            throw;
+        }
+        finally
+        {
+            if (ownsTransaction)
+                await transaction.DisposeAsync().ConfigureAwait(false);
         }
     }
 }

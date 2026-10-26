@@ -2,17 +2,17 @@
 
 [English](README.en.md) | **中文**
 
-**面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架：零运行时反射、Native AOT 链路完整、无过度抽象。**
+**面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架：默认零反射（反射路径显式标注）、Native AOT 链路完整、无过度抽象。仅支持 .NET 11（单目标，见 [ADR-005](docs/decisions/005-net11-single-target.md)）。**
 
 [![NuGet](https://img.shields.io/badge/nuget-v4.0.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
-[![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ---
 
-Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测，标准化为 35 个独立 NuGet 包（另依赖 PalORM 引擎 5 个第三方包，见[包清单](#包清单)）。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描：业务代码保持纯 C#，框架只提供基础设施。
+Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测，标准化为 36 个独立 NuGet 包（另依赖 PalORM 引擎 5 个第三方包，见[包清单](#包清单)）。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描：业务代码保持纯 C#，框架只提供基础设施。
 
 | NuGet 包 | 编译期诊断 | 持久化栈 | 实测用例 |
 |:---:|:---:|:---:|:---:|
@@ -61,13 +61,13 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 **可插拔压缩**。`ICompressionProvider` / `ICompressor` 抽象带两套实现：System 内置压缩与原生 LZ4/ZStandard 绑定（`PalDDD.Compression.Native`，AOT 安全），经 DI 替换。
 
-**内建可观测性**。`PalActivitySource`（12 个 Start 方法）+ `PalMetrics`（28 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测（命令分发/Saga 转换 Activity 为预留，尚未接线）。
+**内建可观测性**。`PalActivitySource`（12 个 Start 方法）+ `PalMetrics`（30 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测（命令分发/Saga 转换 Activity 为预留，尚未接线）。
 
 **三栈持久化，按场景选型**。PalORM（真 AOT，源生成 SQL）/ Dapper（调用点级 AOT，手写 SQL）/ EF Core（Migration/LINQ/ChangeTracker 生态）平等共存、无废弃计划；五组 Store 能力三栈全量覆盖、行为由跨栈对照测试守护（[ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md)、[ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)）；支持环境事务与显式事务边界。
 
 **数据库方言深度适配**。PostgreSQL 读写分离 + 多主机故障转移、COPY 批量写入、Pipeline 单往返、LISTEN/NOTIFY 推送、一致性哈希分片、JSONB 操作符；MySQL 多主机负载均衡（FailOver/RoundRobin/LeastConnections）与 InnoDB 会话调优；SQLite WAL/FTS5/JSON1（Dapper 与 PalORM 双栈，含 TEXT 主键独立索引与引号 JSON 路径）。连接串错误在注册期 fail-fast（IPv6 四象限、内嵌端口、主机列表校验），不延迟到建连。多租户过滤（`[TenantAware]`）由 PalORM 引擎提供（见[适配层文档](docs/palorm-adapter.md)）。
 
-**全链路 InMemory 测试与托管集成**。六类 Store 均有 InMemory 实现，消息 Broker 缺省 `NullMessageBroker`，单元测试零外部依赖（`PalDDD.Testing` 提供测试基元）；ASP.NET Core 集成提供 `MapCommand`/`MapQuery` Minimal API 端点映射、`UsePalExceptionHandler` 全局异常中间件、`AddPalHealthChecks` 健康检查与 `AddPalLogging` 日志集成。
+**全链路 InMemory 测试与托管集成**。六类 Store 均有 InMemory 实现，消息 Broker 缺省 `NullMessageBroker`，单元测试零外部依赖（`PalDDD.Testing` 提供测试基元）；ASP.NET Core 集成提供 `MapCommand`/`MapQuery` Minimal API 端点映射、SSE 流式读端点 `MapStreamQuery`（GET/POST，含 event/id 分型帧、心跳与 `Last-Event-ID` 入口）与断线续跑端点组（`AddDetachedStreamRuns` + 启动/附着/取消端点）、`UsePalExceptionHandler` 全局异常中间件、`AddPalHealthChecks` 健康检查与 `AddPalLogging` 日志集成。
 
 ## 与现有方案的差异
 
@@ -186,6 +186,8 @@ public sealed class CreateOrderHandler(IUnitOfWork uow) : ICommandHandler<Create
 
 ```csharp
 // 1. 注册核心栈（Dispatcher + Pipeline + Ulid 身份；不含序列化/持久化/Broker——由对应包显式注册，见 AddPalCoreStack remarks）
+//    Native AOT 应用不要用本行：它注册开放泛型管道行为，AOT 下注册期抛 NotSupportedException；
+//    改用 AddPalDDD() + AddPalCommandHandler<...>() / AddPalQueryHandler<...>()（见 docs/aot.md）。
 services.AddPalCoreStack();
 
 // 2. 注册命令处理器（编译时类型常量，无装配扫描）
@@ -194,7 +196,7 @@ services.AddPalCommandHandler<CreateOrder, OrderId, CreateOrderHandler>();
 // 3. 选持久化适配器（推荐 PalORM，真 AOT）
 services.AddPalOrmSqlite(connectionString);    // 或 PostgreSql / MySql
 
-// 4. 注册 Outbox（事务内原子写入消息行 + 后台轮询发布）
+// 4. 注册 Outbox（事务内原子写入消息行 + 写入唤醒发布，轮询兜底）
 services.AddPalOutbox();
 
 // 5. 分发命令（⚠️ Handler 注册由 Host 驱动——HandlerRegistrar 在 Host 启动时扫描注册；
@@ -212,7 +214,7 @@ var orderId = await dispatcher.SendAsync(new CreateOrder("Alice", 99.9m));
 ### Outbox：租约锁并发，多实例无重复投递
 
 ```csharp
-// 注册：Outbox + 后台处理器自动轮询
+// 注册：Outbox + 后台处理器（写入后信号唤醒，PollInterval 兜底）
 services.AddPalOrmPostgreSql(connectionString);
 services.AddPalOutbox();   // ⚠️ 只注册处理器/Options——Store/序列化器/Catalog/Broker 四件套由调用方注册（见 usage.md「使用 Outbox」）
 
@@ -367,7 +369,7 @@ var current = pipeline.Upgrade(payload.Span, oldDescriptor, currentDescriptor, s
 
 ## 性能
 
-> ⚠️ 以下为 `--smoke` 烟测数据（Stopwatch + GC 分配；2026-10-08，Windows 10 x64，.NET SDK 11.0.100-rc.1，BenchmarkDotNet 0.15.8）。耗时为 3 轮中位（同日极差 ±5%，跨 SDK 轮差可达 ±20%——计时只作趋势）；分配逐轮逐字节稳定，`--smoke` 对分配做预算断言（超限退出码非 0）。正式报告经 InProcess 模式产出（`--framework` / `--infra` / `--persist*` 等，15 个基准类全覆盖）。
+> ⚠️ 以下为 `--smoke` 烟测数据（Stopwatch + GC 分配；2026-10-08，Windows 10 x64，.NET SDK 11.0.100-rc.1，BenchmarkDotNet 0.15.8）。耗时为 3 轮中位（同日极差 ±5%，跨 SDK 轮差可达 ±20%——计时只作趋势）；分配逐轮逐字节稳定，`--smoke` 对分配做预算断言（超限退出码非 0）。正式报告经 InProcess 模式产出（`--framework` / `--infra` / `--persist*` 等，38 个基准类全覆盖）。2026-10-23 起车道与采样档由 `bench/bench-registry.json` 驱动：`dotnet run scripts/eps-run.cs -- --profile standard`（≤10 分钟）或 `--full`（≤45 分钟）；`--smoke` 仍是每提交门禁。
 
 | 操作 | 次数 | 耗时（3 轮中位） | 分配 |
 |------|:--:|------|:--:|
@@ -391,7 +393,7 @@ dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benc
 | PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` 全局继承 |
 | PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | 同上 |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **真 AOT** | 源生成 RowFactory/CommandFactory，`PublishAot=true` 验证通过（[PalOrmSample](samples/PalDDD.PalOrmSample/)） |
-| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ 实测 | `[module:DapperAot]` 已启用——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持 |
+| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ 实测 | `[module:DapperAot]` 已启用——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 33/33（2026-10-21 补批量 EventLog 路径）；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持 |
 | PalDDD.Transactions | ❌ | Saga 反射特例（`IsAotCompatible=false`，见 csproj） |
 | **PalDDD.\*.EFCore（5 项目）** | ❌ | EF Core 客户端限制 + Saga 反射特例传导——设计取舍非废弃，EF 生态用户正常使用（运行时 JIT 编译） |
 | ~~PalDDD.EntityFrameworkCore~~（旧包） | ❌ | ~~已废弃，源码未入库（OBS-068）——注意区别于上行的五个现行 `*.EFCore` 项目~~ |
@@ -443,7 +445,7 @@ dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benc
 
 ## 包清单
 
-PalDDD 自有 35 个包 + PalORM 引擎 5 个第三方包（`PalORM.Core` · `PalORM.SourceGen` · `PalORM.PostgreSql` · `PalORM.MySql` · `PalORM.Sqlite`，独立版本线）。逐包发布清单与版本见[发布包范围](docs/release.md)；当前版本以 [NuGet](https://www.nuget.org/packages/PalDDD.Base) 徽章与 [CHANGELOG](CHANGELOG.md) 为准。
+PalDDD 自有 36 个包 + PalORM 引擎 5 个第三方包（`PalORM.Core` · `PalORM.SourceGen` · `PalORM.PostgreSql` · `PalORM.MySql` · `PalORM.Sqlite`，独立版本线）。逐包发布清单与版本见[发布包范围](docs/release.md)；当前版本以 [NuGet](https://www.nuget.org/packages/PalDDD.Base) 徽章与 [CHANGELOG](CHANGELOG.md) 为准。
 
 | 层 | 包 |
 |----|----|
@@ -461,7 +463,7 @@ PalDDD 自有 35 个包 + PalORM 引擎 5 个第三方包（`PalORM.Core` · `Pa
 ## 项目结构
 
 ```
-src/                         36 源项目 · Clean Architecture（Folder 与 PalDDD.slnx 一致）
+src/                         37 源项目 · Clean Architecture（Folder 与 PalDDD.slnx 一致）
 ├── Domain/                  Core · SourceGen · Analyzers · Analyzers.CodeFixes
 ├── App-Abstractions/        Serialization · Messaging · Compression · Compression.Native
 ├── App-Core/                CQRS · EventLog · Idempotency · Projections · Transactions
@@ -522,7 +524,7 @@ flowchart TB
 | [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
 | [踩坑目录](docs/pitfalls.md) | 86 条 DDD/AOT/并发实战踩坑 |
 | [开发流程](docs/development.md) | 开发环境、Git 钩子、测试运行 |
-| [架构决策](docs/decisions/) | 32 份 ADR |
+| [架构决策](docs/decisions/) | 36 份 ADR |
 | [部署性能旋钮](docs/deployment-performance.md) | GC 选型 / PG·MySQL 服务端旋钮实测与权衡 |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 
@@ -560,6 +562,6 @@ QQ 交流群 **1125599744**（C#/.NET 新技术交流群）：使用问题、特
 
 [GNU Affero General Public License v3.0 or later](LICENSE)
 
-Copyright (C) 2026 PalDDD
+Copyright (C) 2026 SuperLee
 
-本项目使用 AGPL-3.0-or-later 许可证。AGPL v3 在 GPL v3 基础上增加第 13 条网络交互条款：通过网络提供服务时，必须向用户提供修改后版本的完整源代码。详见 [LICENSE](LICENSE) 文件或 <https://www.gnu.org/licenses/agpl-3.0.html>。
+本项目使用 Apache-2.0 许可证：宽松许可，允许商用、修改与闭源集成，并附带显式专利授权；要求分发时保留 [LICENSE](LICENSE) 与 [NOTICE](NOTICE) 副本并对修改作出声明；不授予商标权。AGPL 时代的网络服务开源义务不再适用。存储引擎 PalORM 自 6.8.0 起同为 Apache-2.0，全依赖链无 copyleft 组件。详见 [LICENSE](LICENSE) 文件或 <https://www.apache.org/licenses/LICENSE-2.0>。

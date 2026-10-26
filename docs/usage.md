@@ -13,7 +13,9 @@ var services = new ServiceCollection();
 services.AddPalCoreStack();
 ```
 
-`AddPalCoreStack()` 是推荐的核心入口，等价于 `AddPalDDD()` + `AddPalPipelineBehaviors()` + `AddPalIdentity()`。`AddPalFullStack()` 当前也等价于核心栈：它不会自动引用序列化、持久化、Broker 或 ASP.NET Core 适配器，避免基础设施依赖越过 Clean Architecture 边界。
+`AddPalCoreStack()` 是推荐的核心入口，等价于 `AddPalDDD()` + `AddPalPipelineBehaviors()` + `AddPalIdentity()`。它不会自动引用序列化、持久化、Broker 或 ASP.NET Core 适配器，避免基础设施依赖越过 Clean Architecture 边界。原 `AddPalFullStack()` 已在 v5.0 契约窗口移除——它从未注册基础设施，名字容易被误读为“一键到位”，统一入口只有 `AddPalCoreStack()`。
+
+管道行为（验证/日志）依赖 `IPalLogger<T>`：`AddPalCoreStack()` 与 `AddPalPipelineBehaviors()` 会自带该门面的最小注册（依赖宿主的 `ILogger<T>`，无 Provider 时零输出），因此「核心栈 + handler」即可完成首次 `SendAsync`。组件级注册 `AddPalOutbox()` / `AddPalInbox()` / `AddPalSaga<,>()` / `AddPalPostgreSqlOutboxNotifier()` 同样各自登记该门面（2026-10-21 R7，R8 补齐通知器），因此不依赖 `AddPalCoreStack()` 先行，单独使用不会在宿主启动时抛「Unable to resolve service for type IPalLogger<T>」；宿主的 `ILogger<T>` 仍由标准宿主（Generic Host / WebApplicationBuilder）提供。`AddPalLogging()` 是可选的输出配置，只负责追加 ZLogger 控制台 Provider 与日志级别策略。
 
 领域事件 dispatcher 通过 `HashSet<Guid>` 去重循环事件，并通过 `while` 循环替代递归防止深层事件链导致栈溢出。
 
@@ -83,11 +85,19 @@ services.AddPalCommandHandler<CreateOrderCommand, OrderId, CreateOrderHandler>()
 分发：
 
 ```csharp
-var dispatcher = provider.GetRequiredService<Dispatcher>();
+// HandlerRegistrar 是 IHostedService：必须先启动宿主，Handler 才会注册进 Dispatcher。
+var builder = Host.CreateApplicationBuilder();
+builder.Services.AddPalCoreStack();
+builder.Services.AddPalCommandHandler<CreateOrderCommand, OrderId, CreateOrderHandler>();
+
+using var host = builder.Build();
+await host.StartAsync();
+var dispatcher = host.Services.GetRequiredService<Dispatcher>();
 var orderId = await dispatcher.SendAsync(new CreateOrderCommand("Contoso", 100m));
+await host.StopAsync();
 ```
 
-> **前提**：Handler 由 `HandlerRegistrar`（`IHostedService`）在**宿主启动时**自动注册并 `Freeze()`。因此需运行在 `IHost` 宿主（`WebApplicationBuilder` / `HostBuilder`）下；纯 `BuildServiceProvider()` 场景（单测/控制台工具）`IHostedService` 不执行，需手动 `AddPalCommandHandler` 后显式触发注册或直接构造 Dispatcher。
+> **前提**：Handler 由 `HandlerRegistrar`（`IHostedService`）在**宿主启动时**自动注册并 `Freeze()`。纯 `BuildServiceProvider()` 后直接 `SendAsync` 会抛 `HandlerNotFoundException`（`IHostedService` 未执行）；单测/控制台工具请复用宿主形态（如上例），或直接构造 `Dispatcher` 并显式调用 `Register`。
 
 ## 定义查询和 handler
 
@@ -231,6 +241,16 @@ using PalDDD.Transactions;
 services.AddPalOutbox();
 ```
 
+**投递延迟（2026-10-22）**：`AddPalOutbox` 同时注册进程内唤醒信号 `IOutboxWakeUpSignal`。内置四栈
+Store（Dapper/PalORM/EF/InMemory）在消息行写入成功后通知 `OutboxProcessor` 立即续批，
+`PollInterval`（默认 500ms）降为兜底与跨实例写入的发现节奏——端到端排队延迟从半个轮询周期
+降到一次租约往返加一次发布。信号是加速通道而非投递保证（跨进程写入不触发本地信号，信号
+丢失/重复/合并均不影响正确性）；被唤醒但当轮租到 0 条时（写入方事务尚未提交）处理循环用
+20ms 短间隔自愈重试一次。覆盖范围：Dapper/PalORM/InMemory 的 `AddMessageAsync`/`AddMessagesAsync`，
+以及 EF 拦截器的领域事件路径；EF 上下文上直接 `OutboxMessages.Add`（未挂拦截器）与各栈
+`RequeueDeadAsync` 仍按 `PollInterval` 轮询。替换实现另行注册 `IOutboxWakeUpSignal` 即可
+（`TryAddSingleton` 先注册者胜出）；不注册则退回纯轮询，行为仍正确。
+
 调用方还必须注册：
 
 - `IMessageSerializer`
@@ -243,6 +263,8 @@ services.AddPalOutbox();
 生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]`（源码声明 v4.0 移除）且零测试覆盖，属**实验性/未验证**，生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessedAsync` 会清理 lease/retry 状态，`ReleaseForRetryAsync` 会释放 lease 并设置 `NextAttemptAt`。终态写的 fencing 契约自 v4.0 ②（ADR-026）跨栈统一：租约 token 拒绝时零 DB 写 + 零内存变异；成功时 DB 全套更新 + 入参对象全套回写（EF 栈仅对 Detached 快照回写，跟踪实体自动跳过——并发令牌守卫）。
 
 **并行发布（3.0.0 起）**：`OutboxOptions.MaxDegreeOfParallelism`（默认 1，经 `AddPalOutbox(o => o.MaxDegreeOfParallelism = n)` 配置）>1 时，批内消息按分区交由 per-worker scope（独立 store/DbContext 实例）并行完成「反序列化 → 发布 → 标记」，吞吐随并行度提升；租约/fencing 互斥不受影响。**前提**：① broker 发布须线程安全（Kafka producer 天然支持；RabbitMQ 单 channel 并发发布的 7.x 语义已核实——publisher-confirms 仅护帧发送段、确认等待不串行）；② 消费方幂等（并行加速下乱序提交概率上升）。直构造 `OutboxBatchProcessor` 的调用方不受影响（`IServiceScopeFactory` 为可选尾参；并行度 >1 且缺失时运行期 fail-fast 并给出指引）。
+
+**自动投递策略（2026-10-19，ADR-033）**：`DeliveryMode.Auto` 默认开启。broker 声明 `SupportsConcurrentPublish` 时发布窗口至少 16（`MaxInFlightPublishes` 显式更大的值参与取大）；store 实现 `IBatchMarkOutboxStore` 时终态标记阈值提升到 `min(BatchSize, 400)`（`BatchSize` 默认 100，即有效值 100；上限 400 是现有分块宽），并在 `BatchMarkFlushInterval`（默认 1 秒）到点时冲刷，重复窗口不再由整批时长放大。两个选项自身的默认值都是 1，`Serial` 模式下才逐字生效；Auto 会按能力提升，不是「默认逐条确认」。broker 同时实现 `SupportsRawPublish` 时，Outbox 直接发送持久化字节，跳过反序列化与再序列化。需要逐条确认的旧行为时显式配置 `DeliveryMode = Serial`。Kafka 窗口化要求幂等 producer：调用方未显式配置 `EnableIdempotence`/`Acks`/`MaxInFlight`/`MessageSendMaxRetries` 时框架默认开启幂等（acks=all），因此 Kafka 默认具备升窗条件；显式设置任一项则保持调用方取舍，此时仅在 `EnableIdempotence=true` 时升窗。
 
 EF 栈的 `IPalOutboxStore` / `IInboxStore` / `ISagaStateStore<T>` / `IIdempotencyStore` / `IProjectionCheckpointStore` 由各适配器包的 `AddPal*EfCore` 扩展注册（与 Dapper/PalORM 栈的 `AddPal*` 入口对称）。这些扩展**不**注册 `DbContext` 本身（provider 选择权在调用方），需与 `AddDbContext` 配套：
 
@@ -258,6 +280,8 @@ services.AddDbContext<AppOutboxDbContext>(o => o.UseNpgsql(connectionString));
 ```
 
 Store 映射的生命周期为 **Scoped**，与 `AddDbContext` 默认一致（`DbContext` 非线程安全，不得 Singleton）。
+
+Dapper 栈的 store 构造函数（`new DapperOutboxStore(...)` 等）在构造期校验两项配置：连接串非空、`DapperDbType` 与连接类型一致（`SqliteConnection`/`NpgsqlConnection`/`MySqlConnection`）。不一致会立即抛 `ArgumentException` 并给出期望形态——避免等到首次查询才以 provider 语法错误或 `no such table` 的形式暴露。连接串必须在构造 store 前设置。
 
 ### 死信语义与运维（F4 补，2026-09-19）
 
@@ -320,9 +344,33 @@ var processed = await inbox.TryProcessAsync(
 
 `false` 表示该消息已处理或仍在其他消费者处理中。
 
-`InboxProcessor` 会发出 `Inbox Process` span。它使用同一个 `PalActivitySource.Name`，仅包含 `pal.inbox.consumer` 和 `pal.inbox.result` 标签——`pal.inbox.message_id` 已按 ITM-229 标准从 tag 移除（高基数：每消息唯一，且可能含业务 ID）；结果值为 `processed`、`skipped` 或 `failed`。
+**处理租约契约**：`InboxOptions.ProcessingTimeout`（默认 5 分钟）必须大于最慢 handler 的执行时长。单次处理超过该值后，同一 `(ConsumerName, MessageId)` 可被第二个消费者重新认领并并发执行，副作用的重复发生不会自动去重。`InboxProcessor` 在 handler 时长达到该值时记录 `InboxHandlerLeaseExceeded`（EventId 1006）告警：逐条路径每条一条，批量路径按批聚合一条（含超限条数与最大耗时，计时起点为整批认领时刻）；长耗时 handler 请显式调大该选项。
+
+批量路径的其余告警与逐条路径同口径：handler 失败按批聚合记 `InboxMessageFailed`（1003）；完成标记整批抛错或部分未命中记 `InboxMessageProcessedMarkFailed`（1004），此时 span 结果为 `processed-pending-confirmation`，且不发 `InboxBatchProcessed`（1005，仅在全部成功项都标记落库时输出）。其中部分未命中为 Warning（无异常可携带），整批抛错为 Error（携带异常）；两类均用 1004，告警规则应按 EventId 过滤而非按级别过滤。`pal.inbox.skipped` 统计去重后未被认领的消息数（已处理或仍在租约内），批内重复 MessageId 不计入。
+
+`InboxProcessor` 会发出 `Inbox Process` span。它使用同一个 `PalActivitySource.Name`，标签为 `pal.inbox.consumer` 与 `pal.inbox.result`，批量路径在批内存在跳过条目时额外带 `pal.inbox.skipped`（跳过条数）；`pal.inbox.message_id` 已按 ITM-229 标准从 tag 移除（高基数：每消息唯一，且可能含业务 ID）。结果值为 `processed`、`skipped`、`failed`，以及 handler 成功但完成标记失败时的 `processed-pending-confirmation`（ITM-180：不得降级为可重试失败，否则重试会重放副作用；由下一轮循环与监控补正）。
 
 同一幂等消费边界还会记录 `paldd.inbox.processed`、`paldd.inbox.skipped` 和 `paldd.inbox.failed` metrics，应用层可通过 OpenTelemetry `AddMeter(PalActivitySource.Name)` 采集。
+
+批量消费（2026-10-21）：
+
+```csharp
+services.AddPalInbox();
+services.AddScoped<InboxProcessor>();   // InboxBatchConsumer 每批创建一个 scope
+
+var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+var options = provider.GetRequiredService<IOptionsMonitor<InboxOptions>>();
+var consumer = new InboxBatchConsumer<OrderSubmitted>(broker, scopeFactory, options);
+await using var subscription = await consumer.StartAsync(
+    handler: static async (OrderSubmitted message, CancellationToken ct) =>
+    {
+        await ValueTask.CompletedTask;
+    },
+    maxBatchSize: 64,
+    maxDelay: TimeSpan.FromMilliseconds(50));
+```
+
+消息 ID 默认取 `MessageConsumeContext.MessageId`（Kafka 消息 Key / RabbitMQ `BasicProperties.MessageId`，发布侧由框架写入）；broker 不提供消息 ID 时传入 `messageIdSelector`，两者都无则启动后首批快速失败。store 实现 `IBatchInboxStore` 时批量路径按实现方策略执行：Dapper PG/SQLite 每批一次认领 + 一次完成往返，Dapper MySQL 为逐条 CAS（每消息 2 次往返，2026-10-22 R14 起：原块级时间戳令牌在同刻碰撞下会重复认领）；否则自动回落逐条 `TryProcessAsync`。**当前实现 `IBatchInboxStore` 的是 Dapper 与 InMemory；PalORM 与 EF 的 Inbox store 回落逐条**（每消息 2 次往返），`InboxProcessor` 会在该 processor 实例首次批量调用时记录一次 Information 说明回落（含 store 类型与消费者名），此后不再重复。broker 仍是 at-most-once：批内失败的条目被标记 Failed，不会由 broker 重投。
 
 生产环境可引用 `PalDDD.Transactions.EFCore` 程序集，`using PalDDD.Transactions;` 后派生 `InboxDbContext`，并通过 DI 将该上下文作为 `IInboxStore` 使用。适配器会配置 `(ConsumerName, MessageId)` 唯一索引、processed 时间索引和 lease 状态索引；已处理消息返回 `null`，未超时 `Processing` 消息返回 `null`，失败或超时消息会重新进入 `Processing` 以支持 broker 重投递。
 
@@ -401,7 +449,7 @@ services.AddScoped<IEventLog>(sp => sp.GetRequiredService<AppEventLogDbContext>(
 
 `AddPalEventLogEfCore<TContext>()` 把 `EventLogPositionReserver` 注册为 **Singleton**（`TryAdd` 语义，不覆盖调用方自己的注册）。EF Core 经 `ActivatorUtilities` 从 DI 解析派生上下文的构造参数，因此注册后所有请求上下文共享同一 chunk 缓存——这正是 Hi/Lo 分配器的设计前提。区块大小可调：`AddPalEventLogEfCore<AppEventLogDbContext>(chunkSize: 500)`。
 
-适配器会配置 `GlobalPosition` 主键、`(StreamName, StreamVersion)` 唯一索引和 `EventId` 唯一索引，并持久化 payload、metadata、审计字段和 trace context。`GlobalPosition` 由 `EventLogPositionReserver` 的 Hi/Lo 段分配器管理，而非数据库自增 identity。分配器缓存 chunk（默认 100 个位置）在进程内，仅当 chunk 耗尽时通过乐观 CAS（Revision 并发令牌）更新持久化 allocator 行；关系型 provider 下 append 使用默认隔离级别（ReadCommitted），stream 级别并发由唯一索引保障。
+适配器会配置 `GlobalPosition` 主键、`(StreamName, StreamVersion)` 唯一索引和 `EventId` 唯一索引，并持久化 payload、metadata、审计字段和 trace context。`GlobalPosition` 由 `EventLogPositionReserver` 的 Hi/Lo 段分配器管理，而非数据库自增 identity。分配器缓存 chunk（默认 1000 个位置）在进程内，仅当 chunk 耗尽时通过乐观 CAS（Revision 并发令牌）更新持久化 allocator 行；关系型 provider 下 append 使用默认隔离级别（ReadCommitted），stream 级别并发由唯一索引保障。
 
 `AppendAsync` 还会发出 `EventLog Append` span。它使用同一个 `PalActivitySource.Name`，仅包含 `pal.eventlog.event_count` 标签——流名、stream version 与 global position 等高基数信息（含聚合 ID）已按 ITM-229 标准从 tag 移除，位置信息由 `AppendEventsResult` 返回值承载。
 
@@ -424,7 +472,7 @@ foreach (var statement in definition.Statements)
     await connection.ExecuteAsync(statement);
 ```
 
-`CreateOutboxIndex` / `CreateEventLogIndex` 使用 standalone 索引（映射表 + 触发器），TEXT/ULID 主键与 BLOB payload 都可用；`payload` 默认以 `CAST(... AS TEXT)` 入索引。需要 INTEGER 主键 + TEXT 列的 external-content 索引时用 `CreateExternalContentIndex`，`ValidateAsync` 会在 TEXT 主键上提前抛错。
+`CreateOutboxIndex` / `CreateEventLogIndex` 使用 standalone 索引（映射表 + 触发器），TEXT/ULID 主键与 BLOB payload 都可用；`payload` 默认以 `CAST(... AS TEXT)` 入索引。需要 INTEGER 主键 + TEXT 列的 external-content 索引时用 `CreateExternalContentIndex`，`ValidateAsync` 会在 TEXT 主键上提前抛错。standalone 索引只由后续 DML 触发器维护，源表已有数据时创建后须执行 `definition.RebuildStatements()`（PalORM 为 `RebuildIndexAsync`）回填，否则存量行搜不到。
 
 ### 查询（Dapper）
 
@@ -442,7 +490,7 @@ var sql = $"SELECT * FROM outbox_messages WHERE {SqliteJson.EqualsParameter("pay
 var rows = await connection.QueryAsync<OutboxRow>(sql, new { type = "Order.Created" });
 ```
 
-JSON 路径始终引号化，键可以直接包含 `.`、`[`、`]`、空格；键内双引号与反斜杠由 helper 转义。
+JSON 路径始终引号化，键可以直接包含 `.`、`[`、`]`、空格；键内双引号与反斜杠按 JSON 路径规则转义，单引号按 SQL 字面量规则翻倍。
 
 ### 建索引与查询（PalORM）
 
@@ -525,6 +573,8 @@ var processed = await processor.ProcessAsync(
 ```
 
 生产环境应提供数据库实现的 `IProjectionCheckpointStore`，用唯一约束保护 `(ProjectionName, SourceName, Position)`。
+
+处理器在 handler 执行期间按 `processingTimeout / 3` 心跳续租（store 实现 `IProjectionLeaseRenewalStore` 时；内建 InMemory/Dapper/PalORM/EF 四栈均已实现），慢 handler 不会因超过 `processingTimeout` 被另一 worker 重租并发投影。自定义 store 未实现该能力时保持原语义：handler 必须在 `processingTimeout` 内完成，否则租约到期后可能被重租。
 
 从 EventLog stream 重建 projection 时，使用 adapter 包把已记录事件转换为 replay source：
 
@@ -652,6 +702,9 @@ builder.Services.AddPalHealthChecks();
 var app = builder.Build();
 app.UsePalExceptionHandler();
 app.MapPalHealthChecks("/health");
+// 生产部署：/health 暴露组件拓扑与依赖状态，按授权/限流约定保护——
+// 用返回 IEndpointConventionBuilder 的变体（R13 F10）：
+// app.MapPalHealthChecksWithConventions("/health").RequireAuthorization();
 ```
 
 异常中间件将 `PalValidationException` 映射为 400，将 `HandlerNotFoundException` 映射为 404，未处理异常映射为 500。
@@ -825,9 +878,9 @@ public sealed class AgentReplayHandler(IEventLog eventLog)
 }
 ```
 
-完整可运行样本见 `samples/PalDDD.AgentSample`（流式产出 + 工具幂等 + EventLog 审计 + 断点续看四项接线，13 条断言）。
+完整可运行样本见 `samples/PalDDD.AgentSample`（流式产出 + 工具幂等 + EventLog 审计 + 断点续看四项接线，17 条断言）。
 
-**遥测（2026-10-18 接入）**：端点在验证通过、进入枚举后开启 `Stream Query` Activity（tag `pal.stream.query`/`pal.stream.item` 为类型名），首个元素写出时记 `first-item` 事件——**TTFT = 该事件时间戳 − span 起点**，无需新增直方图。五个零 tag 计数器：`paldd.stream.started/completed/failed/cancelled/items`（取消独立于失败：客户端断开是正常终止，混入 failed 会污染错误率告警）。订阅方式与其他遥测一致（引用 `PalDDD` ActivitySource/Meter）。
+**遥测（2026-10-18 接入，2026-10-19 扩到断线续跑）**：端点在验证通过、进入枚举后开启 `Stream Query` Activity（tag `pal.stream.query`/`pal.stream.item` 为类型名），首个元素写出时记 `first-item` 事件——**TTFT = 该事件时间戳 − span 起点**，无需新增直方图。七个零 tag 计数器：`paldd.stream.started/completed/failed/cancelled/items` 五个终态与吞吐计数（取消独立于失败：客户端断开是正常终止，混入 failed 会污染错误率告警），加断线续跑专用的 `paldd.stream.attached`（成功附着数，含首次、重连与接管）与 `paldd.stream.gap`（gap 帧写出次数）。普通流式读不产生后两项；断线续跑的 run 与普通流式读共用前五项，run 未附着时也计 started（产出由注册表泵驱动，与客户端是否在看无关）。订阅方式与其他遥测一致（引用 `PalDDD` ActivitySource/Meter）。
 
 ### 8. 断线续跑（ADR-031）
 
@@ -849,12 +902,24 @@ app.MapDetachedStreamQuery<TokenStreamQuery, TokenChunk>(
     eventSelector: chunk => chunk.Kind,
     idSelector: chunk => chunk.Index.ToString());
 
+// POST 启动形态：prompt 类请求体超过 URL 长度时用（浏览器侧 fetch + ReadableStream 手工解析）
+app.MapDetachedStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/agent/run/post",
+    StreamJsonContext.Default.TokenStreamQuery,
+    StreamJsonContext.Default.TokenChunk,
+    eventSelector: chunk => chunk.Kind,
+    idSelector: chunk => chunk.Index.ToString());
+
 // 重连附着（遵守 Last-Event-ID：先回放缓冲，再转 live）
 app.MapStreamRunAttach<TokenChunk>("/agent/runs", StreamJsonContext.Default.TokenChunk);
 
 // 显式取消（幂等，终态返回 204）
 app.MapStreamRunCancel("/agent/runs");
 ```
+
+POST 启动的错误形态与 `MapStreamQuery` POST 重载一致：非 JSON Content-Type 415、畸形 JSON 400、空 body 400，均在 SSE 头写出前返回。
+
+**生产部署（授权与限流）**：三个端点返回 `IEndpointConventionBuilder`，可直接链 `RequireAuthorization()` / `RequireRateLimiting()`。框架只按 `runId` 做存在性检查（128 位随机 ID，不可猜测），**不校验 run 所有权**；多租户应用须在端点过滤器或应用层把 run 绑定到当前用户。浏览器跨域读 `X-Run-Id` 需在 CORS 中 `WithExposedHeaders("X-Run-Id")`。
 
 客户端流程：
 
@@ -870,7 +935,7 @@ const reattach = await fetch(`/agent/runs/${runId}/stream`, {
 });
 ```
 
-**语义边界**：缓冲按项计数，溢出丢最旧并在重连首帧发 `event: gap`（携带 `oldestIndex`，客户端自行决定重开还是接受缺口）；终态 run 在 `RetentionAfterCompletion` 内可回看，收尾帧为 `event: done|cancelled|error`。注册表是**进程内**状态：重启丢进行中 run；多实例部署需会话亲和。完成态审计与回放仍走 EventLog（见上一节）。
+**语义边界**：缓冲按项计数，溢出丢最旧并在重连首帧发 `event: gap`（携带 `oldestIndex`，客户端自行决定重开还是接受缺口）；终态 run 在 `RetentionAfterCompletion` 内可回看，收尾帧为 `event: done|cancelled|error`。保留是**尽力而为**：总跟踪数达到 `2 × MaxConcurrentRuns` 时最旧的终态 run 提前逐出（回看得 404），内存上界由此收敛为运行中与保留终态各至多 `MaxConcurrentRuns`。注册表是**进程内**状态：重启丢进行中 run；多实例部署需会话亲和。完成态审计与回放仍走 EventLog（见上一节）。
 
 **客户端两个坑**：SSE 流未读完时 `response.Dispose()` 会同步等连接关闭（与仍在写的服务端互相等待），断线请用取消请求；重连用新连接（连接池在 abort 后可能异常）；`done`/`cancelled` 收尾帧不带 `id`，按 id 解析须过滤。
 

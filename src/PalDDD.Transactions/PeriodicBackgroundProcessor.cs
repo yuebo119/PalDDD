@@ -58,21 +58,18 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
     /// <summary>本轮轮询等待的当前间隔（热读形态生效点）。</summary>
     private TimeSpan CurrentPollInterval => _pollIntervalProvider?.Invoke() ?? _pollInterval;
 
+    /// <summary>R13 F17：Task.Delay 的计时器上限（uint.MaxValue-1 毫秒 ≈ 49.7 天，实测 50 天即抛）。</summary>
+    private static readonly TimeSpan s_maxTimerDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     protected IServiceScopeFactory ScopeFactory => _scopeFactory;
 
     /// <summary>
     /// 子类在 <see cref="ExecuteTickAsync"/> 返回前报告「本轮拿到了满批（可能还有积压）」——
-    /// 为 true 时基类跳过整轮轮询间隔、仅让步 DrainTickDelay 后立即续批（自适应排空，
-    /// T1.2）；为 false（含异常路径的默认值）时按 CurrentPollInterval 正常轮询。
+    /// 为 true 时基类跳过整轮轮询间隔，仅 <see cref="Task.Yield"/> 让出时间片后立即续批
+    /// （自适应排空，T1.2）；为 false（含异常路径的默认值）时按 CurrentPollInterval 正常轮询。
     /// 默认 false = 既有子类（SagaProcessor 等）行为逐位不变。
     /// </summary>
     protected virtual bool TickHasPendingWork => false;
-
-    /// <summary>
-    /// 排空模式的批间让步：仅用于避免连续满批时的零延迟忙转（每轮 tick 本身含真实
-    /// DB I/O，毫秒级），不是退避语义——满批即视为有积压，全速排空。
-    /// </summary>
-    private static readonly TimeSpan DrainTickDelay = TimeSpan.FromMilliseconds(1);
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception",
         Justification = "后台轮询循环必须隔离任意异常以防止循环中断；OperationCanceledException 已由前两个 catch 分支处理，此分支兜底非取消异常并回调 OnTickFailed。")]
@@ -83,20 +80,35 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
             // 审计 2026-09-17 T-2：原 PeriodicTimer 不接受 TimeProvider，测试只能挂钟等待。
             // 改为 Task.Delay(interval, timeProvider, ct)——生产行为等价（系统时钟），
             // 测试可注入 FakeTimeProvider 实现确定性 tick。
-            // T1.2（2026-10-11 优化实施轮）：自适应排空——上一轮满批（TickHasPendingWork）
-            // 时仅让步 DrainTickDelay 立即续批（积压期吞吐从 batchSize/(tick+interval) 提到
-            // batchSize/tick），否则按 CurrentPollInterval 轮询（热读形态在 provider 构造下生效）。
+            // T1.2（2026-10-11）：自适应排空——上一轮满批时跳过轮询间隔立即续批。
+            // 2026-10-21：排空让步由 Task.Delay(1ms) 改为 Task.Yield()。Windows 计时器粒度
+            // 实测平均 11.46ms，1ms 延迟实际把每批续批钉在约 11ms；tick 本身已有 DB/broker I/O，
+            // Yield 足够避免忙转且不再付计时器队列/续体分配。
             while (!stoppingToken.IsCancellationRequested)
             {
-                var drainNext = TickHasPendingWork;
-                var interval = drainNext ? DrainTickDelay : CurrentPollInterval;
-                try
+                if (TickHasPendingWork)
                 {
-                    await Task.Delay(interval, _timeProvider, stoppingToken).ConfigureAwait(false);
+                    await Task.Yield();
+                    if (stoppingToken.IsCancellationRequested)
+                        break;
                 }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                else
                 {
-                    break;
+                    try
+                    {
+                        // R13 F17：超过计时器上限的间隔钳到上限（"几乎不轮询"语义保留）。
+                        // 原实现直传：Task.Delay 抛 AOOR，位于仅 catch OCE 的 try 之外，
+                        // ExecuteTask fault —— .NET 6+ BackgroundService 默认 StopHost
+                        // 会因此停掉整个宿主（而非仅该后台服务）。
+                        var interval = CurrentPollInterval;
+                        if (interval > s_maxTimerDelay)
+                            interval = s_maxTimerDelay;
+                        await WaitForIntervalAsync(interval, stoppingToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
                 }
 
                 try { await ExecuteTickAsync(stoppingToken).ConfigureAwait(false); }
@@ -134,6 +146,18 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
 
     /// <summary>每轮执行的逻辑（在 scope 内调用，异常被基类隔离）。</summary>
     protected abstract ValueTask ExecuteTickAsync(CancellationToken ct);
+
+    /// <summary>
+    /// 空闲等待一个轮询间隔（2026-10-22 性能轮，基类唯一的「等下一轮」出口）。
+    /// <para>
+    /// 默认实现 <c>Task.Delay(interval, TimeProvider, ct)</c>，与旧形态逐位一致（含
+    /// <see cref="TimeProvider"/> 注入下的确定性测试语义）。派生类可覆写以接入事件驱动唤醒，
+    /// 契约：正常到时返回；<paramref name="ct"/> 取消时抛 <see cref="OperationCanceledException"/>
+    /// （基类按关停处理，不记失败）。
+    /// </para>
+    /// </summary>
+    protected virtual ValueTask WaitForIntervalAsync(TimeSpan interval, CancellationToken ct)
+        => new(Task.Delay(interval, _timeProvider, ct));
 
     /// <summary>每轮异常回调（子类记录日志）。基类保证循环不中断。</summary>
     protected abstract void OnTickFailed(Exception ex);

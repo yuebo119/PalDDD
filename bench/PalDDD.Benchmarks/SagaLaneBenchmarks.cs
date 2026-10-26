@@ -20,7 +20,9 @@ using PalDDD.Transactions;
 namespace PalDDD.Benchmarks;
 
 [MemoryDiagnoser]
-[InProcess]
+// 2026-10-23 性能系统优化：移除类级 [InProcess]。注册表 --lane saga 显式传
+// MediumRun + InProcessEmitToolchain；类级 job 会与显式 config union 出双 job
+// （实测把 2 个方法跑成 4 个，47 秒）。其余类同款，见 FrameworkBenchmarks 头注。
 public class SagaLaneBenchmarks
 {
     private NormalLaneSaga _normal = null!;

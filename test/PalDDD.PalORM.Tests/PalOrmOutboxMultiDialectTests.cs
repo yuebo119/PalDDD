@@ -207,6 +207,18 @@ public class PalOrmOutboxMultiDialectTests
     }
 
     [Test]
+    public async Task Outbox_Sqlite_BatchMark_NullElement_ThrowsArgumentNullException()
+    {
+        // R11 F15 回归锁：null 元素必须先于 messages[0] 解引用校验——原顺序抛 NRE，
+        // 与 Dapper/EF 的 ArgumentNullException 分叉。
+        await using var session = await MultiDialectFixture.CreateSqliteAsync();
+        var store = new SqliteOutboxStore(session.Session);
+
+        await Assert.That(async () => await store.MarkProcessedBatchAsync([null!], DateTimeOffset.UtcNow, default))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
     public async Task Outbox_Sqlite_BatchMark_StaleToken_AllRejected()
     {
         await using var session = await MultiDialectFixture.CreateSqliteAsync();

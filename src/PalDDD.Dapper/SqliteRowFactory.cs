@@ -92,13 +92,12 @@ public static class SqliteRowFactory
         {
             DateTimeOffset dto => dto,
             // v65 P3：按 Kind 分派——原 `new DateTimeOffset(dt, TimeSpan.Zero)` 对 Kind=Local 抛
-            // ArgumentException（"Offset must be zero for Local"）。Utc 套零偏移；Local 用
-            // 无参构造保留真实本地偏移（瞬时不变）；Unspecified 视为 UTC 套零偏移（保持既有语义，
-            // 对齐库内 UTC 存储约定）。
+            // ArgumentException（"Offset must be zero for Local"）。Utc/Unspecified 视为 UTC 套零偏移。
+            // R13 F5：Local 同 TypeHandler——provider 只贴 Kind 标签，库内是 UTC 墙钟；
+            // new DateTimeOffset(dt) 会平移瞬时，统一 SpecifyKind(Utc)（R11 C-20 同口径）。
             DateTime dt => dt.Kind switch
             {
-                DateTimeKind.Utc => new DateTimeOffset(dt, TimeSpan.Zero),
-                DateTimeKind.Local => new DateTimeOffset(dt),
+                DateTimeKind.Local => new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
                 _ => new DateTimeOffset(dt, TimeSpan.Zero)
             },
             string s => DateTimeOffset.Parse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal),
