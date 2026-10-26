@@ -14,6 +14,23 @@
 
 ### Added
 
+- **2026-10-26 发版流程对齐 Pal.ORM 最新发版流程（4 项）**：
+  ①**CHANGELOG 结构校验接入发布流水线**：release.yml 在 pack 前运行
+  `scripts/changelog-check.cs`（此前仅本地清单项，发布路径无任何 CHANGELOG 校验），
+  脚本新增 C6–C10 五项检查（顶部版本对账 / 标题格式 / 段日期与 tag 提交日一致 /
+  日期单调 / 条目非空）与 `--selftest`，漏转正或日期失实在推送 NuGet 前被拦截；
+  gate-audit 登记两极隔离探针（失配必红 / 干净放行）。
+  ②**GitHub Release body 改为当前版本段自动提取**：此前 body 是整个 CHANGELOG.md
+  全文，现提取目标版本段 + 动态包表（从实际 nupkg 产物生成，增减包零维护）+
+  与上一版本的对比链接；Release 标题改为「PalDDD <tag 名>」。
+  ③**发布审批门**：release job 声明 `environment: production`——GitHub
+  Settings → Environments 配置 required reviewers 后推送 NuGet 前需人工批准，
+  未配置时无行为变化。
+  ④**版本一致性与 checkout 加固**：tag/input 版本比对改为 VersionPrefix+
+  VersionSuffix 组合全版本（preview tag 不再被前缀比对误拒）、grep -oP 改
+  POSIX sed（脱离 PCRE 依赖）、checkout 补 `fetch-depth: 0`（SourceLink 完整
+  历史与 tag 日期比对需要）。
+
 - **2026-10-22 R14 审计优化续：可观测与契约收口（7 项）**：
   ①**新增可选能力接口 `IMessageBrokerHealth`（公共 API）**：`IsConsumingHealthy` +
   `LastFaultReason`。Kafka 消费线程不可恢复终止时置故障态，`AddPalHealthChecks` 的
