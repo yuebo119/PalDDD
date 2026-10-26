@@ -34,11 +34,11 @@ namespace PalDDD.PalORM.Stores;
 /// （流内 StreamVersion 严格连续，不受自增分配倒挂影响）。
 /// </para>
 /// <para>
-/// ⚠️ <b>ITM-075 分类局限（v34 P3 声明，与 Dapper 对齐故不改行为）</b>：EFCore 姊妹
-/// （EventLogDbContext）在同场景用 eventIdExists 探测区分 EventId 撞库与流推进两因；
-/// 本栈与 Dapper 对齐为单一并发判定（重查 <c>MAX(stream_version) &gt;= 失败事件版本</c> 即转
-/// EventStreamConcurrencyException）——event_id 撞库 + 并发推进同窗叠加时误译为并发异常
-/// （调用方重试经版本预检自然收敛），接受此权衡；v5.0 对齐窗口（原 v4.0 改期，2026-10-11 发布轮改指）。
+/// 📌 <b>ITM-075 分类对齐（v5.0 兑现，2026-10-27）</b>：批与逐行路径的唯一冲突分类
+/// 已升级为与 EFCore 姊妹（EventLogDbContext）同款的三段判定——①批内 EventId 重复 /
+/// ②表中已存在批内任一 EventId → 数据错误原样上抛；③EventId 全新但流被并发推进 →
+/// 转 <c>EventStreamConcurrencyException</c>。v34 P3 声明的「撞库 + 并发推进同窗叠加
+/// 误译为并发异常」权衡自此关闭（PG 单条快路径此前已有同款探测）。
 /// </para>
 /// </summary>
 public class PalOrmEventLog<TProvider> : IEventLog
@@ -366,7 +366,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
         {
             // ITM-075（批粒度）分类收口共享 helper（B11 提取，RETURNING/MySQL 两批路径同源）
-            throw await ClassifyBatchConflictAsync(streamName, expectedVersion, currentVersion, ex, ct).ConfigureAwait(false);
+            throw await ClassifyBatchConflictAsync(streamName, expectedVersion, currentVersion, events, ex, ct).ConfigureAwait(false);
         }
 
         if (positions.Count == 0)
@@ -408,7 +408,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         }
         catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
         {
-            throw await ClassifyBatchConflictAsync(streamName, expectedVersion, currentVersion, ex, ct).ConfigureAwait(false);
+            throw await ClassifyBatchConflictAsync(streamName, expectedVersion, currentVersion, events, ex, ct).ConfigureAwait(false);
         }
 
         // 版本区间回查首末全局位置（raw command 单往返——MIN/MAX 同语句取回）
@@ -492,17 +492,38 @@ public class PalOrmEventLog<TProvider> : IEventLog
     }
 
     /// <summary>
-    /// ITM-075（批粒度）：唯一索引冲突分类——重查实际版本，命中并发写入
-    /// （&gt;= 本批首事件版本 currentVersion+1）转统一并发异常；否则（如批内 EventId
-    /// 重复）原样上抛。RETURNING 批与 MySQL 批共用（B11 提取）。
+    /// ITM-075（批粒度）：唯一索引冲突分类——2026-10-27 v5.0 发版轮兑现对齐承诺，升级为三段判定，
+    /// 对齐 EFCore 姊妹（EventLogDbContext 三十八轮 P2 形态）：①批内 EventId 重复 /
+    /// ②表中已存在批内任一 EventId（逐事件单值 COUNT，形态与 PG 单条快路径同源——
+    /// PalORM FormattableString 数组内插无先例，不引入新 SQL 形态）→ 数据错误原样上抛；
+    /// ③EventId 全新但流已被并发推进 → 转统一并发异常。此前为单一并发判定（v34 P3
+    /// 声明的权衡）：撞库 + 并发推进同窗叠加（逐行路径部分成功等）时误译为并发异常。
+    /// RETURNING 批与 MySQL 批共用（B11 提取）。
     /// </summary>
     private async Task<Exception> ClassifyBatchConflictAsync(
-        string streamName, ExpectedStreamVersion expectedVersion, long currentVersion, DbException original, CancellationToken ct)
+        string streamName, ExpectedStreamVersion expectedVersion, long currentVersion,
+        IReadOnlyList<EventData> events, DbException original, CancellationToken ct)
     {
+        var hasDuplicateEventIdInBatch = events.Select(e => e.EventId).Distinct().Count() != events.Count;
+        if (hasDuplicateEventIdInBatch)
+            return original;
+
         long? actualVersion = null;
+        var idExists = false;
         var requerySucceeded = false;
         try
         {
+            foreach (var e in events)
+            {
+                var eventIdText = e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+                if (await Session.ScalarAsync<int>(
+                        $"SELECT COUNT(*) FROM events WHERE event_id = {eventIdText}",
+                        ct: ct).ConfigureAwait(false) > 0)
+                {
+                    idExists = true;
+                    break;
+                }
+            }
             actualVersion = await Session.ScalarAsync<long?>(
                 $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
                 ct: ct).ConfigureAwait(false);
@@ -512,8 +533,12 @@ public class PalOrmEventLog<TProvider> : IEventLog
         {
             // 重查失败（如 PG aborted 事务）——放弃分类，走原始异常上抛
         }
-        if (requerySucceeded && (actualVersion ?? -1) >= currentVersion + 1)
-            return new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
+        if (!requerySucceeded)
+            return original;
+        if (idExists)
+            return original;   // ② EventId 撞库：数据错误，原样上抛（盲目重试的调用方不该被诱导）
+        if ((actualVersion ?? -1) >= currentVersion + 1)
+            return new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);   // ③ 流被并发推进
         return original;
     }
 
@@ -568,11 +593,20 @@ public class PalOrmEventLog<TProvider> : IEventLog
             }
             catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
             {
-                // ITM-075：与批量化路径同款的冲突分类（逐行粒度用本事件版本作门槛）
+                // ITM-075：与批量化路径同款的冲突分类（逐行粒度用本事件版本作门槛）。
+                // v5.0 对齐（2026-10-27）：先探本事件 EventId 撞库——逐行路径部分成功时
+                // MAX 已被本批前序行推进，单一版本判定会把撞库误译为并发异常（这正是
+                // v34 P3 声明的叠加窗口在本路径的可达形态）；撞库原样上抛，仅流被并发
+                // 推进才转并发异常（对齐批路径三段判定与 PG 单条快路径）。
                 long? actualVersion = null;
                 var requerySucceeded = false;
+                var idExists = false;
                 try
                 {
+                    var eventIdText = e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+                    idExists = await Session.ScalarAsync<int>(
+                        $"SELECT COUNT(*) FROM events WHERE event_id = {eventIdText}",
+                        ct: ct).ConfigureAwait(false) > 0;
                     actualVersion = await Session.ScalarAsync<long?>(
                         $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
                         ct: ct).ConfigureAwait(false);
@@ -582,7 +616,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 {
                     // 重查失败（如 PG aborted 事务）——放弃分类，走原始异常上抛
                 }
-                if (requerySucceeded && (actualVersion ?? -1) >= streamVersion)
+                if (requerySucceeded && !idExists && (actualVersion ?? -1) >= streamVersion)
                     throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
                 throw;
             }

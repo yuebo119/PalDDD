@@ -126,18 +126,12 @@ public sealed class OutboxDomainEventInterceptor : SaveChangesInterceptor
 
     private static readonly ConditionalWeakTable<Microsoft.EntityFrameworkCore.DbContext, PendingState> s_states = new();
 
-    /// <summary>最近一次 SavingChanges 的上下文——仅供 <see cref="PendingEvents"/> 诊断读取。
-    /// 并发共享拦截器时可能指向另一请求的上下文，诊断属性不做正确性保证。</summary>
+    /// <summary>最近一次 SavingChanges 的上下文——仅供 <see cref="PendingEventsCore"/> 诊断读取。
+    /// 并发共享拦截器时可能指向另一请求的上下文，诊断字段不做正确性保证。</summary>
     private Microsoft.EntityFrameworkCore.DbContext? _lastContext;
 
-    /// <summary>当前 SaveChanges 操作期间收集的领域事件列表（诊断用，best-effort）。</summary>
-    /// <remarks>
-    /// 2026-10-21 双评审修复轮：生产代码零调用，计划在 v5.0.0 移除。为保持一个 Minor
-    /// 窗口的二进制兼容，本属性先标 <see cref="ObsoleteAttribute"/>；内部测试改用
-    /// <see cref="PendingEventsCore"/>。
-    /// </remarks>
-    [Obsolete("PendingEvents is diagnostic-only and will be removed in v5.0.0. Use PendingEventsCore internally or query the outbox store.")]
-    public IReadOnlyList<Core.DomainEvent> PendingEvents => PendingEventsCore;
+    // 公开诊断属性 PendingEvents 已随 v5.0.0 移除（2026-10-21 双评审标记的废弃承诺，
+    // 2026-10-27 发版轮兑现）；诊断读取经 internal PendingEventsCore（IVT 测试在案）。
 
     /// <summary>
     /// 出站唤醒信号（2026-10-22 性能轮）——DI 构造时从应用容器延迟解析一次；手动构造

@@ -223,9 +223,48 @@ public class PalOrmEventLogMultiDialectTests
             var duplicate = new PalDDD.EventLog.EventData(
                 first.EventId, first.EventName, first.SchemaVersion, first.ContentType,
                 first.Payload, first.Metadata, first.Audit);
-            await Assert.ThrowsAsync(async () =>
+            // 同 EventId 重投：唯一约束冲突 → 分类为 EventId 重复原样上抛（不误译并发异常）。
+            // v5.0 ITM-075 对齐（2026-10-27）起断言升级为类型锁定：数据错误不得转
+            // EventStreamConcurrencyException（转了会诱导盲目重试的调用方无限循环）
+            var ex = await Assert.ThrowsAsync(async () =>
                 await log.AppendAsync("dup-stream", ExpectedStreamVersion.Any, [duplicate], default));
+            await Assert.That(ex is not PalDDD.EventLog.EventStreamConcurrencyException).IsTrue();
         }
+    }
+
+    // ─── v5.0 ITM-075 对齐锁定（2026-10-27）：批路径两因分离 ───
+    // 撞库（批内重复 / 撞表中既有 ID）必须原样上抛，不得误译为并发异常。
+    // 「撞库 + 并发推进同窗叠加」的行为差异面本地不可构造（SQLite 批 INSERT 单语句
+    // 原子失败，MAX 不会被部分推进；MySQL 逐行部分成功叠加归 CI dialect-probe 覆盖）。
+
+    [Test]
+    public async Task EventLog_Sqlite_AppendBatch_DuplicateEventIdInBatch_ThrowsOriginalNotConcurrency()
+    {
+        await using var ts = await MultiDialectFixture.CreateSqliteAsync();
+        var log = new PalOrmEventLog<SqliteProvider>(ts.Session);
+        var e1 = MultiDialectTestData.CreateEventData("batchdup.e1");
+        var duplicate = new PalDDD.EventLog.EventData(
+            e1.EventId, e1.EventName, e1.SchemaVersion, e1.ContentType,
+            e1.Payload, e1.Metadata, e1.Audit);
+        var ex = await Assert.ThrowsAsync(async () =>
+            await log.AppendAsync("batch-dup-stream", ExpectedStreamVersion.Any, [e1, duplicate], default));
+        await Assert.That(ex is not PalDDD.EventLog.EventStreamConcurrencyException).IsTrue();
+    }
+
+    [Test]
+    public async Task EventLog_Sqlite_AppendBatch_EventIdAlreadyStoredInOtherStream_ThrowsOriginalNotConcurrency()
+    {
+        await using var ts = await MultiDialectFixture.CreateSqliteAsync();
+        var log = new PalOrmEventLog<SqliteProvider>(ts.Session);
+        var stored = MultiDialectTestData.CreateEventData("crossdup.e1");
+        await log.AppendAsync("stream-a", ExpectedStreamVersion.Any, [stored], default);
+        var fresh = MultiDialectTestData.CreateEventData("crossdup.e2");
+        var clash = new PalDDD.EventLog.EventData(
+            stored.EventId, stored.EventName, stored.SchemaVersion, stored.ContentType,
+            stored.Payload, stored.Metadata, stored.Audit);
+        var ex = await Assert.ThrowsAsync(async () =>
+            await log.AppendAsync("stream-b", ExpectedStreamVersion.Any, [fresh, clash], default));
+        await Assert.That(ex is not PalDDD.EventLog.EventStreamConcurrencyException).IsTrue();
     }
 
     private static async Task<List<RecordedEvent>> ReadAllAsync(IAsyncEnumerable<RecordedEvent> events)

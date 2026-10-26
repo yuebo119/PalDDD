@@ -205,5 +205,5 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 2. `SagaStatus.DeadLettered` 枚举在案但框架内无赋值路径，Saga 实际失败终态为 Compensated/CompensationFailed。
 3. `AddPalFullStack` 已在 v5.0 契约窗口移除，统一入口为 `AddPalCoreStack`（原名字易被误解为包含基础设施）。
 4. SQLite 时间列编码在 PalORM 栈与 Dapper 栈互不兼容，同一物理库只能单选一个适配器族（双侧对称声明）。
-5. `SqlServerOutboxDbContext` 已标 Obsolete（v5.0 移除预告）。
+5. `SqlServerOutboxDbContext` 已随 v5.0.0 移除（零测试覆盖的未验证方言，2026-08-26 精炼裁决兑现；需要 SQL Server 支持请自行派生 `OutboxDbContext` 并补测试）。
 6. 运行时调小 Outbox MaxRetryCount 存在 Pending 消息滞留窗口（既不派发也不转 Dead，代码内声明）。

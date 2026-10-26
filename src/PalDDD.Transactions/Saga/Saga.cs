@@ -660,9 +660,13 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 // Execute child saga via non-generic dispatch (avoids dynamic keyword)
                 var childEvent = new ChildSagaInputEvent(input);
-                // R3（P1-3）：GetTimestamp/GetElapsedTime 替代 Stopwatch.StartNew（同 Normal 车道）
+                // R3（P1-3）：GetTimestamp/GetElapsedTime 替代 Stopwatch.StartNew（Normal 车道同款）
+                // v5.0 接口公开化（2026-10-27）：非泛型分派从 ISagaManager 的 internal 成员
+                // 平移至框架内 SagaChildDispatch 静态分派器——反射路由与 manager 实例状态无关
+                //（纯 object→ProcessEventAsync 路由 + 类型缓存），不属于 manager 契约；留在接口
+                // 上（无论 internal 还是 public）都与「AOT 兼容程序集公共面零 DAM 标注」红线冲突
                 var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
-                var finalChildState = await manager.ExecuteChildSagaNonGenericAsync(
+                var finalChildState = await SagaChildDispatch.ExecuteAsync(
                     resolved, childState, childEvent, token).ConfigureAwait(false);
                 var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
 
@@ -923,8 +927,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 刻意设计而非疏漏：DynamicStep 不执行业务动作，其 compensate 的语义是回滚 router 路由决策
         // 的副作用；P3-SRC-603 双键轨迹的完整形态由表征测试
         // DynamicLaneTests.Exhausted_CompensatesTarget_ObserverSeesDynamicKey 锁定（断言
-        // CompensationLog 含 target-compensated 与 dyn-compensated 两项）。若要改为"失败路径不记
-        // dynKey"，须先出决策文档回应本声明与该表征测试，随 v5.0 契约窗口一并处理（原 v4.0 改期）。
+        // CompensationLog 含 target-compensated 与 dyn-compensated 两项）。「失败路径不记 dynKey」
+        // 的改向已由 DECISION-2026-10-27-saga-dynkey-trajectory 定案**维持现状**（删 dynKey 会让
+        // 路由决策副作用的回滚静默消失，漏补偿无兜底；见 docs/review/ 对应决策文档）。
         RecordExecutedStep(current, current, stepKey, startedAt);
 
         return await RunRetryLaneAsync(current, stepKey, observer,

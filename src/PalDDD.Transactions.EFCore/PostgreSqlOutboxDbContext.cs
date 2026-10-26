@@ -56,10 +56,10 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         EfCoreDialectGuard.EnsureProvider(Database, "Npgsql", "PostgreSql", nameof(PostgreSqlOutboxDbContext));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v22 C-3：v20 C-1 GetPending 补齐后 Lease 路径漏网
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount); // ITM-659：maxRetryCount 非正守卫（同上 GetPending）
-        // ITM-081 修复：补 owner 空白校验（对齐 SqlServerOutboxDbContext.LeasePendingMessagesAsync
+        // ITM-081 修复：补 owner 空白校验（对齐已移除的 SqlServerOutboxDbContext 的
         // 同款守卫）——缺守卫时空/空白 owner 会写入 "LockedBy" 列，破坏跨方言契约一致
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
-        // ITM-216 修复（三十二轮）：leaseDuration 边界守卫——对照 SqlServerOutboxDbContext
+        // ITM-216 修复（三十二轮）：leaseDuration 边界守卫——对齐已移除的 SqlServerOutboxDbContext
         // 同款（Options 层已校验正数，此处为防御 Store 直调路径；TotalSeconds > int.MaxValue
         // 时 (int) 转换溢出为负值，生成"租约即刻过期"的失效租约）
         if (leaseDuration <= TimeSpan.Zero)

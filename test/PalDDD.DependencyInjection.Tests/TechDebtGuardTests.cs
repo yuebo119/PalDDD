@@ -653,14 +653,14 @@ public sealed class TechDebtGuardTests
     // ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// 已知 gap 白名单（活账本）：三个方言 Outbox 变体暂无关系型用例（bash #20 allow 级口径）。
+    /// 已知 gap 白名单（活账本）：两个方言 Outbox 变体暂无关系型用例（bash #20 allow 级口径；
+    /// SqlServerOutboxDbContext 已随 v5.0.0 移除——2026-10-27 发版轮兑现废弃承诺，出账）。
     /// 任何一个补齐关系型用例后必须同步移除——集合双向相等断言会强制账本与实况一致。
     /// </summary>
     private static readonly string[] s_knownRelationalCoverageGaps =
     [
         "MySqlOutboxDbContext",
         "PostgreSqlOutboxDbContext",
-        "SqlServerOutboxDbContext",
     ];
 
     /// <summary>

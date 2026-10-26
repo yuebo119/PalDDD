@@ -75,7 +75,7 @@
     <OptimizationPreference>Speed</OptimizationPreference>
     <!-- AOT 下保留异常行号信息 (.NET 11 Preview 4+) -->
     <StackTraceLineNumberSupport>true</StackTraceLineNumberSupport>
-    <VersionPrefix>4.0.0</VersionPrefix>
+    <VersionPrefix>5.0.0</VersionPrefix>
     <VersionSuffix></VersionSuffix>
     <Authors>PalDDD</Authors>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
