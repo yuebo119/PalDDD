@@ -31,9 +31,9 @@
     <!-- DI 扩展依赖 (.NET 11 RC1) — 这些包在 net11.0 下自动可用，csproj 中不再显式引用 -->
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0-rc.1.26425.128" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-rc.3.26522.148" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="11.0.0-rc.3.26522.148" />
     <!-- ZLogger — 零分配结构化日志（构建于 M.E.Logging 之上） -->
     <PackageVersion Include="ZLogger" Version="2.5.10" />
     <!-- ByteAether.Ulid — 时间排序唯一标识符（AOT 兼容 · RFC 9562 合规） -->
@@ -62,7 +62,7 @@
     <!-- SqlClient 7.1.1（2026-10-08 升位）：7.1.0 于 2026-09-18 转稳定后 9 日补丁版；零引用中央声明
          （全仓无 PackageReference 消费，见 ITM-711），升位只影响声明版本 -->
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.1" />
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0-rc.3.26522.148" />
     <!-- SQLite 引擎（传递依赖显式固定，确保构建可重现） -->
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.5" />
