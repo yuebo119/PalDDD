@@ -8,7 +8,7 @@
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
-[![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ---
 
@@ -524,7 +524,7 @@ flowchart TB
 | [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
 | [踩坑目录](docs/pitfalls.md) | 86 条 DDD/AOT/并发实战踩坑 |
 | [开发流程](docs/development.md) | 开发环境、Git 钩子、测试运行 |
-| [架构决策](docs/decisions/) | 35 份 ADR |
+| [架构决策](docs/decisions/) | 36 份 ADR |
 | [部署性能旋钮](docs/deployment-performance.md) | GC 选型 / PG·MySQL 服务端旋钮实测与权衡 |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 
@@ -562,6 +562,6 @@ QQ 交流群 **1125599744**（C#/.NET 新技术交流群）：使用问题、特
 
 [GNU Affero General Public License v3.0 or later](LICENSE)
 
-Copyright (C) 2026 PalDDD
+Copyright (C) 2026 SuperLee
 
-本项目使用 AGPL-3.0-or-later 许可证。AGPL v3 在 GPL v3 基础上增加第 13 条网络交互条款：通过网络提供服务时，必须向用户提供修改后版本的完整源代码。详见 [LICENSE](LICENSE) 文件或 <https://www.gnu.org/licenses/agpl-3.0.html>。
+本项目使用 Apache-2.0 许可证：宽松许可，允许商用、修改与闭源集成，并附带显式专利授权；要求分发时保留 [LICENSE](LICENSE) 与 [NOTICE](NOTICE) 副本并对修改作出声明；不授予商标权。AGPL 时代的网络服务开源义务不再适用。存储引擎 PalORM 自 6.8.0 起同为 Apache-2.0，全依赖链无 copyleft 组件。详见 [LICENSE](LICENSE) 文件或 <https://www.apache.org/licenses/LICENSE-2.0>。

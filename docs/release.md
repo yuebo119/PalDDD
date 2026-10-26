@@ -296,7 +296,7 @@ unzip -p /tmp/release-preview/PalDDD.Core.*.nupkg '*.nuspec' | grep -E "<(id|ver
 - `<projectUrl>` 指向 `https://github.com/yuebo119/PalDDD`
 - `<repository url=... commit=.../>` 含 commit hash（证明 SourceLink 生效）
 - `<releaseNotes>` 指向 CHANGELOG.md
-- `<license type="expression">AGPL-3.0-or-later`
+- `<license type="expression">Apache-2.0`
 
 ---
 
@@ -409,7 +409,7 @@ gh run list --workflow=release.yml --limit 1
 逐一访问公开发布包验证（如 https://www.nuget.org/packages/PalDDD.Core）：
 
 - ✅ 新版本号（首次索引可能需 5-15 分钟）
-- ✅ License: AGPL-3.0-or-later
+- ✅ License: Apache-2.0
 - ✅ Project URL: https://github.com/yuebo119/PalDDD
 - ✅ Source Link 标识（Repository 区显示 commit hash）
 - ✅ README 渲染正确

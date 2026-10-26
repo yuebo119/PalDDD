@@ -243,6 +243,8 @@
 
 ### Changed 变更
 
+- **2026-10-26 决策：许可证 AGPL-3.0-or-later → Apache-2.0（ADR-036，产品策略反转）**：推翻 2026-09-19/21 两轮审计「维持 AGPL 社区策略」裁决，前提变化有二：git 全历史已改写为单一版权人 SuperLee（2026-10-26，重许可无需任何第三方同意）；存储引擎 PalORM 自 6.8.0 起上游转 Apache-2.0（本机 nuspec 实证），store 集成面的 AGPL 分层效应消失。同提交机械同步 9 处锚点：LICENSE 整体换官方全文（11,358 字节，apache.org 原文下载）、`Directory.Build.props` `<PackageLicenseExpression>`（35 包单点）、README.md / README.en.md 徽章与许可说明段改写（专利授权 + NOTICE 保留 + 商标不授权 + PalORM 6.8.0 同源宽松）、两 README 版权行归一 `Copyright (C) 2026 SuperLee`、docs/release.md nuspec 校验行与发布检查项、新增 NOTICE（Apache §4(d) 分发保留义务）、README/AGENTS ADR 计数 35→36。效果：网络服务开源义务（AGPL §13）不再适用，商业闭源集成无 copyleft 阻力；义务面收敛为保留 LICENSE+NOTICE、声明修改、专利授权。已发布历史版本（tag v1.x~v4.0.0 与已上 NuGet.org 的包）不可追溯，永久保持 AGPL-3.0-or-later。门禁零改动：license-policy 只判定依赖许可（Apache-2.0 本在白名单）；count-audit 16 项重跑一致。详细取舍（MIT/双许可/CLA 四个被否方案）见 [`docs/decisions/036-license-apache-2.0.md`](docs/decisions/036-license-apache-2.0.md)。
+
 - **2026-10-24 产品性能：幂等 StartOrGet 冲突路径 3→2 语句（零行为变更）**：Dapper 栈（非 PG/SQLite 方言）与 PalORM 栈的 `StartOrGetAsync` 在 INSERT 冲突后原先走「四列分类读 + 二次整行读」，现在只做一次整行读并按 Completed/Processing/Failed/过期分支返回；`TryStartAsync` 的 B5 四列轻量读保持给直调方。MySQL 真库探针（100 次均值）：Completed 1.529→0.796ms、Processing 1.504→0.796ms（−48%/−47%）；PG 的 Dapper 原子 UPSERT 路径未改。PalORM 同语义，SQLite 测试 138 通过 / 54 跳过 / 0 失败；Integration 485 通过 / 18 跳过 / 0 失败。无公共 API 变化。
 
 - **2026-10-22 性能轮：出站唤醒信号 + 入站单语句认领 + 回放批宽与续读裁剪 + 消费上下文去闭包（零破坏性行为变更）**：本轮按「往返次数与唤醒延迟是剩余瓶颈」的结论落地四项。

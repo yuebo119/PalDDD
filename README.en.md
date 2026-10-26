@@ -8,7 +8,7 @@
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
-[![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 ---
 
@@ -528,7 +528,7 @@ flowchart TB
 | [Release SOP](docs/release.md) | Versioning, package scope, CHANGELOG conventions & workflow |
 | [Pitfalls](docs/pitfalls.md) | 86 real-world DDD/AOT/concurrency pitfalls |
 | [Development](docs/development.md) | Dev environment, Git hooks, test running |
-| [Architecture Decisions](docs/decisions/) | 35 ADRs |
+| [Architecture Decisions](docs/decisions/) | 36 ADRs |
 | [Deployment Performance Knobs](docs/deployment-performance.md) | GC mode / PG·MySQL server knobs with measured trade-offs |
 | [Changelog](CHANGELOG.md) | Version history (consumer-facing changes + engineering appendix) |
 
@@ -560,6 +560,6 @@ Issues and PRs are welcome. The first build after cloning automatically configur
 
 [GNU Affero General Public License v3.0 or later](LICENSE)
 
-Copyright (C) 2026 PalDDD
+Copyright (C) 2026 SuperLee
 
-This project uses the AGPL-3.0-or-later license. AGPL v3 adds Section 13 (network interaction clause) on top of GPL v3: when providing services over a network, you must make the complete source code of the modified version available to users. See the [LICENSE](LICENSE) file or <https://www.gnu.org/licenses/agpl-3.0.html> for details.
+This project uses the Apache-2.0 license: a permissive license that allows commercial use, modification, and closed-source integration, with an explicit patent grant. Distribution must retain copies of [LICENSE](LICENSE) and [NOTICE](NOTICE) and state significant changes; trademarks are not granted. The AGPL-era network-service source-disclosure obligation no longer applies. The storage engine PalORM is also Apache-2.0 as of 6.8.0, leaving no copyleft component in the dependency chain. See the [LICENSE](LICENSE) file or <https://www.apache.org/licenses/LICENSE-2.0> for details.
