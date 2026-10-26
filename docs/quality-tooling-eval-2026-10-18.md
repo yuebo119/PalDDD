@@ -159,7 +159,7 @@ Pal.DDD 的工程基线已经很硬：零警告、SQL 标识符有入口校验�
 | whitespace | `dotnet format whitespace` 修复 3 文件/14 条；CI `Format verify (whitespace)` 步骤接入 | `--verify-no-changes` exit 0 |
 | Stryker / Semgrep | Stryker 5.0.0 MTP runner + 两个 `stryker-config.json`（break 95）+ 独立每周 `mutation.yml`（2026-10-19 起）+ JSON/HTML artifact；Semgrep 6/6 FP 加 `nosemgrep` 依据注释、29 规则 canary、SARIF、`uv` 哈希锁 | CompressionProvider 与 MySqlLeasePolicy 均 100%；Semgrep 0 findings |
 | AOT 真发布 | AotSample + PalOrmSample `win-x64` `PublishAot` 本地实跑 | AotSample 全检查通过；PalOrmSample PASSED |
-| Actions 供应链 | 4 个工作流 28 处 `uses:` 全部钉 40 位 commit SHA + `# vX.Y.Z` 注释（checkout 4.4.0 / setup-dotnet 4.3.1 / cache 4.3.0 / upload-artifact 4.6.2 / setup-python 5.6.0 / codeql-action 3.39.0 / action-gh-release 2.6.2）；`config-policy` 增检查 C + pre-commit 触发 + 4 条隔离探针；Dependabot `github-actions` 持续更新 | 无 `@vN` 可变标签；config-policy selftest 30/30；SHA 由 `git ls-remote` 实测 |
+| Actions 供应链 | 4 个工作流 28 处 `uses:` 全部钉 40 位 commit SHA + `# vX.Y.Z` 注释（checkout 4.4.0 / setup-dotnet 4.3.1 / cache 4.3.0 / upload-artifact 4.6.2 / setup-python 5.6.0 / codeql-action 3.39.0 / action-gh-release 2.6.2）；`config-policy` 增检查 C + pre-commit 触发 + 4 条隔离探针；当时由 Dependabot `github-actions` 按周更新（2026-10-26 起移除 Dependabot，转人工核新轮） | 无 `@vN` 可变标签；config-policy selftest 30/30；SHA 由 `git ls-remote` 实测 |
 | review 债阻断 | pre-push 调用 `scripts/review-freshness.cs`（双层：任一轮 30 天 + 全量/里程碑 90 天）；v92 维护轮只重置任一轮，全量时钟 v91 → due 2026-12-18；豁免文件移除；4 条隔离探针 | review-freshness 正反例通过；metrics 任一轮 v92 / 全量 v91 |
 | 工作树卫生 | `Directory.Build.props.bak-20261018` / `Directory.Packages.props.bak-20261018` 移至 `%TEMP%/palddd-bak-20261018/` | `git status` 无 `.bak-*` 残留 |
 

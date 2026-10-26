@@ -26,6 +26,8 @@
 //    YAML 解析器——按缩进维护上下文栈，只认规则清单内的键与单行 flow 序列；
 //    多行 flow（`key: [` 换行列表 `]`）、锚点/别名、多文档结构不在覆盖面内。
 //    GitHub 的 Dependabot 配置检查仍是最终权威，本检查是本地前移防线。
+//    2026-10-26：dependabot.yml 已按单一版权裁决移除——文件缺失时检查 A 输出
+//    SKIP 而非违规，检查保留为再引入防线（文件回来即恢复校验）。
 //    规则清单：
 //    A1 groups.*.update-types 取值 ∈ {patch, minor, major}（块/内联两形态）
 //    A2 ignore[].update-types 取值 ∈ {version-update:semver-major/minor/patch}
@@ -103,7 +105,14 @@ static List<string> CheckDependabot(string root, IReadOnlySet<string> staged)
     const string rel = ".github/dependabot.yml";
     var content = ReadPolicyFile(root, rel, staged);
     if (content is null)
-        return [$"{rel} —— 文件缺失或暂存内容不可读（fail-closed：策略文件删除须与本门禁同步显式裁决）"];
+    {
+        // 2026-10-26 裁决：移除 Dependabot 依赖升级（单一版权人裁决，升级走人工
+        // 核新轮）。文件缺失不再 fail-closed——本检查降为再引入防线：文件重新
+        // 出现（暂存或工作树）即恢复校验；A1–A7 规则、selftest 与 gate-audit
+        // 探针全部保留不变。
+        Console.WriteLine($"SKIP config-policy A：{rel} 不存在（2026-10-26 裁决移除 Dependabot；文件再引入时恢复校验）");
+        return [];
+    }
     return ValidateDependabot(content, rel);
 }
 

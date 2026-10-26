@@ -293,6 +293,8 @@
 
 ### Removed 移除
 
+- **移除 Dependabot 依赖升级（2026-10-26，用户裁决「去除依赖升级这个功能」）**：删除 `.github/dependabot.yml`（nuget + github-actions 两条监视线，2026-09-20 审计 O2 引入），删除远端 5 条 `dependabot/*` 分支（对应 PR #10–#14，随分支删除自动关闭）。动因：git 历史已改写为单一版权人 SuperLee（2026-10-26），Dependabot 会持续以 `dependabot[bot]` 身份产生提交与分支，与单一版权目标冲突；依赖升级转人工核新轮（2026-10-11/17/19/20 既有实践）。防线不丢：Verify.TUnit ≥ 33 商业门由 `license-policy` 包级禁令继续机械执行；`config-policy` 检查 A 保留为再引入防线（dependabot.yml 重新出现即恢复校验，文件缺失改为 SKIP，此前为 fail-closed）。
+
 - **SQLite FTS5/JSON1 v4 API（ADR-032，破坏式清理）**：删除对 TEXT/ULID 主键不可用的 external-content `CreateOutboxIndex` 旧语义、`Match(index, query)`、`ExtractPath`、`Array`、`BuildObject` 以及返回 `string` 的 `CreateEventLogIndex`/`CreateOutboxIndex`、`Rebuild`/`Optimize`/`Drop` 旧入口；旧触发器名不再生成。升级顺序与逐项替换见 [`docs/migration/sqlite-fts-json-v5.md`](docs/migration/sqlite-fts-json-v5.md)：先执行 `DropLegacyStatements`，再建新索引。PalORM 包首次获得同语义 API。
 
 ### Fixed 修复
