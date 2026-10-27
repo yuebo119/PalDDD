@@ -4,7 +4,7 @@
 
 **面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架：默认零反射（反射路径显式标注）、Native AOT 链路完整、无过度抽象。仅支持 .NET 11（单目标，见 [ADR-005](docs/decisions/005-net11-single-target.md)）。**
 
-[![NuGet](https://img.shields.io/badge/nuget-v5.0.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
+[![NuGet](https://img.shields.io/badge/nuget-v5.0.0--preview.1-orange)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
@@ -553,7 +553,7 @@ MediatR 是进程内命令分发器。Pal.DDD 内置与之等价的 Dispatcher +
 不支持 .NET 8/9/10（单目标 net11.0）。AOT 场景三处限制（源码 `[RequiresDynamicCode]` 诚实声明）：① Saga 的 ChildSaga 子流程分发（`MakeGenericMethod`/`MakeGenericType`，见 `Saga.cs`）与②动态事件路由同源；③ `ISpecification.Compile()` 表达式树编译在 Native AOT 下不受支持，AOT 场景改用 `ToExpression()` 传给查询提供者（内存路径 `IsSatisfiedBy` 走 `Expression.Compile`，Native AOT 下不支持）。不含内置 EventStore 快照机制，需要快照策略的项目自行实现。CQRS 管道注意：无参开放泛型 `AddPalPipelineBehaviors()` 在 Native AOT 下对值类型响应触发 `AotCannotCreateGenericValueType`，AOT 应用改用 `AddPalCommandHandler<T...>` 或显式 `AddPalPipelineBehaviors<TRequest, TResponse>()`（两种注册先到先得互斥）。
 
 **生产环境有谁在用？**
-当前版本 v5.0.0（SemVer Major——公共 API 快照 +468/−64：`AddPalFullStack` 扩展与 `MySqlLeasePolicy` 类移除、`SagaState.ExecutedStepKeys` 改 `List<string>`（ADR-035）、`AddPalOrm*` 三扩展与多处 ctor/方法签名变更（迁移说明见 CHANGELOG `[5.0.0]` 兼容性引用块与各 Changed/Removed 条）；许可证 AGPL-3.0-or-later → Apache-2.0（ADR-036，已发布历史版本保持 AGPL）；新增 SSE 流式读（ADR-030）、断线续跑（ADR-031）、SQLite FTS5/JSON1 双栈 API（ADR-032）、Outbox Auto 批量投递（ADR-033）与性能迁移四项（ADR-034）；依赖全量核新（微软 11 线 rc.3 + PalORM 6.8.0 + TUnit 1.76.28））。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试口径见文首速览表脚注¹。自定义 store/扩展实现方升级前请先读 CHANGELOG 迁移说明。欢迎在非生产环境中试用并反馈。
+当前版本 v5.0.0 **预览版**（`5.0.0-preview.1`，SemVer Major 预览；.NET 11 GA 后同内容转正 5.0.0，预览期反馈并入 GA 轮——公共 API 快照 +468/−64：`AddPalFullStack` 扩展与 `MySqlLeasePolicy` 类移除、`SagaState.ExecutedStepKeys` 改 `List<string>`（ADR-035）、`AddPalOrm*` 三扩展与多处 ctor/方法签名变更（迁移说明见 CHANGELOG `[5.0.0-preview.1]` 兼容性引用块与各 Changed/Removed 条）；许可证 AGPL-3.0-or-later → Apache-2.0（ADR-036，已发布历史版本保持 AGPL）；新增 SSE 流式读（ADR-030）、断线续跑（ADR-031）、SQLite FTS5/JSON1 双栈 API（ADR-032）、Outbox Auto 批量投递（ADR-033）与性能迁移四项（ADR-034）；依赖全量核新（微软 11 线 rc.3 + PalORM 6.8.0 + TUnit 1.76.28））。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试口径见文首速览表脚注¹。自定义 store/扩展实现方升级前请先读 CHANGELOG 迁移说明。欢迎在非生产环境中试用并反馈。
 
 ## 贡献
 
