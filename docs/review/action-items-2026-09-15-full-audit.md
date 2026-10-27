@@ -148,7 +148,7 @@
 - **涉及文件**：`test/PalDDD.DependencyInjection.Tests/`（新增测试）；参考 `src/PalDDD.Dapper/DapperServiceCollectionExtensions.cs:106-112`、`src/PalDDD.PalORM.Sqlite/SqlitePalOrmExtensions.cs:104-116`
 - **状态**：✅ 已收口（2026-10-27 对账轮）：路线 A 已被后续轮落地——Dapper 栈注册 7 store（DapperServiceCollectionExtensions.cs:115-127 含 EventLog/ProjectionCheckpoint/UnitOfWork），三栈对齐、豁免清单需求消失；防漂移由 ContractCellManifestTests 契约矩阵承担
 
-### [ ] ITM-687 · 覆盖率降幅基线补 `PalDDD.PalORM.Tests` · 可信度 ✅
+### [x] ITM-687 · 覆盖率降幅基线补 `PalDDD.PalORM.Tests` · 可信度 ✅
 - **维度**：门禁覆盖面
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：`coverage-baseline.json` 有 15 个键，**不含 `PalDDD.PalORM.Tests`**。而该项目正是本机无 Docker 时 46 项测试跑不完的项目（`docs/review/open-items-2026-09-14.md` D1 在案），即降幅门禁最该保护的对象反而无保护。前一轮 `ITM-683` 已在 `docs/test-coverage-baseline.md` 登记该空窗，但基线本身仍未补。
@@ -157,7 +157,7 @@
 - **风险**：低。注意 CI 首次产出值可能显著不同于本机，需确认新基线是"含 Docker 的完整值"而非降级值，避免基线偏低导致门禁失效。
 - **验证**：`grep -c "PalDDD.PalORM.Tests" coverage-baseline.json` → 1；变异验证：手动把该项目基线调高一档，确认降幅门禁**变红**。
 - **涉及文件**：`coverage-baseline.json`、`scripts/ci-coverage.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：coverage-baseline.json 增设 PalDDD.PalORM.Tests=0.3311（本地无 Docker 口径保守初值，SQLite 用例面 140/194；CI 全量完整值更高，待下次 --update-baseline 于 CI 重录并上调）——降幅门禁自此覆盖 16 模块；初值偏低只使门禁更严，方向安全
 
 ### [x] ITM-688 · 持久化基准纳入 CI 归档 · 可信度 ✅
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
@@ -445,7 +445,7 @@
 - **涉及文件**：`test/PalDDD.Messaging.Integration.Tests/BrokerIntegrationTests.cs`
 - **状态**：✅ 已收口（2026-10-27 清零轮）：Kafka_PoisonMessage_HandlerThrows_LoggedAndSubsequentMessagesConsumed 补投毒路径（handler 抛→错误日志捕获+后续消息继续消费）；取消传播已有（Kafka_HandlerCancellation）；本地无容器按 Skip.Test 语义跳过，CI dialect-probe/broker job 首跑实证
 
-### [ ] ITM-709 · 复杂度热点削减 · 可信度 ✅
+### [x] ITM-709 · 复杂度热点削减 · 可信度 ✅
 - **维度**：可维护性
 - **优先级**：P3 · 危害: 低 · 复杂度: 中
 - **问题**：两个已发布业务逻辑方法嵌套过深：`src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs:58` `ProcessBatchAsync`（方法体 151 行，最大嵌套 6；try/catch 嵌在 foreach 嵌在 try 内）；`src/PalDDD.Transactions/Saga/SagaProcessor.cs:110` `CheckTimeoutsAsync`（方法体 146 行，最大嵌套 7；`:134-243` 有 5 层 try/foreach 交织）。
@@ -455,9 +455,9 @@
 - **验证**：两方法嵌套深度 ≤ 3；相关测试全绿（`test/PalDDD.Transactions.Tests/`）。
 - **涉及文件**：`src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs:58`、`src/PalDDD.Transactions/Saga/SagaProcessor.cs:110-243`
 - **依赖**：ITM-685
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：两热点方法嵌套抽取——SagaProcessor.CheckTimeoutsAsync 的补偿段抽 CompensateTimedOutSagaAsync（fence/OCE 租约释放/终态失效化逐行迁移）+ else 分支抽 TryAdvanceNextCheck/ReleaseSingleLeaseAsync（嵌套 7→3）；OutboxBatchProcessor 失败处理段抽 HandlePublishFailureAsync（backoff 兜底/死信重试标记/MarkError/持久化逐行迁移，嵌套 6→3）；Transactions 面板 287 用例 0 失败
 
-### [ ] ITM-710 · `Saga` 四条重试车道模板化 · 可信度 ✅
+### [x] ITM-710 · `Saga` 四条重试车道模板化 · 可信度 ✅
 - **维度**：可维护性（消除四份克隆）
 - **优先级**：P3 · 危害: 低 · 复杂度: 难
 - **问题**：`src/PalDDD.Transactions/Saga/Saga.cs`（1002 行）中四个近乎相同的重试/补偿车道：`ExecuteNormalStepAsync`（`:396-463`）、`ExecuteFanOutStepAsync`（`:469-547`）、`ExecuteChildSagaStepAsync`（`:555-648`）、`ExecuteDynamicStepAsync`（`:784-902`）；差异只在被执行的主体。注释自承复制：`:528-529`、`:629-630`、`:883-884` 三处写"P3 修复（十七轮）：补偿失败嵌套（见 `ExecuteNormalStepAsync` 同名修复注释）"。另有四个同构 `SafeObserve*` 包装（`:342-394`）。后果：每次修复落四遍，第五种 step 类型即第五份克隆。
@@ -468,7 +468,7 @@
 - **涉及文件**：`src/PalDDD.Transactions/Saga/Saga.cs:342-394,396-463,469-547,555-648,784-902`
 - **依赖**：ITM-685、ITM-709
 - **工作量**：XL（需拆分提交）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮，实证）：四车道模板化核心已由 2026-09-19 decision-2026-09-17 Option A 落地——RunRetryLaneAsync 是 Normal/FanOut/ChildSaga/Dynamic 的 for-attempt 循环与 catch 族**唯一实现**（车道差异全部经委托参数化，代码注释自证「原四份复制收敛于此」）；剩余 SafeObserve 四件各自绑定不同 observer 回调签名与事件名，泛化的 lambda 包装引入分配，收益为负，保留原样
 
 ### [x] ITM-711 · 依赖与包卫生 · 可信度 ✅
 - **维度**：依赖治理
@@ -485,7 +485,7 @@
 - **涉及文件**：`Directory.Packages.props:53`、`Directory.Build.props:63`、`nupkgs/`、各 `src/*/*.csproj`
 - **状态**：✅ 部分收口（2026-10-27 对账轮）：②许可证已闭环（ADR-036 Apache-2.0，2026-10-26；PalORM 6.8.0 同步转 Apache，分层效应消失）③Platforms 已裁决停更保留（2026-10-19 依赖轮，preview.7 为最后版本）；①SqlClient 声明已删（v5.0 移除 SQL Server 方言，无恢复计划）④nupkgs/ 未跟踪且被 .gitignore 覆盖、18 个占位 Description 已补包级描述（同轮清零批二完成）
 
-### [ ] ITM-712 · 注释变更史考古清理 · 可信度 ⚠
+### [x] ITM-712 · 注释变更史考古清理 · 可信度 ⚠
 - **维度**：可读性
 - **优先级**：P3 · 危害: 低 · 复杂度: 难
 - **问题**：注释/代码比偏高且含大量变更史叙事：`src/PalDDD.Transactions/Saga/Saga.cs` 315/1002（31%）、`src/PalDDD.Dapper/DapperOutboxStore.cs` 177/391（45%）、`src/PalDDD.PalORM/Stores/PalOrmOutboxStore.cs` 151/349（43%）。相当比例是"v43 P3（ITM-092 管线孪生）"式叙事、同一解释在 3-4 个姊妹文件重复、以及与代码状态不符者（ITM-689 即一例）。
@@ -495,7 +495,7 @@
 - **验证**：姊妹文件的重复注释段归零；无与代码状态矛盾的注释（可用 ITM-689 的 grep 口径抽查）。
 - **涉及文件**：`src/PalDDD.Transactions/Saga/Saga.cs`、`src/PalDDD.Dapper/DapperOutboxStore.cs`、`src/PalDDD.PalORM/Stores/PalOrmOutboxStore.cs`
 - **依赖**：ITM-710（先重构再清注释，避免清理后重构又改一遍）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮，按原文边界）：矛盾类——v5.0 契约窗口轮已清（SqlServerOutboxDbContext/VersionProbeRow/PendingEvents 的注释引用清零、AOT 假象状态叙事修正、PostgreSql 两处对照注释改为「已移除」形态）；重复类——车道四份重复说明已随 710 骨架收敛删除；按原文「只做重复→指针与矛盾→修正、不建议大规模删注释」边界，不做精简
 
 ### [x] ITM-713 · `scripts/README.md` 索引 · 可信度 ✅
 - **维度**：开发体验（可发现性）
@@ -537,7 +537,7 @@
 - **依赖**：ITM-698（同为写/读路径批量化，共用验证手段）
 - **状态**：✅ 已收口（2026-10-27 对账轮）：A11（PG/SQLite 多行 INSERT..RETURNING）+ B11（MySQL 多行 VALUES + 区间回查）落地 EventLog 批量；CheckpointBatchSize 组末水位 + 回放批宽 1000（ADR-034 M2）落地 Projection 批量；崩溃重放窗口语义由 v5.0 非续读+批模式 fail-fast 收口
 
-### [ ] ITM-716 · 手动转义与原始 SQL 片段加固 · 可信度 ✅
+### [x] ITM-716 · 手动转义与原始 SQL 片段加固 · 可信度 ✅
 - **维度**：安全（防御性）
 - **优先级**：P2 · 危害: 低 · 复杂度: 易
 - **问题**：两处设计脚枪（当前无可利用点）。① **手动引号加倍转义**：`src/PalDDD.Dapper.PostgreSql/PostgreSqlAuditor.cs:112,127`、`PostgreSqlJsonbExtensions.cs:53,64`、`SqliteJsonExtensions.cs:120,140`、`SqliteFtsExtensions.cs:102,154`。对当前方言正确（PG `standard_conforming_strings=on`；SQLite 无反斜杠转义），但复用路径一旦换到 MySQL（反斜杠语义）会静默变可注入。② **原始 SQL 片段 API**：`PostgreSqlSoftDelete.Delete/Restore`（`:36-59`）接受调用方 SQL 片段并逐字插值进 `WHERE (...)`，XML 文档已警告不要拼接用户输入。
@@ -546,7 +546,7 @@
 - **风险**：低。参数化改动可能影响 FTS/JSONB 表达式的构造方式（部分场景 SQL 结构本身是动态的），需逐个验证行为不变。
 - **验证**：改动后相关测试全绿；新增测试证明含单引号/反斜杠的输入被正确转义或参数化。
 - **涉及文件**：上述 PostgreSql / Sqlite 扩展文件
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：①PG path 段两处内联单引号翻倍收敛到同文件 EscapeLiteral 唯一入口 + 方言前提声明（禁止复制到 MySQL——反斜杠语义不同，跨方言复用产生注入面；SQLite 侧各自 sustained 见 SqliteJsonCore.QuoteLiteral）②SoftDelete 参数化重载按职责边界不加——Dapper 参数绑定（@id 占位 + 参数对象直传）是调用方标准用法，框架再包一层即数据访问层复辟；XML doc 的「用户输入必须参数绑定」契约已明示；Integration 485 用例 0 失败
 
 ### [x] ITM-717 · 发布与本地凭据卫生 · 可信度 ✅
 - **维度**：安全（凭据面收敛）

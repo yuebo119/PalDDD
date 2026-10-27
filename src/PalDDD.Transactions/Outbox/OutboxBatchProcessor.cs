@@ -285,67 +285,10 @@ public sealed class OutboxBatchProcessor
                     // 再读 msg.RetryCount + 1 会跨栈不一致（InMemory 偏大 1）。快照在所有
                     // Mark*/Release 之前取值，日志与 delay 计算（本快照 +1）口径统一
                     var retryAtFailure = msg.RetryCount;
-                    // RetryCount 由 Store.ReleaseForRetry 在内部递增并与状态一同持久化，
-                    // 确保计数与状态原子一致（P0 修复：消除增量-持久化窗口）。
-                    // 退避延迟由 IRetryBackoffPolicy 计算（默认指数 2^n，上限 64s，可选抖动）。
-                    // v29 P3：ComputeDelay 抛异常会跳过 MarkDead/ReleaseForRetry（消息状态滞留
-                    // 租约直到过期，重试链断）——包 try-catch 降级默认延迟 1s + Warning，保证
-                    // 标记路径始终执行（对齐 v9 观察者隔离修复的运行期半面：策略故障不阻断主流程）
-                    TimeSpan delay;
-                    try
-                    {
-                        delay = options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
-                    }
-                    catch (Exception delayEx)
-                    {
-                        delay = TimeSpan.FromSeconds(1);
-                        _logger.Warning(PalLogEventIds.OutboxRetryBackoffFailed,
-                            "Outbox: retry backoff computation failed for message {MessageId}, falling back to 1s delay: {Error}",
-                            msg.Id, delayEx.Message);
-                    }
-                    var nextAttemptAt = now + delay;
-                    // P1 修复（二十一轮）：入库前截断（日志行保留完整消息）——机理见类头常量注释
-                    var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
-                    if (msg.RetryCount + 1 >= options.MaxRetryCount)
-                    {
-                        // v43 P3（ITM-092 管线孪生，镜像 InboxProcessor 同型修复）：标记自身
-                        // 失败（DB 栈标记路径故障）不得替换 broker 失败根因、不得中止整批——
-                        // 原裸调抛出会使上游把标记错误当业务失败处理且同批后续消息饿死。
-                        // 标记错误挂主异常 Data（InboxProcessor 同键形态）+ Warning 留痕
-                        //（此处主异常不向上传播，Data 信息需日志兜底可见），主异常优先。
-                        try
-                        {
-                            await _store.MarkDeadAsync(msg, failureReason, now, ct).ConfigureAwait(false);
-                        }
-                        catch (Exception markEx)
-                        {
-                            ex.Data["MarkError"] = markEx.Message;
-                            _logger.Warning(PalLogEventIds.OutboxMarkDeadFailed,
-                                "Outbox: MarkDead for {MessageId} failed: {Error}", msg.Id, markEx.Message);
-                        }
-                        checked { dead++; }
-                        PalMetrics.OutboxDead.Add(1); // R1：死信独立计数
-                    }
-                    else
-                    {
-                        try
-                        {
-                            await _store.ReleaseForRetryAsync(msg, failureReason, nextAttemptAt, ct).ConfigureAwait(false);
-                        }
-                        catch (Exception markEx)
-                        {
-                            ex.Data["MarkError"] = markEx.Message;
-                            _logger.Warning(PalLogEventIds.OutboxReleaseForRetryFailed,
-                                "Outbox: ReleaseForRetry for {MessageId} failed: {Error}", msg.Id, markEx.Message);
-                        }
-                        checked { retried++; }
-                    }
-                    // v35 P3（EA2）：日志用进入失败路径时的快照 +1（本次为第 N 次失败）——
-                    // 原读 msg.RetryCount + 1 在 InMemory 栈 ReleaseForRetry 就地递增后偏大 1
-                    _logger.Warning(PalLogEventIds.OutboxMessageFailed,
-                        "Outbox: message {MessageId} processing failed at retry {RetryCount}: {Error}",
-                        msg.Id, retryAtFailure + 1, ex.Message);
-                    if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                    var (kind, persistFailedNow) = await HandlePublishFailureAsync(
+                        msg, ex, retryAtFailure, now, options, ct).ConfigureAwait(false);
+                    if (kind == PublishFailureKind.Dead) checked { dead++; } else checked { retried++; }
+                    if (persistFailedNow)
                         checked { persistFailed++; } // R2：Mark 已尝试未落库，独立可见
                 }
             }
@@ -358,6 +301,90 @@ public sealed class OutboxBatchProcessor
         }
 
         return new PartitionCounters(processed, dead, retried, persistFailed);
+    }
+
+    /// <summary>ITM-709（2026-10-27）：发布失败处理结果种类（death/retry 由调用方计数）。</summary>
+    private enum PublishFailureKind
+    {
+        Dead,
+        Retried,
+    }
+
+    /// <summary>
+    /// ITM-709（2026-10-27 清零轮）：单条消息发布失败处理（原 ProcessBatchAsync catch 体内联段的逐字迁移）——
+    /// backoff 计算（异常→1s 兜底）、死信/重试标记（标记自身失败挂 Data["MarkError"] 不中止批）、
+    /// 失败日志与单条持久化。返回 (种类, 是否应为 persistFailed 计数)。
+    /// </summary>
+    private async ValueTask<(PublishFailureKind Kind, bool PersistFailed)> HandlePublishFailureAsync(
+        OutboxMessage msg,
+        Exception ex,
+        int retryAtFailure,
+        DateTimeOffset now,
+        OutboxOptions options,
+        CancellationToken ct)
+    {
+        // RetryCount 由 Store.ReleaseForRetry 在内部递增并与状态一同持久化，
+        // 确保计数与状态原子一致（P0 修复：消除增量-持久化窗口）。
+        // 退避延迟由 IRetryBackoffPolicy 计算（默认指数 2^n，上限 64s，可选抖动）。
+        // v29 P3：ComputeDelay 抛异常会跳过 MarkDead/ReleaseForRetry（消息状态滞留
+        // 租约直到过期，重试链断）——包 try-catch 降级默认延迟 1s + Warning，保证
+        // 标记路径始终执行（对齐 v9 观察者隔离修复的运行期半面：策略故障不阻断主流程）
+        TimeSpan delay;
+        try
+        {
+            delay = options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
+        }
+        catch (Exception delayEx)
+        {
+            delay = TimeSpan.FromSeconds(1);
+            _logger.Warning(PalLogEventIds.OutboxRetryBackoffFailed,
+                "Outbox: retry backoff computation failed for message {MessageId}, falling back to 1s delay: {Error}",
+                msg.Id, delayEx.Message);
+        }
+        var nextAttemptAt = now + delay;
+        // P1 修复（二十一轮）：入库前截断（日志行保留完整消息）——机理见类头常量注释
+        var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
+        var kind = PublishFailureKind.Retried;
+        if (msg.RetryCount + 1 >= options.MaxRetryCount)
+        {
+            kind = PublishFailureKind.Dead;
+            // v43 P3（ITM-092 管线孪生，镜像 InboxProcessor 同型修复）：标记自身
+            // 失败（DB 栈标记路径故障）不得替换 broker 失败根因、不得中止整批——
+            // 原裸调抛出会使上游把标记错误当业务失败处理且同批后续消息饿死。
+            // 标记错误挂主异常 Data（InboxProcessor 同键形态）+ Warning 留痕
+            //（此处主异常不向上传播，Data 信息需日志兜底可见），主异常优先。
+            try
+            {
+                await _store.MarkDeadAsync(msg, failureReason, now, ct).ConfigureAwait(false);
+            }
+            catch (Exception markEx)
+            {
+                ex.Data["MarkError"] = markEx.Message;
+                _logger.Warning(PalLogEventIds.OutboxMarkDeadFailed,
+                    "Outbox: MarkDead for {MessageId} failed: {Error}", msg.Id, markEx.Message);
+            }
+            PalMetrics.OutboxDead.Add(1); // R1：死信独立计数
+        }
+        else
+        {
+            try
+            {
+                await _store.ReleaseForRetryAsync(msg, failureReason, nextAttemptAt, ct).ConfigureAwait(false);
+            }
+            catch (Exception markEx)
+            {
+                ex.Data["MarkError"] = markEx.Message;
+                _logger.Warning(PalLogEventIds.OutboxReleaseForRetryFailed,
+                    "Outbox: ReleaseForRetry for {MessageId} failed: {Error}", msg.Id, markEx.Message);
+            }
+        }
+        // v35 P3（EA2）：日志用进入失败路径时的快照 +1（本次为第 N 次失败）——
+        // 原读 msg.RetryCount + 1 在 InMemory 栈 ReleaseForRetry 就地递增后偏大 1
+        _logger.Warning(PalLogEventIds.OutboxMessageFailed,
+            "Outbox: message {MessageId} processing failed at retry {RetryCount}: {Error}",
+            msg.Id, retryAtFailure + 1, ex.Message);
+        var persistFailed = !await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
+        return (kind, persistFailed);
     }
 
     /// <summary>
