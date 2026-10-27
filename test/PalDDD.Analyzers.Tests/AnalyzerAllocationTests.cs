@@ -10,7 +10,11 @@ using PalDDD.Analyzers;
 /// attribute 集逐候选），原实现每次比对构造全名串/闭包/前缀串。分配断言在旧实现
 /// 等价体下判红（红证明在案），新实现零分配；语义矩阵同时锁定结构比对比全名串
 /// 比对的逐字等价（含 ITM-220 嵌套名与 v26 P3 global 命名空间分支）。
+/// 2026-10-27 preview 发布首跑实证：分配断言用 GC.GetAllocatedBytesForCurrentThread
+/// （线程级量具），并行执行时同线程其他测试的分配计入 delta——tag-ref CI 上偶发
+/// perOp=4.03 误红（同提交 dev-ref CI 同测试绿）。类级 NotInParallel 隔离测量窗口。
 /// </summary>
+[NotInParallel("analyzer-alloc")]
 public sealed class AnalyzerAllocationTests
 {
     private const int Iterations = 10_000;
