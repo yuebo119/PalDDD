@@ -33,10 +33,12 @@ jobs:
     # 审批点应在推送侧而非触发侧）。仓库侧未配置该 environment 时本声明无行为变化
     # （GitHub 隐式创建空环境直接放行），一次性配置见 docs/release.md §6.4。
     environment: production
-    # ITM-717（2026-10-27 清零轮）：密钥收窄到唯一消费步——原 job 级 env 使 restore/build/
-    # test/运行已发布二进制等全部步骤都携带可发布任意版本的组织级凭据。v62 P1 教训
-    # （step-level env does not cross steps）按边界处理：push 步显式注入，三个判定步的
-    # if 表达式直接读 secrets 上下文（if 中可引用 secrets，不依赖 env 传递）。
+    # ITM-717（2026-10-27 清零轮）：密钥收窄到唯一消费步。密钥本体只在 Push 步的 step env
+    # 注入；三个判定步的 if 读 job 级布尔信号 HAS_NUGET_KEY（job env 允许 secrets 表达式，
+    # step if 不允许直接读 secrets 上下文——2026-10-27 首发实证：if 内联 secrets 使整个
+    # workflow 校验失败，v62 的 step env 不跨步坑以本布尔形态兼顾）。
+    env:
+      HAS_NUGET_KEY: ${{ secrets.NUGET_API_KEY != '' }}
     timeout-minutes: 45
 
     steps:
@@ -198,7 +200,7 @@ jobs:
         # key 存在，「勾选 skip-nuget + 有 key」时 35 包照推（input 唯一有实际作用的
         # 场景完全失效，不可逆公开副作用）。ITM-717（2026-10-27）：密钥唯一注入点收窄到
         # 本步（step env），if 判定直接读 secrets 上下文。
-        if: ${{ secrets.NUGET_API_KEY != '' && inputs.skip-nuget != true }}
+        if: ${{ env.HAS_NUGET_KEY == 'true' && inputs.skip-nuget != true }}
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
@@ -221,7 +223,7 @@ jobs:
           fi
 
       - name: NuGet push skipped (secret missing) — fail
-        if: ${{ secrets.NUGET_API_KEY == '' && inputs.skip-nuget != true }}
+        if: ${{ env.HAS_NUGET_KEY != 'true' && inputs.skip-nuget != true }}
         run: |
           # M3-9（v2 审计 O-4，2026-09-19）：原 v60 形态仅 ::warning:: 且 GitHub Release
           # 照建——「发布成功」可等于「0 个包发布」（假成功）。tag/手动触发均为显式
@@ -231,7 +233,7 @@ jobs:
           exit 1
 
       - name: NuGet push intentionally skipped (explicit opt-out)
-        if: ${{ secrets.NUGET_API_KEY == '' && inputs.skip-nuget == true }}
+        if: ${{ env.HAS_NUGET_KEY != 'true' && inputs.skip-nuget == true }}
         run: |
           echo "::warning::NuGet push intentionally skipped (skip-nuget=true) - GitHub Release will be created with nupkg attachments only."
 
