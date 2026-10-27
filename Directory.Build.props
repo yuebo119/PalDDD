@@ -83,10 +83,19 @@
     <PackageProjectUrl>https://github.com/yuebo119/PalDDD</PackageProjectUrl>
     <!-- v2.1.0 补齐 SOP §4.2 必须字段（v2.0.0 及之前未配置——nuspec 缺 releaseNotes 的既有缺口） -->
     <PackageReleaseNotes>https://github.com/yuebo119/PalDDD/blob/main/CHANGELOG.md</PackageReleaseNotes>
+    <!-- 2026-10-27 preview 发布核对发现：36 包均无 README 资产（dotnet nuget push 日志
+         "Readme missing"），nuget.org 包页不渲染 README。此处统一把仓库根 README.md
+         打进全部可打包包（GA 轮 5.0.0 起生效；preview.1 已发布不改）。 -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/yuebo119/PalDDD.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <DebugType>embedded</DebugType>
     <EmbedAllSources>true</EmbedAllSources>
   </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' != 'false'">
+    <!-- PackageReadmeFile 的资产来源：仓库根 README（MSBuildThisFileDirectory = 本文件目录） -->
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
 </Project>
