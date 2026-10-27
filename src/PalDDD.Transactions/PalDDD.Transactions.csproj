@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Transactions</RootNamespace>
+    <Description>Pal.DDD 事务与 Saga — Outbox/Inbox/Saga 状态存储抽象、批量处理与 ISagaManager（含反射分派声明，非全 AOT）。</Description>
     <NoWarn>$(NoWarn);CS1591;CA2007</NoWarn>
     <!-- Saga 子系统使用 MakeGenericType/Activator.CreateInstance 进行非泛型调度，
          已通过 [RequiresDynamicCode]/[RequiresUnreferencedCode] 精确标注反射路径。

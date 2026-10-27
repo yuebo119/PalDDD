@@ -340,7 +340,7 @@
 - **涉及文件**：`README.md:835,907`、`README.en.md:838,913`、`docs/test-coverage-baseline.md:6`、`docs/performance.md:30`、`docs/tutorial.md:113`
 - **状态**：✅ 已收口（2026-10-27 对账轮）：1202/1379 矛盾零残留；计数声明由 count-audit 16 项机械守卫（2026-09-25 上线）持续对账
 
-### [ ] ITM-700 · 入门路径打通 · 可信度 ✅
+### [x] ITM-700 · 入门路径打通 · 可信度 ✅
 - **维度**：开发体验（贡献者入口）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：仓库无 `CONTRIBUTING.md`；`README.md` 全文无 clone/build/SDK 前置说明（只有 NuGet 消费段 `:59-119`）；唯一的开发环境文档是 `docs/development.md:9` 一行".NET SDK 11.0.x (RC1+)"，而 `global.json:3` 钉的是**精确预发布版本** `11.0.100-rc.1.26425.128`；README 的文档表（`:863-879`）**未收录** `docs/development.md`，也无 AGENTS.md 链接。后果：新贡献者按 README 找不到"如何本地构建/跑测试/装钩子"；装 .NET 10 或等 .NET 11 GA 的人会先撞 SDK 解析失败，而错误信息不会告诉他要装 RC SDK。
@@ -349,7 +349,7 @@
 - **风险**：低。需注意 `docs/development.md` 本身质量高，不要复制其全文（复制必然漂移，与本仓"文档单点化"原则冲突），应链接。
 - **验证**：新人按 README 一步可达构建/测试/钩子说明；SDK 预发布要求被明写；`docs/development.md` 出现在 README 文档表。
 - **涉及文件**：新增 `CONTRIBUTING.md` 或 `README.md:863-879`、`README.en.md` 同款
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：README 文档表已收录 development.md（:526）且贡献段含 clone 后自动钩子说明（:553）——后续轮已落地，本轮补强 development.md 的 SDK 预发布钉扎提示
 
 ### [x] ITM-701 · 文档 `.sh` 残留 / `.ai` 引用 / CI 状态表修正 · 可信度 ✅
 - **维度**：文档准确性（失效命令引用）
@@ -373,7 +373,7 @@
 - **涉及文件**：`Directory.Build.props`、`.github/workflows/ci.yml`、各项目 `packages.lock.json`
 - **状态**：⬜ 待处理
 
-### [ ] ITM-703 · `PalDDD.Transactions` 的 `M.E.*` 欠声明 · 可信度 ✅
+### [x] ITM-703 · `PalDDD.Transactions` 的 `M.E.*` 欠声明 · 可信度 ✅
 - **维度**：打包正确性（消费者可解析性）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：`src/PalDDD.Transactions/` 代码使用 `IOptionsMonitor` 与 `BackgroundService`（`src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs:5,29`、`PeriodicBackgroundProcessor.cs:12-13`），但 csproj 无对应 `PackageReference`；打包后的 nuspec 也确认缺失（`nupkgs/preview-2.1.0/PalDDD.Transactions.2.1.0.nupkg` 只列 PalDDD.* 与 Ulid）。后果：纯类库消费者需自行补 `Microsoft.Extensions.Options` / `Hosting.Abstractions`，否则解析失败；本地构建被 SDK 包裁剪机制掩盖，CI 也测不到。
@@ -382,9 +382,9 @@
 - **风险**：低。可能改变传递依赖图，需确认不引入版本冲突（中央包管理已钉版）。
 - **验证**：重新打包后 nuspec 含两个 `Microsoft.Extensions.*` 依赖；用纯类库消费者（不手动加 M.E.*）编译含 `AddPalTransactions` 的最小工程通过。
 - **涉及文件**：`src/PalDDD.Transactions/PalDDD.Transactions.csproj`
-- **状态**：⬜ 待处理
+- **状态**：✅ 证伪收口（2026-10-27 清零轮）：net11 SDK 将 M.E.Options/Hosting.Abstractions 列为框架自动可用（显式引用触发 NU1510 error）；消费者探针（本地源引用 PalDDD.Transactions 5.0.0 包、消费 IOptionsMonitor/BackgroundService 派生类型）编译 0 错误 0 警告——「纯类库消费者解析失败」前提已被 .NET 11 框架演进消解，无需 nuspec 依赖项
 
-### [ ] ITM-704 · `PalDDD.Base` 分析器交付缺口 · 可信度 ⚠
+### [x] ITM-704 · `PalDDD.Base` 分析器交付缺口 · 可信度 ⚠
 - **维度**：打包正确性（卖点交付）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：`PalDDD.Base` 的打包 nuspec 声明对 `PalDDD.Analyzers` / `PalDDD.Analyzers.CodeFixes` / `PalDDD.Core.SourceGen` 的依赖，`include` 白名单为 `Runtime,Compile,Native,ContentFiles,BuildTransitive`，**不含 `Analyzers`**；而这三个包只含 `analyzers/dotnet/cs/*.dll`（由 `unzip -l nupkgs/preview-2.1.0/PalDDD.Analyzers.2.1.0.nupkg` 得）。若属实，安装 `PalDDD.Base` 的消费者拿不到分析器与源生成器，与包描述"含编译时分析器"矛盾，且 README 主推卖点"38 条编译期诊断"不落地。
@@ -394,7 +394,7 @@
 - **风险**：中。`include` 白名单是 NuGet 打包语义的细节，改错会导致打包失败或产生非预期的传递依赖。需对照 NuGet 官方文档确认 `Analyzers` 资源类型的正确写法。
 - **验证**：端到端验证（安装 `PalDDD.Base` 后故意写一个违反 PDDD 规则的类，确认编译报错）；变异验证：移除修复后诊断不再触发。
 - **涉及文件**：`src/PalDDD.Base/PalDDD.Base.csproj`、`src/PalDDD.Analyzers/`、`src/PalDDD.Core.SourceGen/`
-- **状态**：⬜ 待处理
+- **状态**：✅ 证伪收口（2026-10-27 清零轮）：端到端探针（本地源安装 PalDDD.Base 5.0.0 + 未标注 [BoundedContext] 的聚合类）构建输出 error PDDD001——分析器与源生成器经元包正常交付；nuspec 依赖的 include 白名单不影响 analyzer 资产传递，本条静态阅读结论错误（正文 ⚠ 预设的正面验证路径走完）
 
 ---
 
@@ -483,7 +483,7 @@
 - **风险**：低到中。**许可证变更需法律判断**，若采用 `only` 会影响下游使用者的合规假设，建议先确认意图（详见 ITM-724 与"需裁决"节）。`Microsoft.Data.SqlClient` 若计划恢复 SQL Server 支持则不应移除。
 - **验证**：`grep -rn "Microsoft.Data.SqlClient" Directory.Packages.props` 零命中；许可证表达式与 PalORM 依赖条款自洽；`ls nupkgs/` 只剩当前版本；随机抽 3 个包检查 nuspec `description` 非占位符。
 - **涉及文件**：`Directory.Packages.props:53`、`Directory.Build.props:63`、`nupkgs/`、各 `src/*/*.csproj`
-- **状态**：✅ 部分收口（2026-10-27 对账轮）：②许可证已闭环（ADR-036 Apache-2.0，2026-10-26；PalORM 6.8.0 同步转 Apache，分层效应消失）③Platforms 已裁决停更保留（2026-10-19 依赖轮，preview.7 为最后版本）；①SqlClient 零引用与④nupkgs/description 见同轮实施
+- **状态**：✅ 部分收口（2026-10-27 对账轮）：②许可证已闭环（ADR-036 Apache-2.0，2026-10-26；PalORM 6.8.0 同步转 Apache，分层效应消失）③Platforms 已裁决停更保留（2026-10-19 依赖轮，preview.7 为最后版本）；①SqlClient 声明已删（v5.0 移除 SQL Server 方言，无恢复计划）④nupkgs/ 未跟踪且被 .gitignore 覆盖、18 个占位 Description 已补包级描述（同轮清零批二完成）
 
 ### [ ] ITM-712 · 注释变更史考古清理 · 可信度 ⚠
 - **维度**：可读性
@@ -497,7 +497,7 @@
 - **依赖**：ITM-710（先重构再清注释，避免清理后重构又改一遍）
 - **状态**：⬜ 待处理
 
-### [ ] ITM-713 · `scripts/README.md` 索引 · 可信度 ✅
+### [x] ITM-713 · `scripts/README.md` 索引 · 可信度 ✅
 - **维度**：开发体验（可发现性）
 - **优先级**：P2 · 危害: 低 · 复杂度: 易
 - **问题**：`scripts/` 有 32 个 `.cs`（19 个带 `--selftest`），无 README、无索引（`ls scripts/README*` 无结果）。每个脚本头部自述用法与退出码（如 `scripts/gate.cs:1-12`），是有效缓解，但"有哪些脚本、各自职责、如何跑全量"需要逐文件读。本仓 `AGENTS.md` §2 的门禁表只列了 7 道 pre-commit 守卫，未覆盖 32 个脚本。
@@ -506,7 +506,7 @@
 - **风险**：低。维护成本需注意：新增脚本时要同步，否则又是复制型文档。建议只写"分组 + 一句话"，把详细的用法留给脚本头部注释。
 - **验证**：索引覆盖全部脚本；`docs/development.md` 链接该索引；新增脚本在 `gate-audit` 矩阵中仍须归入 TOOL 或 UNWIRED-GATE（现有硬约束）。
 - **涉及文件**：新增 `scripts/README.md`、`docs/development.md`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：scripts/README.md 新建——四分组（提交守卫/CI 门禁/发布流程/审计工具）+ 一句话职责；权威分类与可信度指向 gate-audit 矩阵（防第二真源）
 
 ### [x] ITM-714 · 文档计数与注释状态收尾 · 可信度 ✅
 - **维度**：文档准确性（机械可验证类）
@@ -523,7 +523,7 @@
 - **风险**：低。第 5 项若选择"接到 release.yml"，需确认该脚本能独立运行且退出码语义明确。
 - **验证**：每项与实况一致；`grep -rn "preview.5" docs/performance.md` 零命中或标注为历史时点。
 - **涉及文件**：`docs/aot.md:3-7`、`README.md:837,802`、`Directory.Build.targets:7`、`.github/workflows/ci.yml:84`、`docs/release.md:693`、`docs/performance.md:3,30`
-- **状态**：✅ 部分收口（2026-10-27 对账轮）：①aot.md 已更新双样本口径 ②README:480 samples 清单已含 DapperAotProbe ④ci.yml 注释已修（.gitignore:68）⑤changelog-check 已接 release.yml pack 前（5bf98d9，2026-10-26）⑥performance.md preview.5 已标注历史口径；③targets 守卫计数见同轮实施
+- **状态**：✅ 部分收口（2026-10-27 对账轮）：①aot.md 已更新双样本口径 ②README:480 samples 清单已含 DapperAotProbe ④ci.yml 注释已修（.gitignore:68）⑤changelog-check 已接 release.yml pack 前（5bf98d9，2026-10-26）⑥performance.md preview.5 已标注历史口径；③targets 守卫计数 5→12 已修（同轮清零批二完成）——本条全收口
 
 ### [x] ITM-715 · EventLog 批量插入 + Projection checkpoint 批量化 · 可信度 ✅
 - **维度**：性能（写路径往返）
@@ -548,7 +548,7 @@
 - **涉及文件**：上述 PostgreSql / Sqlite 扩展文件
 - **状态**：⬜ 待处理
 
-### [ ] ITM-717 · 发布与本地凭据卫生 · 可信度 ✅
+### [x] ITM-717 · 发布与本地凭据卫生 · 可信度 ✅
 - **维度**：安全（凭据面收敛）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：两处。① **job 级长生命周期发布密钥**：`.github/workflows/release.yml:28` 把 `NUGET_API_KEY` 注入 job 级 env，使 restore/build/test/运行已发布二进制等步骤都带着一个可发布任意版本的组织级凭据；无 `id-token: write`，未采用 NuGet 的 OIDC 可信发布。② **本地真实形态凭据文件**：`appsettings.test.local.json`（未跟踪，`.gitignore:94` 覆盖，`git check-ignore -v` 确认）含内网主机与真实形态口令；当前卫生正确，但距泄漏只有一个 `.gitignore` 编辑，而 `secret-scan` 按设计不看未跟踪文件。
@@ -557,9 +557,9 @@
 - **风险**：低到中。OIDC 迁移需要 NuGet.org 侧配置可信发布策略，属外部依赖；收窄 env 作用域需确认所有实际用到的步骤都被覆盖（否则重演"密钥为空"的旧坑）。
 - **验证**：迁移后发布流程端到端成功且 workflow 中无静态密钥引用；若仅收窄作用域，`grep -n "NUGET_API_KEY" release.yml` 的命中范围仅限发布步骤。
 - **涉及文件**：`.github/workflows/release.yml:20-30`、`docs/development.md`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：①NUGET_API_KEY 从 job 级 env 收窄到 Push 步 step env（三个判定步 if 直读 secrets 上下文，规避 v62 的 step env 不跨步坑）；NuGet OIDC 可信发布为 NuGet.org 侧配置的外部依赖（与 Pal.ORM 同口径登记）②development.md 新增本地凭据纪律段（绝不 git add -f）
 
-### [ ] ITM-718 · 公共 API 语义澄清（`SqlTemplates`） · 可信度 ✅
+### [x] ITM-718 · 公共 API 语义澄清（`SqlTemplates`） · 可信度 ✅
 - **维度**：可读性 / API 契约
 - **优先级**：P2 · 危害: 低 · 复杂度: 易
 - **问题**：`src/PalDDD.Dapper/SqlTemplates.cs` 暴露 31 个 `public const` SQL 字符串，其中 `:115-119`（`OutboxLeaseUpdate`）与 `:164-168`（`OutboxSelectById`）的注解自述"当前无内部引用"。
@@ -568,7 +568,7 @@
 - **风险**：低。
 - **验证**：注释不再含"无内部引用"式表述；公共 API 快照无变化（本项不改签名）。
 - **涉及文件**：`src/PalDDD.Dapper/SqlTemplates.cs:115-119,164-168`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：两处「无内部引用」维护者自述改为面向消费者的契约说明（API 保留，按代码价值判定不删）
 
 ---
 

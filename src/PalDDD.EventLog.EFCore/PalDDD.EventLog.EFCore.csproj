@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.EventLog</RootNamespace>
+    <Description>Pal.DDD EventLog 的 EF Core 适配器 — EventLogDbContext 与乐观并发追加（非 AOT 栈）。</Description>
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>

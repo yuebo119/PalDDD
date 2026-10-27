@@ -9,6 +9,13 @@
 - .NET SDK 11.0.x (RC1+)
 - Windows / PowerShell Git Bash/Linux 可直接使用（PowerShell 需 $env: 语法）
 - NuGet 源默认使用 `https://api.nuget.org/v3/index.json`
+- **SDK 预发布钉扎**：`global.json` 锁定 .NET 11 RC 线（GA 前唯一 go-live 线，见文件头注释）；clone 后 SDK 解析失败时先确认装的是 11 RC SDK 而非 stable 线
+
+### 本地凭据文件纪律（ITM-717）
+
+`appsettings.test.local.json` 等含真实形态连接串/口令的本地文件由 `.gitignore` 覆盖，
+`secret-scan` 按设计只扫已跟踪文件——距泄漏只差一次 `git add -f`。**绝不 `git add -f`**
+该类文件；测试需要真实端点时用环境变量（`PALDDD_TEST_*`）或临时创建、用后即删。
 
 确认环境：
 

@@ -226,7 +226,8 @@
   依赖时间的测试，正是把该语义一次性对齐的窗口。
 - **涉及文件**：`test/PalDDD.Testing/TestHelpers.cs`（`:186` 附近）
 
-### [ ] ITM-786 · ActivityListener 跨项目隔离依赖 `_createdAt` 比较 · 可信度 ⚠（低危）
+### [x] ITM-786 · ActivityListener 跨项目隔离依赖 `_createdAt` 比较 · 可信度 ⚠（低危）
+- **状态**：✅ 已收口（2026-10-27 清零轮）：_createdAt 捕获点从字段初始化器移到构造内、紧邻 AddActivityListener 之前——残留 activity 接纳窗口收窄到语句级；「构造前启动、构造后结束」的长时 activity 仍被过滤，属既有取舍（残留污染防护优先）保留
 
 - **维度**：测试基建语义 · **优先级**：P3 · 危害: 低 · 复杂度: 易
 - **问题**：`_createdAt` 由字段初始化器捕获（早于 `AddActivityListener`），故该窗口内启动的

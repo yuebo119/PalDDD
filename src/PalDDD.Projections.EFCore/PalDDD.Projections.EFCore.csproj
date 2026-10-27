@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Projections</RootNamespace>
+    <Description>Pal.DDD 投影的 EF Core 适配器 — 检查点存储（非 AOT 栈）。</Description>
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>

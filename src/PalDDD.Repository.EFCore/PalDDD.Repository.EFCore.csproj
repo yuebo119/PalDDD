@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Repository.EFCore</RootNamespace>
+    <Description>Pal.DDD 仓储的 EF Core 适配器 — IRepository&lt;T&gt; 实现与领域事件 Outbox 桥（非 AOT 栈）。</Description>
     <AssemblyName>PalDDD.Repository.EFCore</AssemblyName>
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>

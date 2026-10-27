@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Idempotency</RootNamespace>
+    <Description>Pal.DDD 幂等抽象 — StartOrGet 操作级幂等契约与策略。</Description>
     <NoWarn>$(NoWarn);CS1591;CA2007</NoWarn>
   </PropertyGroup>
 

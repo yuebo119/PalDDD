@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.CQRS</RootNamespace>
+    <Description>Pal.DDD CQRS 管道 — Dispatcher 命令/查询分发、管道行为与流式查询抽象（AOT 安全）。</Description>
     <!-- v53 P3 逐条理由（对齐全局"个别位置带具体理由"惯例；CS1591/CA2007 全局清单已含，去重）：
          CA1040 — IBaseRequest/ICommand/IQuery 空标记接口是 CQRS 分派键的刻意设计
          CA1068 — IPipelineBehavior<TRequest,TResponse> 异步签名沿 MediatR 惯例

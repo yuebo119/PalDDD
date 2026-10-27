@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Projections</RootNamespace>
+    <Description>Pal.DDD 投影 — 处理器、检查点与租约续期抽象。</Description>
     <NoWarn>$(NoWarn);CS1591;CA2007</NoWarn>
   </PropertyGroup>
 

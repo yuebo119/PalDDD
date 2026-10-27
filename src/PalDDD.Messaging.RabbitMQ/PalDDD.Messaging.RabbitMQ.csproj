@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Messaging.RabbitMQ</RootNamespace>
+    <Description>Pal.DDD RabbitMQ 适配器 — 每订阅 consumer channel、发布确认与死信路径（非 AOT 栈）。</Description>
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>

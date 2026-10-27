@@ -24,10 +24,15 @@ namespace PalDDD.Testing;
 public sealed class RecordingActivityListener : IDisposable
 {
     private readonly ActivityListener _listener;
-    private readonly DateTimeOffset _createdAt = DateTimeOffset.UtcNow;
+    private readonly DateTimeOffset _createdAt;
 
     public RecordingActivityListener()
     {
+        // ITM-786（2026-10-27）：捕获点从字段初始化器（构造前执行）移到紧邻
+        // AddActivityListener 之前——字段初始化器与监听器挂接之间的窗口内启动的
+        // 残留 activity 不再被接纳。「构造前启动、构造后结束」的长时 activity 仍会被
+        // StartTimeUtc 过滤丢弃，属既有设计取舍（残留污染防护优先），保留。
+        _createdAt = DateTimeOffset.UtcNow;
         _listener = new ActivityListener
         {
             ShouldListenTo = static source => source.Name == PalActivitySource.Name,

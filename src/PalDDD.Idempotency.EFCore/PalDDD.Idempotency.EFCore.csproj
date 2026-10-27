@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Idempotency</RootNamespace>
+    <Description>Pal.DDD 幂等的 EF Core 适配器 — 幂等记录存储（非 AOT 栈）。</Description>
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>

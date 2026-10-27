@@ -4,7 +4,7 @@
        2026-09-29 全量核新：PalORM ×5 → 6.1.0（主版本线）、TUnit/TUnit.FsCheck → 1.71.0；
        2026-10-08 全量核新（双源实测）：11 线 rc.2 仍未发维持 rc.1，PalORM ×5 → 6.3.1（6.2/6.3/6.3.1 九日三连发）、
        TUnit/TUnit.FsCheck → 1.73.5、Confluent.Kafka → 2.16.0、NativeCompressions → 1.0.1（跨 1.0 稳定线）、
-       SqlClient → 7.1.1（零引用声明级）；Verify.TUnit 按 2026-09-23 裁决停 32.x（license-policy 禁 ≥33），
+       Verify.TUnit 按 2026-09-23 裁决停 32.x（license-policy 禁 ≥33）；
        BDN（0.16.0-preview.2）/Ulid（1.4.2-rc.0）/Unsafe（7.0.0-preview 线）仅预发布不升，Platforms 8.0 后停更；
        2026-10-11 全量升级：PalORM ×5 → 6.4.0、NativeCompressions → 1.1.0、TUnit/TUnit.FsCheck → 1.73.19、
        Testcontainers ×4 → 4.16.0、CAP ×3 → 10.0.2（MIT nuspec 实证，bench 对比锚随最新线）；MediatR 维持
@@ -121,9 +121,6 @@
     <PackageVersion Include="MemoryPack" Version="1.21.4" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
     <!-- SqlKata 已移除 — 改用 DapperDbType 枚举分发 SQL 方言，零依赖 -->
-    <!-- SqlClient 7.1.1（2026-10-08 升位）：7.1.0 于 2026-09-18 转稳定后 9 日补丁版；零引用中央声明
-         （全仓无 PackageReference 消费，见 ITM-711），升位只影响声明版本 -->
-    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.1" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0-rc.3.26522.148" />
     <!-- Microsoft.Data.Sqlite.Core 传递钉扎补齐（2026-10-17 核新实证）：EF Core Sqlite
          provider 依赖 Core 包而非 meta 包，未声明时解析停在 rc.1——meta 钉扎不覆盖该 ID，

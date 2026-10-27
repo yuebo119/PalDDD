@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Transactions</RootNamespace>
+    <Description>Pal.DDD Outbox/Inbox 的 EF Core 方言基类 — PostgreSql/MySql/Sqlite OutboxDbContext（非 AOT 栈）。</Description>
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>

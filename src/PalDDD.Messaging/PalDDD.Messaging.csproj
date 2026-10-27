@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Messaging</RootNamespace>
+    <Description>Pal.DDD 消息抽象 — IMessageBroker、MessageCatalog 与消息序列化契约。</Description>
     <NoWarn>$(NoWarn);CS1591;CA1711;CA1716;CA1033;CA2007</NoWarn>
   </PropertyGroup>
 
