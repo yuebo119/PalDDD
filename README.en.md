@@ -567,6 +567,4 @@ Issues and PRs are welcome. The first build after cloning automatically configur
 
 **Version boundary**: v5.0 and later (including `5.0.0-preview.1`) use [Apache-2.0](LICENSE); previously published versions (v1.x–v4.0.0 and packages already on NuGet.org) remain AGPL-3.0-or-later and cannot be retroactively relicensed (see [ADR-036](docs/decisions/036-license-apache-2.0.md)).
 
-Apache-2.0 is permissive: commercial use, modification and closed-source integration are allowed, with an explicit patent grant; distribution must retain copies of [LICENSE](LICENSE) and [NOTICE](NOTICE) and state significant changes; trademarks are not granted. See the [LICENSE](LICENSE) file or <https://www.apache.org/licenses/LICENSE-2.0> for details.
-
 Copyright (C) 2026 SuperLee

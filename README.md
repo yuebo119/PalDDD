@@ -569,6 +569,4 @@ QQ 交流群 **1125599744**（C#/.NET 新技术交流群）：使用问题、特
 
 **版本分界**：v5.0 及以后（含 `5.0.0-preview.1`）采用 [Apache-2.0](LICENSE)；v5.0 之前的已发布版本（v1.x–v4.0.0 及已上 NuGet.org 的包）为 AGPL-3.0-or-later，不可追溯变更（见 [ADR-036](docs/decisions/036-license-apache-2.0.md)）。
 
-Apache-2.0 为宽松许可：允许商用、修改与闭源集成，附显式专利授权；分发须保留 [LICENSE](LICENSE) 与 [NOTICE](NOTICE) 并对修改作出声明；不授予商标权。详见 [LICENSE](LICENSE) 或 <https://www.apache.org/licenses/LICENSE-2.0>。
-
 Copyright (C) 2026 SuperLee
