@@ -87,7 +87,7 @@ string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "g
 // 断言：probedGates 每项必须在此有条目（缺失即 ERROR 退出），故新增探针时无法绕过本声明。
 var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
 {
-    ["secret-scan"] = "硬编码凭据模式（含零可扫描文件 fail-closed）",
+    ["secret-scan"] = "硬编码凭据模式（含零可扫描文件 fail-closed；ITM-694 扩：gho_/sk-proj-/AIza/xapp- 前缀族、URI user:pass@、环境变量 KEY=VALUE、AccountKey、扩展名 .pem/.key/.pfx/.sql/.razor/.resx、白名单子串收紧为整段）",
     ["encoding-gate"] = "E1-E5 编码形态（CRLF/BOM/mojibake/verified LF/源文件裸 LF）",
     ["dapper-param-guard"] = "匿名 Dapper 参数枚举直传（CI #94 根因）",
     ["gate-lite"] = "根目录快速门禁（缺 src/ fail-closed）",
@@ -230,6 +230,20 @@ var probes = new List<Probe>
             var fakeKey = string.Concat("AK", "IA", "IOSFODNN7EXAMPLE");
             File.WriteAllText(Path.Combine(dir, "bad.cs"), $"var k = \"{fakeKey}\";\n");
             return ["bad.cs"];
+        }),
+    new(
+        // ITM-694（2026-10-27 清零轮）：新增形态探针——URI 内嵌密码（原「Host+Password
+        // 同行」形态之外的user:pass@），自指规避同上（含真实形态长密码，运行期拼接）。
+        Name: "secret-scan 拒绝 URI 内嵌密码（ITM-694 新形态）",
+        Gate: "secret-scan",
+        ExpectExit: 1,
+        MustContainInStdout: "conn.env",
+        Setup: dir =>
+        {
+            var longPwd = string.Concat("Real", "Pass", "w0rd", "X9mQ2", "zK7pL");
+            File.WriteAllText(Path.Combine(dir, "conn.env"),
+                $"DB_URL=postgres://admin:{longPwd}@db.internal:5432/prod\n");
+            return ["conn.env"];
         }),
     new(
         Name: "secret-scan 放行干净输入（负向对照）",

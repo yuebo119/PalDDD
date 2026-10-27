@@ -70,7 +70,7 @@ if (trackedAll is null)
 // 注意：本白名单只决定"哪些文件被读"，判定强度仍由 BuildPatterns() 的三层白名单
 // （占位符/示例值/文档措辞）决定——扩展名放宽不会把占位符误判为泄露。
 var trackedFiles = trackedAll
-    .Where(f => Regex.IsMatch(f, "\\.(json|jsonc|cs|sh|py|yml|yaml|props|targets|config|toml|env|xml|ps1|psm1|psd1|txt|md|csproj|slnx|sln|cake|http|editorconfig)$",
+    .Where(f => Regex.IsMatch(f, "\\.(json|jsonc|cs|sh|py|yml|yaml|props|targets|config|toml|env|xml|ps1|psm1|psd1|txt|md|csproj|slnx|sln|cake|http|editorconfig|pem|key|pfx|p12|sql|razor|resx)$",
         RegexOptions.IgnoreCase))
     .ToList();
 if (trackedFiles.Count == 0)
@@ -184,34 +184,86 @@ static ScanPatterns BuildPatterns() => new(
     // 审计 2026-09-20 S1 补充：Bearer/JWT 形态。`.http` 请求文件的 Authorization 头是
     // 真实凭据的高发载体（原白名单既不含 .http 扩展名也不含该形态，双重漏报）；
     // JWT 的 eyJ 前缀 + 三段 base64url 结构信度足够高，且文档/示例极少长这样。
+    // ITM-694（2026-10-27 清零轮）：前缀族扩充——GitHub 四类安装/用户/服务端/刷新
+    // 令牌（gho_/ghu_/ghs_/ghr_）；OpenAI 变体 sk-proj-/sk-svcacct-（连字符断原字符类）；
+    // Google API AIza（39 位）；Slack 应用级 xapp-。
     Key: new Regex(
-        "AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}"
-        + "|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+        "AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}"
+        + "|xox[baprs]-[A-Za-z0-9-]{10,}|xapp-[0-9A-Z-]{10,}"
+        + "|sk-(proj-|svcacct-|live-)?[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,}"
+        + "|-----BEGIN [A-Z ]*PRIVATE KEY-----"
         + "|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"),
-    // 模式 2：连接串内嵌真实密码——同行同时含 主机键 与 密码键
-    Conn: new Regex("(Host|Server|Data Source|数据源)\\s*=.*(Password|Pwd)\\s*=", RegexOptions.IgnoreCase),
+    // 模式 2：连接串内嵌真实密码——同行同时含 主机键 与 密码键。
+    // ITM-694 扩充三类形态：①URI scheme 的 user:pass@host（postgres://user:pass@…
+    //  原要求 Host|Server 同行，URI 形态天然不含）；②Azure AccountKey=（Base64 长
+    //  值，信度高）；③环境变量形态 KEY=VALUE（DB_PASSWORD=…/MY_SECRET=…）。
+    Conn: new Regex(
+        "(Host|Server|Data Source|数据源)\\s*=.*(Password|Pwd)\\s*="
+        + "|[a-z][a-z0-9+.-]*://[^\\s/:@\"']+:[^\\s/@\"']+@"
+        + "|AccountKey\\s*=[A-Za-z0-9+/=]{30,}"
+        + "|^[A-Z][A-Z0-9_]{2,}(PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)\\s*=\\s*\\S+",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline),
     // 密码值提取（= 后到 ; 或 " 或空白前；可选起始引号）
     Pwd: new Regex("(password|pwd)\\s*=\\s*\"?[^;\", ]+", RegexOptions.IgnoreCase),
-    // 白名单 1：占位词整词 / 示例语义子串（大小写不敏感）
+    // 白名单 1：占位词整词 / 示例语义**整段**（ITM-694 收紧：原「任意子串」使
+    // S3cr3t-demo-key-9x 这类真实凭据因含 demo 被豁免——现要求占位词是完整段
+    // （- _ . 分隔的段之一）或整词命中，防子串撞车）
     Allow1: new Regex(
         "^(test|postgres|root|guest|password|pass|pwd|secret|example|changeme|yourpassword|probe|localhost|none|default)$"
-        + "|example|sample|demo|placeholder|dummy|fake|mock", RegexOptions.IgnoreCase),
+        + "|^(test|sample|demo|placeholder|dummy|fake|mock|example)([-_.][a-z0-9]+)*$|^([a-z0-9]+[-_.])*(test|sample|demo|placeholder|dummy|fake|mock|example)$",
+        RegexOptions.IgnoreCase),
     // 白名单 2：示例密码形态（<词>-pass / secret123 / <占位词>NNN）
     Allow2: new Regex("^([a-z0-9]+-)?pass$|^secret[0-9]+$|^[a-z]+-pass$", RegexOptions.IgnoreCase),
     Digit: new Regex("[0-9]"));
 
 // 判定单行（纯函数）：返回命中的模式名列表，空列表=放行。
 // 两模式独立判定（原 bash 为两遍独立循环：同一行可各报一次，不短路）。
+// ITM-694（2026-10-27）：新增三形态的值提取分支——URI user:pass@ / Azure AccountKey /
+// 环境变量 KEY=VALUE，各自提取候选值走同一三层白名单（AccountKey 的 Base64 长值
+// 信度足够高，直接命中不设白名单——占位 AccountKey 形态由模式 2 正则的 30 位长度
+// 门槛自然排除）。
 static List<string> JudgeLine(string content, ScanPatterns p)
 {
     var hits = new List<string>();
     if (p.Key.IsMatch(content)) hits.Add("已知密钥格式");
     if (!p.Conn.IsMatch(content)) return hits;
 
-    // 提取 Password/Pwd 的值（第一个匹配；去掉前缀与可选起始引号）
+    string? value = null;
+
+    // 形态 A：Host|Server…Password=（原形态）——提取 Password 值
     var m = p.Pwd.Match(content);
-    if (!m.Success) return hits;
-    var value = Regex.Replace(m.Value, "^[^=]*=\\s*\"?", "");
+    if (m.Success)
+        value = Regex.Replace(m.Value, "^[^=]*=\\s*\"?", "");
+
+    // 形态 B：URI scheme user:pass@host——提取冒号与 @ 之间的 pass
+    if (value is null)
+    {
+        var uri = Regex.Match(content, "[a-z][a-z0-9+.-]*://([^\\s/:@\"']+):([^\\s/@\"']+)@",
+            RegexOptions.IgnoreCase);
+        if (uri.Success)
+            value = uri.Groups[2].Value;
+    }
+
+    // 形态 C：环境变量 KEY=VALUE——提取 = 后值
+    if (value is null)
+    {
+        var env = Regex.Match(content, "^[A-Z][A-Z0-9_]{2,}(PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)\\s*=\\s*(\\S+)",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline);
+        if (env.Success)
+            value = env.Groups[2].Value;
+    }
+
+    // 形态 D：Azure AccountKey=Base64——30+ 位 Base64 由正则门槛保证，直接命中
+    if (value is null)
+    {
+        if (Regex.IsMatch(content, "AccountKey\\s*=[A-Za-z0-9+/=]{30,}", RegexOptions.IgnoreCase))
+        {
+            hits.Add("连接串内嵌密码");
+            return hits;
+        }
+        return hits;
+    }
+
     if (value.Length == 0) return hits;
     // 三层白名单：占位词/示例语义 → 示例密码形态 → 无数字且长度 <10
     if (p.Allow1.IsMatch(value)) return hits;
@@ -265,7 +317,21 @@ static int SelfTest()
     // 模式 2：命中与白名单三条边界
     Case("模式2 命中：连接串 + 长密码", JudgeLine(ConnLine("Host=db", longPwd), p) is ["连接串内嵌密码"]);
     Case("白名单1 占位词整词放行", JudgeLine(ConnLine("Host=db", "test"), p).Count == 0);
-    Case("白名单1 示例语义子串放行", JudgeLine(ConnLine("Host=db", "myExamplePwd"), p).Count == 0);
+    // ITM-694 收紧后：示例语义须为完整段——myExamplePwd 是普通词组不再放行，
+    // 示例段形态（demo-xxx / xxx-demo / demo）仍放行
+    Case("白名单1 示例段形态放行", JudgeLine(ConnLine("Host=db", "demo-key"), p).Count == 0);
+    Case("白名单1 真实凭据含 demo 段不再豁免", JudgeLine(ConnLine("Host=db", "S3cr3t-demo-key-9x"), p) is ["连接串内嵌密码"]);
+
+    // ITM-694（2026-10-27）：新前缀族与新连接串形态
+    Case("模式1 GitHub gho_（安装令牌）", JudgeLine("t = gho_" + new string('b', 36), p) is ["已知密钥格式"]);
+    Case("模式1 OpenAI sk-proj- 变体", JudgeLine("k = sk-proj-" + new string('c', 30), p) is ["已知密钥格式"]);
+    Case("模式1 Google AIza", JudgeLine("k = AIza" + new string('d', 33), p) is ["已知密钥格式"]);
+    Case("模式1 Slack xapp-", JudgeLine("t = xapp-1-A" + new string('E', 20), p) is ["已知密钥格式"]);
+    Case("模式2 URI user:pass@ 命中", JudgeLine($"postgres://admin:{longPwd}@db:5432/x", p) is ["连接串内嵌密码"]);
+    Case("模式2 URI 占位密码放行", JudgeLine("postgres://admin:test@db:5432/x", p).Count == 0);
+    Case("模式2 环境变量 DB_PASSWORD 命中", JudgeLine($"DB_PASSWORD={longPwd}", p) is ["连接串内嵌密码"]);
+    Case("模式2 环境变量占位值放行", JudgeLine("DB_PASSWORD=placeholder", p).Count == 0);
+    Case("模式2 Azure AccountKey 命中", JudgeLine("DefaultEndpoints...;AccountKey=" + new string('Z', 40) + "==", p) is ["连接串内嵌密码"]);
     Case("白名单2 示例密码形态放行", JudgeLine(ConnLine("Host=db", Join("secret", "123")), p).Count == 0);
     Case("白名单3 短且无数字放行", JudgeLine(ConnLine("Host=db", "abc"), p).Count == 0);
     // 关键边界：短但有数字 → 三层白名单都不覆盖 → 必须命中（写松此处即静默漏报）

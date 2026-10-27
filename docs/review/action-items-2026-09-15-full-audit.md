@@ -200,7 +200,7 @@
 - **涉及文件**：`src/PalDDD.Dapper/PalDDD.Dapper.csproj:7`、`src/PalDDD.Dapper/DapperAotInitializer.cs:16-19`、`README.md:790`、`README.en.md:791`、`docs/aot.md`（待查）
 - **状态**：✅ 已收口（2026-10-27 对账轮）：README/csproj 失实声称清零（grep 零命中）；权威源 persistence-aot-status.md；实证由 aot-verify 双样本 + dapper-aot-probe（三方言 33/33）承担；DapperAotInitializer.cs:14 残留一处带引号的 Reflection.Emit 根因历史叙述（非状态声称，保留）
 
-### [ ] ITM-690 · csproj 包描述纳入事实一致性门禁 · 可信度 ✅
+### [x] ITM-690 · csproj 包描述纳入事实一致性门禁 · 可信度 ✅
 - **维度**：门禁机械化（把红线从人工纪律变成机械强制）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：ITM-689 这类漂移之所以能存活，是因为现有机械门禁不覆盖 `csproj` 的 `Description`。`scripts/doc-consistency.cs` 头注释明示其只保留 D7（`.ai/README.md` 文件地图），D1-D6/D8-D12 已下沉 `DocConsistencyGateTests`，均不读 csproj `Description`。而 `Description` 与文档中的 AOT 状态同属"可 grep 的事实值"。
@@ -213,7 +213,7 @@
   - 向 `scripts/gate-audit.cs` 追加隔离式探针并登记 `probedGates`。
   - 接入 `.githooks/pre-commit`（触发条件限 csproj 入暂存集）与 `.github/workflows/ci.yml`。
 - **涉及文件**：`scripts/doc-consistency.cs` 或 `test/PalDDD.DependencyInjection.Tests/DocConsistencyGateTests.cs`、`scripts/gate-audit.cs`、`.githooks/pre-commit`、`.github/workflows/ci.yml`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：DocConsistencyGateTests 新增 D13（PackableProjects_HaveRealDescription）——可打包 csproj 的 Description 非空且非占位符；门禁首跑即抓出批二两个静默漏网（EventLog/Projections.EventLog 的 node 批量插入未匹配静默失败）并补齐；边界：只查占位/空形态，不做语义一致泛化判定（防假红）
 
 ### [x] ITM-691 · README 快速开始样例不可编译 · 可信度 ✅
 - **维度**：文档准确性（代码样例可执行性）
@@ -251,7 +251,7 @@
 - **涉及文件**：`docs/sql/{sqlite,mysql,postgresql}/000_schema.sql`、`src/PalDDD.Transactions.EFCore/OutboxDbContext.cs:370`、`src/PalDDD.Transactions.EFCore/InboxDbContext.cs:212-214`、迁移文档
 - **状态**：✅ 已收口（2026-10-27 对账轮）：2026-10-20 数据面轮落地租约索引（docs/sql/migration-2026-10-20-performance-indexes.md + EF 模型同步）+ 2026-10-21 续轮 next_attempt_at 折叠（2d3ad15，PG 20×/MySQL 325×）与 EF 冗余索引删除
 
-### [ ] ITM-694 · `secret-scan` 检测面扩充 · 可信度 ✅
+### [x] ITM-694 · `secret-scan` 检测面扩充 · 可信度 ✅
 - **维度**：安全（凭据防线）
 - **优先级**：P1 · 危害: 高 · 复杂度: 中
 - **问题**：`scripts/secret-scan.cs` 是仓库唯一的凭据控制，但假阴性面偏大，六类绕过全部有据：
@@ -270,7 +270,7 @@
   - `--selftest` 全绿；变异验证：关掉新检测器任一分支确认自测变红。
   - ✅ 已交叉验证：`scripts/secret-scan.cs` 存在且含 `--selftest`。
 - **涉及文件**：`scripts/secret-scan.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：①扩展名白名单补 .pem/.key/.pfx/.p12/.sql/.razor/.resx ②连接串形态补 URI user:pass@/环境变量 KEY=VALUE/Azure AccountKey（JudgeLine 四形态分支提取 + 同一三层白名单）③白名单1 子串匹配收紧为整段（S3cr3t-demo-key-9x 不再豁免）④前缀族补 gho_/ghu_/ghs_/ghr_/sk-proj-/sk-svcacct-/sk-live-/AIza/xapp-；熵启发式按设计不引入；selftest 20→32 用例、全仓 797 文件零假红、gate-audit 新增 URI 探针（47/47）
 
 ### [x] ITM-695 · 认证与授权文档 + 策略入口 · 可信度 ✅
 - **维度**：安全（部署面）/ 文档
@@ -362,7 +362,7 @@
 - **涉及文件**：`docs/conventions.md:825,1030,1035`、`docs/release.md:436,651,693`、`docs/architecture.md:5`
 - **状态**：✅ 已收口（2026-10-27 对账轮）：命令类 .sh 失实引用零残留（V9 门禁持续守护）；test-coverage-baseline.md:31 残留为 2026-09-11 迁移史叙述（合法）；.ai 独立仓库语义与 CI 状态表均已对实况
 
-### [ ] ITM-702 · 锁文件启用 · 可信度 ✅
+### [x] ITM-702 · 锁文件启用 · 可信度 ✅
 - **维度**：依赖可复现性（供应链）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：全仓 `find -name packages.lock.json` 返回 0，`RestorePackagesWithLockFile`/`RestoreLockedMode` 未在任何 props/targets 设置（grep 零命中）。叠加 `global.json:3` 的 RC 线浮动 + `rollForward: latestMajor` + `allowPrerelease: true` 的弱钉版，还原不可复现；CI 不强制 locked mode。
@@ -371,7 +371,7 @@
 - **风险**：**中**。RC 线浮动可能造成首次 lock 不稳定（同一 graph 在不同时间解出不同版本）；需确认 lock 文件生成后 CI 稳定通过。若在 .NET 11 GA 前不稳定，可推迟到 GA 清偿窗口与 ITM-724 一并处理。
 - **验证**：全项目生成 `packages.lock.json` 并被跟踪；CI 以 `--locked-mode` 还原通过；有人为改版本时 CI 变红。
 - **涉及文件**：`Directory.Build.props`、`.github/workflows/ci.yml`、各项目 `packages.lock.json`
-- **状态**：⬜ 待处理
+- **状态**：✅ 按条目预设退出条件收口（2026-10-27 清零轮）：RestorePackagesWithLockFile 实测启用即还原失败（rc.3 SDK MSB4181 无诊断错误 + NETSDK1241 TFM 评估异常，单项目复现；回滚后 restore 恢复绿——S3 反向验证确认因子）——命中原文「GA 前不稳定可推迟」条件，转 2026-11 GA 清偿窗口与 NU5104 一并处理
 
 ### [x] ITM-703 · `PalDDD.Transactions` 的 `M.E.*` 欠声明 · 可信度 ✅
 - **维度**：打包正确性（消费者可解析性）
