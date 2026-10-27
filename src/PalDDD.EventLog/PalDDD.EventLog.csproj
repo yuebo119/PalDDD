@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>Pal.DDD 事件日志抽象 — IEventLog 追加/读取契约与 EventData，支撑事件溯源与投影回放。</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
   </ItemGroup>

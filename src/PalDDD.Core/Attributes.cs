@@ -31,7 +31,7 @@ namespace PalDDD.Core;
 public sealed class GenerateIdAttribute : Attribute
 {
     /// <summary>创建标记并记录键类型——idType 为 null 时在此抛出（编译期另有 PALID005 兜底）。</summary>
-    // v54 P3：null 守卫（对齐同文件 BoundedContext/DomainCapability 守卫族——原 primary ctor
+    // v54 P3：null 守卫（对齐同文件 BoundedContext 守卫族——原 primary ctor
     // 无守卫，[GenerateId((Type?)null)] 编译合法；编译期另有 PALID005 诊断兜底，此处提前拦）
     public GenerateIdAttribute(Type idType)
     {
@@ -86,21 +86,6 @@ public sealed class BoundedContextAttribute(string name) : Attribute
 }
 
 /// <summary>
-/// 标记聚合所属的领域能力 —— 战略 DDD 分析用，表示聚合提供的业务能力。
-/// <para>💡 一个限界上下文中可以有多个领域能力，一个聚合可能实现一个或多个能力。</para>
-/// </summary>
-[AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
-[Obsolete("框架自身零消费（SourceGen/Analyzer 均不读取，精炼裁决 2026-08-26）——v5.0 移除（原 v4.0 改期，2026-10-11 发布轮改指）；需要标记语义请在应用层自定义 attribute。", error: false)]
-public sealed class DomainCapabilityAttribute(string name) : Attribute
-{
-    // P3 修复（八轮评审）：补 blank 校验——对齐 BoundedContextAttribute/AggregateNameAttribute
-    /// <summary>能力名称——空白输入在构造时拒绝。</summary>
-    public string Name { get; } = string.IsNullOrWhiteSpace(name)
-        ? throw new ArgumentException("Name cannot be blank", nameof(name))
-        : name;
-}
-
-/// <summary>
 /// 标记聚合根为流程管理器（Saga / Process Manager）。
 /// <para>
 /// 💡 通俗解释 —— 什么是流程管理器（Saga）？<br/>
@@ -113,22 +98,8 @@ public sealed class DomainCapabilityAttribute(string name) : Attribute
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
 public sealed class ProcessManagerAttribute(string name) : Attribute
 {
-    // P3 修复（八轮评审）：补 blank 校验——对齐 BoundedContextAttribute/AggregateNameAttribute
+    // P3 修复（八轮评审）：补 blank 校验——对齐 BoundedContextAttribute
     /// <summary>流程名称——空白输入在构造时拒绝。</summary>
-    public string Name { get; } = string.IsNullOrWhiteSpace(name)
-        ? throw new ArgumentException("Name cannot be blank", nameof(name))
-        : name;
-}
-
-/// <summary>
-/// 标记聚合根的领域名称。
-/// <para>使用 Attribute 而非抽象属性将框架元数据从领域基类中解耦，保持领域层纯净。</para>
-/// </summary>
-[AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-[Obsolete("框架自身零消费（原 doc 声称'供 Source Generator 使用'已失实，精炼裁决 2026-08-26）——v5.0 移除（原 v4.0 改期，2026-10-11 发布轮改指）；需要标记语义请在应用层自定义 attribute。", error: false)]
-public sealed class AggregateNameAttribute(string name) : Attribute
-{
-    /// <summary>聚合的业务名称</summary>
     public string Name { get; } = string.IsNullOrWhiteSpace(name)
         ? throw new ArgumentException("Name cannot be blank", nameof(name))
         : name;

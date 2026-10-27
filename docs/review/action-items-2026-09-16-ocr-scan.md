@@ -214,7 +214,7 @@
 关键改进：**前置断言从异常类型改为异常消息**——`InvalidOperationException` 可由多条路径抛出，
 仅断言类型会命中"别的路径"而让测试恒真（典型非区分性弱断言）。
 
-### [ ] ITM-785 · `FakeTimeProvider` 时钟在回调**之后**推进 · 可信度 ✅（已核实，未处理）
+### [x] ITM-785 · `FakeTimeProvider` 时钟在回调**之后**推进 · 可信度 ✅（已核实，未处理）
 
 - **维度**：测试基建语义 · **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：`AdvanceNowAndTriggerTimers` 先把回调跑完再赋值 `_now = threshold`，故回调内
@@ -224,9 +224,12 @@
   既有测试——**blast radius 大**。在测试基建上做未评估的语义变更，风险高于收益。
 - **建议**：与 **ITM-707**（挂钟延迟测试改 FakeTimeProvider）一并评估——那次迁移会重写大批
   依赖时间的测试，正是把该语义一次性对齐的窗口。
+- **状态**：✅ 已收口（2026-10-27 清零轮）：AdvanceNowAndTriggerTimers 时钟改为**回调前**推进到阈值（对齐真实 Timer 语义——回调观察触发时刻）+ 末尾取 max（回调内嵌套 Advance 不被覆盖回滚）；五个 FakeTime 消费面板全绿零翻转
+
 - **涉及文件**：`test/PalDDD.Testing/TestHelpers.cs`（`:186` 附近）
 
-### [ ] ITM-786 · ActivityListener 跨项目隔离依赖 `_createdAt` 比较 · 可信度 ⚠（低危）
+### [x] ITM-786 · ActivityListener 跨项目隔离依赖 `_createdAt` 比较 · 可信度 ⚠（低危）
+- **状态**：✅ 已收口（2026-10-27 清零轮）：_createdAt 捕获点从字段初始化器移到构造内、紧邻 AddActivityListener 之前——残留 activity 接纳窗口收窄到语句级；「构造前启动、构造后结束」的长时 activity 仍被过滤，属既有取舍（残留污染防护优先）保留
 
 - **维度**：测试基建语义 · **优先级**：P3 · 危害: 低 · 复杂度: 易
 - **问题**：`_createdAt` 由字段初始化器捕获（早于 `AddActivityListener`），故该窗口内启动的

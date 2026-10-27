@@ -85,9 +85,6 @@ static class PalDDD.Compression.NativeCompressionServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalCompressionNative(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
 
 # PalDDD.Core
-class PalDDD.Core.AggregateNameAttribute
-  ctor(System.String name)
-  property System.String Name
 class PalDDD.Core.AggregateRoot<TId>
 class PalDDD.Core.BoundedContextAttribute
   ctor(System.String name)
@@ -159,9 +156,6 @@ static class PalDDD.Core.Diagnostics.PalMetrics
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamGap
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamItems
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamStarted
-class PalDDD.Core.DomainCapabilityAttribute
-  ctor(System.String name)
-  property System.String Name
 class PalDDD.Core.DomainEvent
   property ByteAether.Ulid.Ulid EventId
   property System.DateTimeOffset OccurredOn
@@ -1126,10 +1120,6 @@ class PalDDD.PalORM.Models.OutboxMessageRow
   property System.String Type
   method PalDDD.PalORM.Models.OutboxMessageRow FromDomain(PalDDD.Transactions.OutboxMessage m)
   method PalDDD.Transactions.OutboxMessage ToDomain()
-class PalDDD.PalORM.Models.VersionProbeRow
-  ctor()
-  property System.String V
-  property System.String V2
 class PalDDD.PalORM.PalOrmPreWarmHostedService<TProvider>
   ctor(PalORM.DbOptions options, System.Int32 connectionCount, PalDDD.Core.Logging.IPalLogger<PalDDD.PalORM.PalOrmPreWarmHostedService<TProvider>> logger)
   method System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken)
@@ -1469,7 +1459,6 @@ static class PalDDD.Projections.EventLog.EventStreamJsonLines
 # PalDDD.Repository.EFCore
 class PalDDD.Repository.EFCore.OutboxDomainEventInterceptor
   ctor(PalDDD.Transactions.IPalOutboxStore outboxStore, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog)
-  property System.Collections.Generic.IReadOnlyList<PalDDD.Core.DomainEvent> PendingEvents
   method System.Void SaveChangesFailed(Microsoft.EntityFrameworkCore.Diagnostics.DbContextErrorEventData eventData)
   method System.Threading.Tasks.Task SaveChangesFailedAsync(Microsoft.EntityFrameworkCore.Diagnostics.DbContextErrorEventData eventData, System.Threading.CancellationToken cancellationToken)
   method System.Int32 SavedChanges(Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesCompletedEventData eventData, System.Int32 result)
@@ -1628,6 +1617,7 @@ enum PalDDD.Transactions.CompensationPolicy
 class PalDDD.Transactions.DefaultSagaManager
   ctor()
   property System.Int32 InvalidatedCount
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> AcquireInvalidationFenceAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TChildState> ExecuteChildSagaAsync(PalDDD.Transactions.Saga<TChildState> childSaga, TChildState childState, System.Object triggerEvent, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.SagaState>> GetInterruptedSagasAsync(System.Threading.CancellationToken ct)
   method System.Void InvalidateInterrupted(ByteAether.Ulid.Ulid sagaId)
@@ -1703,8 +1693,10 @@ interface PalDDD.Transactions.ISagaEventSink
 interface PalDDD.Transactions.ISagaLeaseBatchStore<TState>
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.ISagaManager
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> AcquireInvalidationFenceAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TChildState> ExecuteChildSagaAsync(PalDDD.Transactions.Saga<TChildState> childSaga, TChildState childState, System.Object triggerEvent, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.SagaState>> GetInterruptedSagasAsync(System.Threading.CancellationToken ct)
+  method System.Void InvalidateInterrupted(ByteAether.Ulid.Ulid sagaId)
   method System.Threading.Tasks.ValueTask ResumeAsync(ByteAether.Ulid.Ulid sagaId, TDecision decision, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.ISagaScanCursorStore<TState>
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.DateTimeOffset checkedAt, System.Threading.CancellationToken ct)
@@ -1979,7 +1971,7 @@ class PalDDD.Transactions.Saga<TState>
   property PalDDD.Transactions.ISagaManager SagaManager
   method System.Threading.Tasks.ValueTask CompensateAsync(TState state, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> HandleEventAsync(TState current, System.Object event, System.Threading.CancellationToken ct)
-  method System.Boolean IsTimedOut(TState state, System.DateTimeOffset now, System.Collections.Generic.IReadOnlyList`1[[PalDDD.Transactions.SagaStep, PalDDD.Transactions, Version=4.0.0.0, Culture=neutral, PublicKeyToken=null]]& timedOutSteps)
+  method System.Boolean IsTimedOut(TState state, System.DateTimeOffset now, System.Collections.Generic.IReadOnlyList`1[[PalDDD.Transactions.SagaStep, PalDDD.Transactions, Version=5.0.0.0, Culture=neutral, PublicKeyToken=null]]& timedOutSteps)
   method System.Threading.Tasks.ValueTask<TState> ProcessEventAsync(TState current, System.Object event, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.Saga<TState>
   ctor(System.Object input)
@@ -2040,9 +2032,6 @@ static class PalDDD.Transactions.ServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalInboxEfCore(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOutboxEfCore(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalSagaStateEfCore(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
-class PalDDD.Transactions.SqlServerOutboxDbContext
-  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
-  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.SqliteOutboxDbContext
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)

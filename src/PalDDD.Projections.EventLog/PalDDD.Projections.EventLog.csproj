@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>Pal.DDD EventLog 投影回放源 — IEventLogReplaySource 与断线续读（检查点驱动的重放）。</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\PalDDD.EventLog\PalDDD.EventLog.csproj" />
     <ProjectReference Include="..\PalDDD.Projections\PalDDD.Projections.csproj" />

@@ -258,9 +258,9 @@ Store（Dapper/PalORM/EF/InMemory）在消息行写入成功后通知 `OutboxPro
 - `IMessageBroker`
 - `IPalOutboxStore`
 
-`IPalOutboxStore.LeasePendingMessagesAsync` 必须提供原子租约语义。SQL Server EF Core base context 提供了基于 `UPDLOCK` / `READPAST` 的实现（**未验证/实验性**，见下）。
+`IPalOutboxStore.LeasePendingMessagesAsync` 必须提供原子租约语义。EF Core 各方言 base context 以方言原生的原子 UPDATE/`SKIP LOCKED` 形态实现。
 
-生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]`（源码声明 v4.0 移除）且零测试覆盖，属**实验性/未验证**，生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessedAsync` 会清理 lease/retry 状态，`ReleaseForRetryAsync` 会释放 lease 并设置 `NextAttemptAt`。终态写的 fencing 契约自 v4.0 ②（ADR-026）跨栈统一：租约 token 拒绝时零 DB 写 + 零内存变异；成功时 DB 全套更新 + 入参对象全套回写（EF 栈仅对 Detached 快照回写，跟踪实体自动跳过——并发令牌守卫）。
+生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取；SQL Server base context（零测试覆盖的未验证方言）已随 v5.0.0 移除，需要 SQL Server 请自行派生 `OutboxDbContext`（参照 `UPDLOCK`/`READPAST` 原子租约形态）并补测试。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessedAsync` 会清理 lease/retry 状态，`ReleaseForRetryAsync` 会释放 lease 并设置 `NextAttemptAt`。终态写的 fencing 契约自 v4.0 ②（ADR-026）跨栈统一：租约 token 拒绝时零 DB 写 + 零内存变异；成功时 DB 全套更新 + 入参对象全套回写（EF 栈仅对 Detached 快照回写，跟踪实体自动跳过——并发令牌守卫）。
 
 **并行发布（3.0.0 起）**：`OutboxOptions.MaxDegreeOfParallelism`（默认 1，经 `AddPalOutbox(o => o.MaxDegreeOfParallelism = n)` 配置）>1 时，批内消息按分区交由 per-worker scope（独立 store/DbContext 实例）并行完成「反序列化 → 发布 → 标记」，吞吐随并行度提升；租约/fencing 互斥不受影响。**前提**：① broker 发布须线程安全（Kafka producer 天然支持；RabbitMQ 单 channel 并发发布的 7.x 语义已核实——publisher-confirms 仅护帧发送段、确认等待不串行）；② 消费方幂等（并行加速下乱序提交概率上升）。直构造 `OutboxBatchProcessor` 的调用方不受影响（`IServiceScopeFactory` 为可选尾参；并行度 >1 且缺失时运行期 fail-fast 并给出指引）。
 

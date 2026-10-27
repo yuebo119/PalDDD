@@ -28,14 +28,27 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # v62 P1: NUGET_API_KEY at job level - step-level env does not cross steps, skip step's env.NUGET_API_KEY was always empty (false warning after successful push)
+    # 2026-10-26 对齐 Pal.ORM M1-2：发布审批门——在 GitHub Settings → Environments →
+    # production 配置 required reviewers 后，推送 NuGet 前需人工批准（发布即不可逆，
+    # 审批点应在推送侧而非触发侧）。仓库侧未配置该 environment 时本声明无行为变化
+    # （GitHub 隐式创建空环境直接放行），一次性配置见 docs/release.md §6.4。
+    environment: production
+    # ITM-717（2026-10-27 清零轮）：密钥收窄到唯一消费步。密钥本体只在 Push 步的 step env
+    # 注入；三个判定步的 if 读 job 级布尔信号 HAS_NUGET_KEY（job env 允许 secrets 表达式，
+    # step if 不允许直接读 secrets 上下文——2026-10-27 首发实证：if 内联 secrets 使整个
+    # workflow 校验失败，v62 的 step env 不跨步坑以本布尔形态兼顾）。
     env:
-      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      HAS_NUGET_KEY: ${{ secrets.NUGET_API_KEY != '' }}
     timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 2026-10-26 对齐 Pal.ORM：完整历史——SourceLink 嵌入 repository commit 需要
+          # 可达历史，且 changelog-check C8 的「段日期 == tag 提交日」比对需要 tag 在
+          # checkout 内可解析（浅克隆下 v<version> 引用不可达）。
+          fetch-depth: 0
 
       - name: Resolve version
         id: version
@@ -57,8 +70,19 @@ jobs:
           dotnet-version: '11.0.x'
 
       - name: Verify version matches Directory.Build.props
+        # 2026-10-26 对齐 Pal.ORM 两点：①比对改为 VersionPrefix+VersionSuffix 组合
+        # 全版本——preview tag（如 v5.0.0-preview.1）不再被前缀比对误拒；②grep -oP
+        # 改 POSIX sed——\K/lookahead 依赖 PCRE，非 GNU grep 环境（本地 Git Bash 复
+        # 跑）不可用（Pal.ORM B87 教训）。
         run: |
-          PROPS_VERSION=$(grep -oP '<VersionPrefix>\K[^<]+' Directory.Build.props)
+          PREFIX=$(sed -n 's/.*<VersionPrefix>\([^<]*\)<\/VersionPrefix>.*/\1/p' Directory.Build.props | head -1)
+          SUFFIX=$(sed -n 's/.*<VersionSuffix>\([^<]*\)<\/VersionSuffix>.*/\1/p' Directory.Build.props | head -1)
+          if [ -z "$PREFIX" ]; then
+            echo "ERROR: Directory.Build.props has no VersionPrefix"
+            exit 1
+          fi
+          PROPS_VERSION="$PREFIX"
+          if [ -n "$SUFFIX" ]; then PROPS_VERSION="$PREFIX-$SUFFIX"; fi
           TAG_VERSION="${{ steps.version.outputs.version }}"
           if [ "$PROPS_VERSION" != "$TAG_VERSION" ]; then
             echo "ERROR: Version mismatch — Directory.Build.props=$PROPS_VERSION, tag/input=$TAG_VERSION"
@@ -133,6 +157,16 @@ jobs:
           ./samples/PalDDD.PalOrmSample/bin/aot-publish/PalDDD.PalOrmSample
           echo "AOT run: PASSED"
 
+      - name: Verify CHANGELOG entry (before pack)
+        # 2026-10-26 对齐 Pal.ORM M1-3：CHANGELOG 结构校验前置到 pack/push 之前——
+        # 此前 release 路径无任何 CHANGELOG 校验（§4.1/§5.1 仅本地清单项），漏转正/
+        # 日期失实可在推送 NuGet 之后才暴露。校验位次即阻断语义：放 push 之后形同虚设。
+        # C1–C10 全集：[Unreleased] 首位 / tag 对账 / 分类顺序 / 预估措辞 / 术语泄漏 /
+        # 顶部版本 == 本次发布版本 / 标题格式 / 段日期 == tag 提交日 / 日期单调 / 条目非空。
+        run: |
+          set -euo pipefail
+          dotnet run scripts/changelog-check.cs -- "${{ steps.version.outputs.version }}"
+
       - name: Pack all publishable projects
         run: |
           set -euo pipefail
@@ -164,8 +198,11 @@ jobs:
       - name: Push to NuGet.org
         # R54-P1-1 勘正（2026-09-19 第五十四轮片1）：补 skip-nuget 接线——原条件只查
         # key 存在，「勾选 skip-nuget + 有 key」时 35 包照推（input 唯一有实际作用的
-        # 场景完全失效，不可逆公开副作用）
-        if: ${{ env.NUGET_API_KEY != '' && inputs.skip-nuget != true }}
+        # 场景完全失效，不可逆公开副作用）。ITM-717（2026-10-27）：密钥唯一注入点收窄到
+        # 本步（step env），if 判定直接读 secrets 上下文。
+        if: ${{ env.HAS_NUGET_KEY == 'true' && inputs.skip-nuget != true }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
           set -euo pipefail
           PUSHED=0
@@ -186,7 +223,7 @@ jobs:
           fi
 
       - name: NuGet push skipped (secret missing) — fail
-        if: ${{ env.NUGET_API_KEY == '' && inputs.skip-nuget != true }}
+        if: ${{ env.HAS_NUGET_KEY != 'true' && inputs.skip-nuget != true }}
         run: |
           # M3-9（v2 审计 O-4，2026-09-19）：原 v60 形态仅 ::warning:: 且 GitHub Release
           # 照建——「发布成功」可等于「0 个包发布」（假成功）。tag/手动触发均为显式
@@ -196,17 +233,83 @@ jobs:
           exit 1
 
       - name: NuGet push intentionally skipped (explicit opt-out)
-        if: ${{ env.NUGET_API_KEY == '' && inputs.skip-nuget == true }}
+        if: ${{ env.HAS_NUGET_KEY != 'true' && inputs.skip-nuget == true }}
         run: |
           echo "::warning::NuGet push intentionally skipped (skip-nuget=true) - GitHub Release will be created with nupkg attachments only."
+
+      - name: Extract Release Notes
+        # 2026-10-26 对齐 Pal.ORM：Release body 此前是整个 CHANGELOG.md 全文，现改为
+        # 当前版本段自动提取 + 动态包表（从实际 nupkg 产物生成，增减包零维护）+ 与上一
+        # 版本的 compare 链接。发布说明唯一真源是 CHANGELOG.md，禁止手写第二份。
+        # 版本段存在性已由上游 changelog-check C6 保证（段缺失在那一步即红）。
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # ── 1. 提取 CHANGELOG 当前版本段（段界 = ## [ 行；本仓格式 ## [X.Y.Z] — 日期）──
+          awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "[" ver "]")) { found=1; next }
+            }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+
+          # ── 2. 动态生成包表格（从实际打包产物读取，增减包零维护） ──
+          PKG_TABLE=""
+          for nupkg in release-packages/*.nupkg; do
+            pkg=$(basename "$nupkg" | sed "s/\.$VERSION\.nupkg//")
+            PKG_TABLE="$PKG_TABLE| $pkg | $VERSION |\n"
+          done
+
+          # ── 3. 获取上一版本号（CHANGELOG 中当前段的下一个 ## 行） ──
+          PREV_VER=$(awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (found) { gsub(/## \[|\].*/, "", $0); print $0; exit }
+              if (index($0, "[" ver "]")) found=1
+            }
+          ' CHANGELOG.md)
+
+          # ── 4. 组装 Release Body ──
+          {
+            echo "# PalDDD $GITHUB_REF_NAME"
+            echo ""
+            if [ -n "$PREV_VER" ]; then
+              echo "**[与 v$PREV_VER 对比](https://github.com/yuebo119/PalDDD/compare/v$PREV_VER...$GITHUB_REF_NAME)** |"
+            fi
+            echo "[NuGet](https://www.nuget.org/packages/PalDDD.Core) |"
+            echo "[完整变更日志](https://github.com/yuebo119/PalDDD/blob/main/CHANGELOG.md)"
+            echo ""
+            echo "## 📦 发布包"
+            echo ""
+            echo "| 包名 | 版本 |"
+            echo "|------|------|"
+            echo -e "$PKG_TABLE" | head -n -1
+            echo ""
+            if [ -s release-notes.md ]; then
+              echo "## 📋 变更明细"
+              echo ""
+              cat release-notes.md
+              echo ""
+            fi
+            echo "---"
+            echo ""
+            echo "| 资源 | 链接 |"
+            echo "|------|------|"
+            echo "| 📖 文档 | [README](https://github.com/yuebo119/PalDDD#readme) |"
+            echo "| 📋 全部变更 | [CHANGELOG.md](https://github.com/yuebo119/PalDDD/blob/main/CHANGELOG.md) |"
+            echo "| 🏗️ 架构决策 | [ADR 目录](https://github.com/yuebo119/PalDDD/tree/main/docs/decisions) |"
+            echo "| 🐛 报告问题 | [Issues](https://github.com/yuebo119/PalDDD/issues) |"
+          } > full-release-body.md
 
       - name: Create GitHub Release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          body_path: CHANGELOG.md
+          name: PalDDD ${{ github.ref_name }}
+          body_path: full-release-body.md
           files: release-packages/*.nupkg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

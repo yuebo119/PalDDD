@@ -24,10 +24,15 @@ namespace PalDDD.Testing;
 public sealed class RecordingActivityListener : IDisposable
 {
     private readonly ActivityListener _listener;
-    private readonly DateTimeOffset _createdAt = DateTimeOffset.UtcNow;
+    private readonly DateTimeOffset _createdAt;
 
     public RecordingActivityListener()
     {
+        // ITM-786（2026-10-27）：捕获点从字段初始化器（构造前执行）移到紧邻
+        // AddActivityListener 之前——字段初始化器与监听器挂接之间的窗口内启动的
+        // 残留 activity 不再被接纳。「构造前启动、构造后结束」的长时 activity 仍会被
+        // StartTimeUtc 过滤丢弃，属既有设计取舍（残留污染防护优先），保留。
+        _createdAt = DateTimeOffset.UtcNow;
         _listener = new ActivityListener
         {
             ShouldListenTo = static source => source.Name == PalActivitySource.Name,
@@ -194,6 +199,11 @@ public sealed class FakeTimeProvider : TimeProvider
             expired = [.. _timers.Where(t => t.DueTime <= threshold)];
             foreach (var t in expired)
                 _timers.Remove(t);
+            // ITM-785（2026-10-27 清零轮）：时钟在回调**之前**推进到阈值——对齐真实 Timer 语义
+            //（回调观察到的是触发时刻，不是上一时刻）；原实现回调先跑、时间后推，回调内
+            // GetUtcNow 全部读到旧时间。
+            _now = threshold;
+            _timestamp = threshold.Ticks;
         }
 
         // P2 修复（十轮·盲区评审）：按 DueTime 升序触发——对齐真实 Timer 的到期序语义，
@@ -221,11 +231,15 @@ public sealed class FakeTimeProvider : TimeProvider
             }
         }
 
-        // 无论是否有计时器到期、回调是否抛出，时间必须推进到阈值（锁内——第五十三轮 P2-1）
+        // 时间已随批次开始推进到阈值（ITM-785）；此处收口取 max——回调内嵌套的 Advance
+        // 不被阈值覆盖回滚（原无条件覆盖会把回调内推进的时间拨回去）。锁内（第五十三轮 P2-1）。
         lock (_timersLock)
         {
-            _now = threshold;
-            _timestamp = threshold.Ticks;
+            if (threshold > _now)
+            {
+                _now = threshold;
+                _timestamp = threshold.Ticks;
+            }
         }
 
         if (failures is { Count: 1 })

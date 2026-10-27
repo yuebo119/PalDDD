@@ -10,7 +10,7 @@ namespace PalDDD.Integration.Tests;
 /// <summary>
 /// 契约格子清单（2026-10-21 契约盘点 R2 后续项 P1）。
 /// <para>
-/// 61 格 = 组件 × 栈 × 方言。每格登记：实现类型、代表测试文件、覆盖状态。
+/// 60 格 = 组件 × 栈 × 方言（v5.0.0 移除 SQLServer Outbox 格后 61→60）。每格登记：实现类型、代表测试文件、覆盖状态。
 /// 本测试做三件事：① 每格的实现类型在引用程序集中存在并实现对应抽象；
 /// ② 新增实现（未登记的根实现）立即失败；③ Local/CiOnly 格必须有含
 /// [Test] 与 Assert.That 的测试文件，AcceptedGap 必须带原因且集合冻结。
@@ -49,7 +49,8 @@ public sealed class ContractCellManifestTests
         new("Outbox", "EFCore", "SQLite", "PalDDD.Transactions.SqliteOutboxDbContext", IntegrationTests + "OutboxEfCoreTests.cs", CellStatus.Local),
         new("Outbox", "EFCore", "PostgreSQL", "PalDDD.Transactions.PostgreSqlOutboxDbContext", IntegrationTests + "TechDebtGuardTests.cs", CellStatus.AcceptedGap, "TechDebtGuardTests 白名单：无关系型用例（2026-09-22 起登记）"),
         new("Outbox", "EFCore", "MySQL", "PalDDD.Transactions.MySqlOutboxDbContext", IntegrationTests + "TechDebtGuardTests.cs", CellStatus.AcceptedGap, "TechDebtGuardTests 白名单：无关系型用例（2026-09-22 起登记）"),
-        new("Outbox", "EFCore", "SQLServer", "PalDDD.Transactions.SqlServerOutboxDbContext", IntegrationTests + "TechDebtGuardTests.cs", CellStatus.AcceptedGap, "Obsolete 实验方言，零测试且无 SQL Server 容器"),
+        // Outbox/EFCore/SQLServer 格子已随 SqlServerOutboxDbContext 移除而撤销（v5.0.0
+        // 兑现 2026-08-26 精炼裁决的废弃承诺，2026-10-27 发版轮）
 
         // ── Inbox（10 格）──
         new("Inbox", "InMemory", "-", "PalDDD.Transactions.InMemoryInboxStore", TransactionsTests + "InMemoryStoreTests.cs", CellStatus.Local),
@@ -113,9 +114,9 @@ public sealed class ContractCellManifestTests
     ];
 
     /// <summary>
-    /// AcceptedGap 精确集合（R4 冻结）：只允许这 13 格。新增或替换任何一格都会红，
-    /// 防止“总数不变、缺口换位”洗白。剩余缺口的共同原因是 EF PG/MySQL provider 包
-    /// 不在测试面（EF Outbox 另有 TechDebtGuard 的 3 项账本）。
+    /// AcceptedGap 精确集合（R4 冻结，2026-10-27 缩至 12 格）：只允许这些格。新增或替换
+    /// 任何一格都会红，防止“总数不变、缺口换位”洗白。剩余缺口的共同原因是 EF PG/MySQL
+    /// provider 包不在测试面（EF Outbox 另有 TechDebtGuard 的 2 项账本）。
     /// </summary>
     private static readonly string[] ExpectedAcceptedGaps =
     [
@@ -127,7 +128,6 @@ public sealed class ContractCellManifestTests
         "Inbox/EFCore/PostgreSQL",
         "Outbox/EFCore/MySQL",
         "Outbox/EFCore/PostgreSQL",
-        "Outbox/EFCore/SQLServer",
         "Projections/EFCore/MySQL",
         "Projections/EFCore/PostgreSQL",
         "Saga/EFCore/MySQL",
@@ -163,7 +163,7 @@ public sealed class ContractCellManifestTests
     [Test]
     public async Task Manifest_CoversAllCells_AndEveryRowIsWired()
     {
-        await Assert.That(Cells.Length).IsEqualTo(61);
+        await Assert.That(Cells.Length).IsEqualTo(60);
 
         // 多个程序集存在同全名类型（如 ServiceCollectionExtensions），用集合而非字典。
         var types = AnchorAssemblies
@@ -248,7 +248,7 @@ public sealed class ContractCellManifestTests
         Console.WriteLine($"契约格子：总计 {Cells.Length}｜verified-local {local}｜verified-ci-only {ciOnly}｜accepted-gap {gaps}");
 
         await Assert.That(local + ciOnly + gaps).IsEqualTo(Cells.Length);
-        await Assert.That(gaps).IsEqualTo(13);
+        await Assert.That(gaps).IsEqualTo(12);
 
         // 精确集合冻结：总数相同但缺口换位同样红（R4）。
         var actualGaps = Cells

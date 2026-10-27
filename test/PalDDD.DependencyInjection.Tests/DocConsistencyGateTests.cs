@@ -505,4 +505,36 @@ public sealed class DocConsistencyGateTests
                         m.Value,
                         int.Parse(Regex.Match(m.Value, @"^[0-9]+").Value)))))
             .ToList();
+
+    // ═══════════════════════════════════════════════════════════════
+    // ITM-690（2026-10-27 清零轮）：csproj 包描述纳入事实一致性门禁（D13）
+    // ═══════════════════════════════════════════════════════════════
+    // 背景同 ITM-689：Description 是 nuget.org 消费者读到的原文，占位符与失实状态能
+    // 存活是因为此前无机械门禁覆盖。本门禁只查「占位符/空」这一机械可判定形态——
+    // 不做「描述与代码语义一致」的泛化判定（会制造大量假红，条目正文已声明边界）。
+
+    /// <summary>D13：全部可打包 csproj 的 Description 非空且非 NuGet 默认占位符。</summary>
+    [Test]
+    public async Task PackableProjects_HaveRealDescription()
+    {
+        var srcDir = RepoPath("src");
+        var offenders = new List<string>();
+
+        foreach (var csproj in Directory.EnumerateFiles(srcDir, "*.csproj", SearchOption.AllDirectories))
+        {
+            var text = File.ReadAllText(csproj);
+            // 与 count-audit 的 packable 推导同口径：显式 IsPackable=false 的项目不发布、不设门禁
+            if (text.Contains("<IsPackable>false</IsPackable>", StringComparison.Ordinal))
+                continue;
+
+            var m = Regex.Match(text, "<Description>([^<]*)</Description>");
+            if (!m.Success || string.IsNullOrWhiteSpace(m.Groups[1].Value)
+                || m.Groups[1].Value.Trim() == "Package Description")
+            {
+                offenders.Add($"{Path.GetFileName(csproj)}: {(m.Success ? Truncate(m.Groups[1].Value, 40) : "(missing)")}");
+            }
+        }
+
+        await Assert.That(offenders).IsEmpty();
+    }
 }

@@ -339,6 +339,62 @@ public sealed partial class EndpointExtensionsTests
         await Assert.That(body).Contains("Unsupported Media Type");
     }
 
+    // ── ITM-696（2026-10-27 清零轮）：MapQuery 绑定段输入解析异常归 400 ──
+    // 此前 FormatException 等输入解析失败以 500 逃逸（客户端输入问题被报成服务端故障）。
+
+    [Test]
+    public async Task MapQuery_BindQueryThrowsFormatException_Returns400Not500()
+    {
+        var endpoints = new TestEndpointRouteBuilder();
+        endpoints.MapQuery<TestQuery, TestResult>(
+            "/orders/{id}",
+            static _ => throw new FormatException("Unrecognized Guid format."),
+            TestJsonContext.Default.TestResult);
+
+        var context = CreateGetContext();
+        await GetRequestDelegate(endpoints)(context);
+
+        await Assert.That(context.Response.StatusCode).IsEqualTo(StatusCodes.Status400BadRequest);
+        var body = ReadBody(context);
+        await Assert.That(body).Contains("Invalid query binding");
+        await Assert.That(body).Contains("Unrecognized Guid format");
+    }
+
+    [Test]
+    public async Task MapQuery_BindQueryThrowsInvalidOperationException_StillEscapes()
+    {
+        // 白名单外异常仍逃逸（500 由全局中间件兜底）——证明 400 映射按类型收窄，
+        // 服务端 bug 不被吞成 400（ITM-696 设计边界）
+        var endpoints = new TestEndpointRouteBuilder();
+        endpoints.MapQuery<TestQuery, TestResult>(
+            "/q", static _ => throw new InvalidOperationException("server bug"),
+            TestJsonContext.Default.TestResult);
+
+        var context = CreateGetContext();
+        await Assert.That(() => GetRequestDelegate(endpoints)(context)).Throws<InvalidOperationException>();
+    }
+
+    // ── ITM-695（2026-10-27 清零轮）：MapQuery 的授权约定链路可用性 ──
+    // 端点返回 IEndpointConventionBuilder，调用方可直接链 RequireAuthorization(策略)——
+    // 拒绝执行由 ASP.NET Core 授权中间件按挂载的策略执行（401/403），框架层证明到
+    // 策略元数据成功挂载即可。
+
+    [Test]
+    public async Task MapQuery_RequireAuthorizationChain_MountsPolicyMetadata()
+    {
+        var endpoints = new TestEndpointRouteBuilder();
+        endpoints.MapQuery<TestQuery, TestResult>(
+            "/orders/{id}", static _ => new TestQuery(), TestJsonContext.Default.TestResult)
+            .RequireAuthorization("admin-policy");
+
+        var endpoint = endpoints.DataSources.SelectMany(ds => ds.Endpoints).OfType<RouteEndpoint>().Single();
+        // RequireAuthorization(policyName) 挂载 IAuthorizeData 元数据（策略由授权中间件
+        // 从该元数据编译执行）——框架层证明约定链可用即锚定到这一层
+        var authorizeData = endpoint.Metadata.GetMetadata<Microsoft.AspNetCore.Authorization.IAuthorizeData>();
+        await Assert.That(authorizeData).IsNotNull();
+        await Assert.That(authorizeData!.Policy).IsEqualTo("admin-policy");
+    }
+
     [Test]
     public async Task MapPalHealthChecks_ConfigureCallback_AppliesConvention()
     {
@@ -374,12 +430,22 @@ public sealed partial class EndpointExtensionsTests
         return context;
     }
 
+    /// <summary>构造 GET 请求上下文（MapQuery 绑定段测试）</summary>
+    private static DefaultHttpContext CreateGetContext()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = "GET";
+        context.Response.Body = new MemoryStream();
+        return context;
+    }
+
     /// <summary>源生成 JsonContext——仓库全局 JsonSerializerIsReflectionEnabledByDefault=false
     ///（Directory.Build.props），反射版 GetTypeInfo 不可用；415 短路不触达反序列化，
     /// 本 context 仅满足 MapCommand 的非空 JsonTypeInfo 参数契约</summary>
     [JsonSerializable(typeof(TestCommand))]
     [JsonSerializable(typeof(TestCommandWithResult))]
     [JsonSerializable(typeof(TestResult))]
+    [JsonSerializable(typeof(TestQuery))]
     private sealed partial class TestJsonContext : JsonSerializerContext;
 
     private static string ReadBody(HttpContext context)
@@ -403,6 +469,9 @@ public sealed partial class EndpointExtensionsTests
     {
         public Guid Id { get; init; }
     }
+
+    /// <summary>MapQuery 绑定测试查询（ITM-695/696）</summary>
+    private sealed class TestQuery : CQRS.IQuery<TestResult>;
 
     private sealed class TestCommandWithResult : CQRS.ICommand<TestResult>
     {

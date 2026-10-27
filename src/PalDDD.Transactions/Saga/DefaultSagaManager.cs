@@ -12,7 +12,6 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
-using System.Reflection;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions;
@@ -24,10 +23,10 @@ namespace PalDDD.Transactions;
 /// 中断恢复使用内存字典暂存决策与恢复派发闭包。<see cref="ResumeAsync{TDecision}"/>
 /// 以决策为事件重新进入 Saga 的 <c>ProcessEventAsync</c> 管线，成功后移除条目；
 /// 未知 SagaId 或二次恢复抛 <see cref="InvalidOperationException"/>（不再静默丢弃决策）。
-/// <b>本实现仅进程内</b>：中断条目随进程重启丢失。<see cref="ISagaManager"/> 含 internal
-/// 成员，外部程序集无法实现持久化替换（编译失败，CS0535）——需要持久化时应等待接口公开化
-/// （v5.0 破坏性变更轨道），不要按「可替换」设计。<br/>
-/// 子 Saga 执行直接委托给子编排器的 ProcessEventAsync。
+/// <b>本实现仅进程内</b>：中断条目随进程重启丢失。v5.0 起接口已公开化（原 internal 成员
+/// 转 public DIM），需要持久化的应用可实现 <see cref="ISagaManager"/> 替换本实现。<br/>
+/// 子 Saga 执行直接委托给子编排器的 ProcessEventAsync（非泛型分派经接口 DIM 默认实现
+/// 复用同程序集 <c>SagaChildDispatch</c>）。
 /// </remarks>
 public sealed class DefaultSagaManager : ISagaManager
 {
@@ -36,6 +35,15 @@ public sealed class DefaultSagaManager : ISagaManager
 
     /// <summary>已失效（超时补偿回滚）的 sagaId 集合——拒绝幽灵条目再注册（v27 P2）</summary>
     private readonly ConcurrentDictionary<PalUlid, byte> _invalidated = [];
+
+    /// <summary>
+    /// per-saga 决策栅栏（v5.0 manager 侧 fencing，2026-10-27）——串行化
+    /// <see cref="ResumeAsync{TDecision}"/> 决策派发与超时补偿侧的
+    /// <see cref="AcquireInvalidationFenceAsync"/> 栅栏。门字典只增不减
+    /// （量级 = 中断过的 sagaId 数，与 <c>_invalidated</c> 同款披露；
+    /// SemaphoreSlim 无 finalizer，进程生命周期持有无泄漏面）。
+    /// </summary>
+    private readonly ConcurrentDictionary<PalUlid, SemaphoreSlim> _fences = [];
 
     /// <summary>
     /// 已失效（超时补偿回滚）的 sagaId 数量——诊断/测试用（M3-4）。
@@ -67,8 +75,10 @@ public sealed class DefaultSagaManager : ISagaManager
     /// 失效发生前通过（条目尚未移除），决策派发进入 Saga 管线与补偿并发执行；失效集写入后
     /// 新决策才经"无已注册条目"检查可见失败。
     /// v26/v27 修复族只关闭了"补偿完成后"半边（迟到决策经失效集/终态检查可见失败），
-    /// "补偿进行中"半边仍敞开。框架级根治需 manager 侧租约 fencing（v5.0 接口窗口，原 v4.0 改期）；
-    /// 调用方对配 Timeout 的 HITL 步骤应保证决策与扫描周期错开。
+    /// "补偿进行中"半边已由 v5.0 manager 侧 fencing 根治（2026-10-27，兑现下方承诺）：
+    /// <see cref="ResumeAsync{TDecision}"/> 决策派发全程持 per-saga 门，超时补偿经
+    /// <see cref="AcquireInvalidationFenceAsync"/> 持同一门（先写失效集拒新决策再执行补偿）——
+    /// 两向互斥下，补偿进行中到达的决策等待补偿完成后按「无条目/已失效」可见失败。
     /// </remarks>
     public async ValueTask ResumeAsync<TDecision>(
         PalUlid sagaId, TDecision decision, CancellationToken ct)
@@ -76,6 +86,27 @@ public sealed class DefaultSagaManager : ISagaManager
     {
         ArgumentNullException.ThrowIfNull(decision);
 
+        // v5.0 fencing：决策检查与派发全程持门（同 sagaId 决策串行契约由调用方约定
+        // 升级为框架内强制）。失效集命中（栅栏在位或补偿已完成）先于条目检查可见失败。
+        var gate = _fences.GetOrAdd(sagaId, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_invalidated.ContainsKey(sagaId))
+                throw new InvalidOperationException(
+                    $"Saga {sagaId} 已被超时补偿失效（补偿进行中或已完成），决策 {decision.GetType().Name} 拒绝派发——可见失败而非静默丢弃。");
+            await ResumeCoreAsync(sagaId, decision, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async ValueTask ResumeCoreAsync<TDecision>(
+        PalUlid sagaId, TDecision decision, CancellationToken ct)
+        where TDecision : notnull
+    {
         if (!_interrupted.TryGetValue(sagaId, out var entry))
             throw new InvalidOperationException(
                 $"Saga {sagaId} 无已注册的中断条目——可能从未中断、已恢复成功，或进程重启丢失内存状态。");
@@ -161,6 +192,32 @@ public sealed class DefaultSagaManager : ISagaManager
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// v5.0 manager 侧 fencing（2026-10-27）：先写失效集（拒绝新决策与新注册——超时判定
+    /// 成立即可拒，补偿失败也是终态），再持 per-saga 门返回栅栏。调用方（超时补偿处理器）
+    /// 在栅栏内执行补偿并在完成后 Dispose 释放门；期间到达的决策在
+    /// <see cref="ResumeAsync{TDecision}"/> 的门上等待，补偿完成后按「无条目/已失效」
+    /// 可见失败。失效集幂等：<see cref="InvalidateInterrupted"/> 在栅栏释放后的写入是重复登记。
+    /// </remarks>
+    public async ValueTask<IAsyncDisposable> AcquireInvalidationFenceAsync(PalUlid sagaId, CancellationToken ct)
+    {
+        _invalidated[sagaId] = 1;
+        var gate = _fences.GetOrAdd(sagaId, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        return new GateFence(gate);
+    }
+
+    /// <summary>per-saga 决策栅栏句柄——Dispose 释放门（补偿处理器在补偿完成后调用）。</summary>
+    private sealed class GateFence(SemaphoreSlim gate) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            gate.Release();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    /// <inheritdoc/>
     /// <remarks>M1-5（v2 审计 A-5，2026-09-19）：本实现**恒返回空列表**且接口含
     /// internal 成员无法被外部替换——运营待办查询须经 ISagaStateStore 按状态过滤，
     /// 详见接口 remarks 的完整表态。此处不抛 NotSupportedException：空返回的调用方
@@ -185,77 +242,6 @@ public sealed class DefaultSagaManager : ISagaManager
         return await childSaga.ProcessEventAsync(childState, triggerEvent, ct).ConfigureAwait(false);
     }
 
-    /// <inheritdoc/>
-    [RequiresUnreferencedCode("Non-generic child saga dispatch relies on reflection to call ProcessEventAsync; child saga types must be preserved for AOT.")]
-    [RequiresDynamicCode("Uses MakeGenericMethod/MakeGenericType which requires dynamic code generation for AOT compatibility.")]
-    async ValueTask<SagaState> ISagaManager.ExecuteChildSagaNonGenericAsync(
-        object childSaga, SagaState childState, object triggerEvent, CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(childSaga);
-        ArgumentNullException.ThrowIfNull(childState);
-        ArgumentNullException.ThrowIfNull(triggerEvent);
-
-        var stateType = childState.GetType();
-        var sagaType = childSaga.GetType();
-
-        // Resolve ProcessEventAsync(TState, object, CancellationToken) on the saga type
-        // P1 修复（七轮评审）：ProcessEventAsync 是非泛型方法（Saga.cs:181 签名
-        // ProcessEventAsync(TState, object, CancellationToken)）——MakeGenericMethod 对非泛型
-        // MethodInfo 必抛 ArgumentException。直接调用即可。
-        // A8（S1 轮，2026-10-15）：查找结果按 saga 类型缓存——ChildSaga 每 attempt 一次
-        // 反射链（本查找 + Invoke），MethodInfo 与类型稳定对应，按类型缓存消重复查找。
-        var method = ProcessEventAsyncBySagaType.GetOrAdd(sagaType, static t => t.GetMethod(
-            "ProcessEventAsync",
-            BindingFlags.Public | BindingFlags.Instance)
-            ?? throw new InvalidOperationException(
-                $"Saga type '{t.Name}' does not have a public ProcessEventAsync method. Ensure it inherits Saga<TState>."));
-
-        // Invoke: returns boxed ValueTask<TState>（非泛型方法直接 Invoke）
-        var boxedValueTask = method.Invoke(childSaga, [childState, triggerEvent, ct])!;
-
-        return await UnboxAndAwaitValueTaskAsync(boxedValueTask, method.ReturnType, stateType).ConfigureAwait(false);
-    }
-
-    // A8（S1 轮）：反射查找缓存——键为稳定类型（saga 类型 / ValueTask<T> 类型 / Task<T>
-    // 类型），值为对应成员；ChildSaga 每 attempt 的固定反射税（3 次 GetMethod + 2 次
-    // Invoke + 1 次 GetValue）中的查找部分归零，Invoke 语义不变。
-    private static readonly ConcurrentDictionary<Type, MethodInfo> ProcessEventAsyncBySagaType = new();
-    private static readonly ConcurrentDictionary<Type, MethodInfo> AsTaskByValueTaskType = new();
-    private static readonly ConcurrentDictionary<Type, PropertyInfo> ResultByTaskType = new();
-
-    /// <summary>拆箱并 await 反射调用的 ValueTask&lt;TState&gt;，返回 SagaState 结果。</summary>
-    [RequiresDynamicCode("Uses MakeGenericType to construct ValueTask<TState> when reflection return type is not pre-constructed; not compatible with native AOT.")]
-    [UnconditionalSuppressMessage("Aot", "IL2075:RequiresDynamicallyAccessedMembers",
-        Justification = "整个方法已声明 RequiresDynamicCode 边界——GetProperty 位于该边界内，消费方已获得编译期 AOT 警告。")]
-    // IL2070 同族补齐（2026-10-17 CI aot-verify 实证）：rc.2 SDK 修剪分析对
-    // t.GetMethod("AsTask")/t.GetProperty("Result")（this=缓存键 Type）报 IL2070
-    // （'this' 实参不满足 DynamicallyAccessedMemberTypes），与 IL2075 同属
-    // RequiresDynamicCode 边界内的反射家族——查找目标为框架稳定成员
-    // （ValueTask<T>.AsTask / Task<T>.Result），随 IL2075 同边界压制。
-    [UnconditionalSuppressMessage("Aot", "IL2070:RequiresDynamicallyAccessedMembers",
-        Justification = "方法已声明 RequiresDynamicCode 边界；GetMethod/GetProperty 的 this（缓存键 Type）位于该边界内，查找目标为框架稳定成员，消费方已获编译期 AOT 警告。")]
-    private static async ValueTask<SagaState> UnboxAndAwaitValueTaskAsync(
-        object boxedValueTask, Type? methodReturnType, Type stateType)
-    {
-        // P3 修复（八轮评审）：优先直接使用 method.ReturnType（已是构造完的 ValueTask<T>）——
-        // MakeGenericType(stateType) 在方法实际声明类型与运行时 stateType 不一致时
-        // （如 saga 类型继承链上的隐藏/协变场景）会构造出错误类型导致 AsTask 绑定失败
-        var valueTaskType = methodReturnType is { IsConstructedGenericType: true } constructed
-            && constructed.GetGenericTypeDefinition() == typeof(ValueTask<>)
-                ? constructed
-                : typeof(ValueTask<>).MakeGenericType(stateType);
-        // A8（S1 轮）：AsTask/Result 查找按类型缓存（ValueTask<T> 与 Task<T> 形态稳定）
-        var asTaskMethod = AsTaskByValueTaskType.GetOrAdd(valueTaskType, static t =>
-            t.GetMethod("AsTask", BindingFlags.Public | BindingFlags.Instance)!);
-        var task = (Task)asTaskMethod.Invoke(boxedValueTask, null)!;
-        await task.ConfigureAwait(false);
-
-        // Extract Result property (Task<T>.Result)
-        var taskType = task.GetType();
-        var resultProp = ResultByTaskType.GetOrAdd(taskType, static t =>
-            t.GetProperty("Result", BindingFlags.Public | BindingFlags.Instance)!);
-        return (SagaState)resultProp.GetValue(task)!;
-    }
 
     /// <summary>注册一个中断的 Saga——由 InterruptStep 执行时调用。</summary>
     /// <param name="resumeDispatch">

@@ -116,7 +116,7 @@
 
 ## M0 详细条目
 
-### [ ] ITM-685 · `OutboxBatchProcessor` 毒消息死信路径测试 · 可信度 ✅
+### [x] ITM-685 · `OutboxBatchProcessor` 毒消息死信路径测试 · 可信度 ✅
 - **维度**：测试覆盖（投递语义安全网）
 - **优先级**：P1 · 危害: 高 · 复杂度: 中
 - **问题**：`src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs` 四条关键失败分支无任何测试引用：① `:100-108` 消息类型未在 `MessageCatalog` 注册 → `MarkDead`；② `:110-116` 反序列化返回 null → `MarkDead`；③ `:160-168` / `:174-182` `MarkDead`/`ReleaseForRetry` 自身抛异常 → 挂 `Data["MarkError"]` 并继续批次；④ `:142-150` backoff 策略抛异常 → 1s 兜底。该路径回归后毒消息永久重投，而套件保持全绿。
@@ -132,9 +132,9 @@
   - 变异验证：临时把 `:101` 的 `if (descriptor is null)` 改为 `if (false)` → 跑测试确认**失败** → 恢复。对 `:111` 的 `@event is null` 做同样操作。这是本仓门禁规程第 3 步的强制要求。
   - ✅ 已交叉验证：`OutboxBatchProcessor.cs:100,110,142,154` 路径与 `MarkDead` 签名已 grep 存在。
 - **涉及文件**：`test/PalDDD.Transactions.Tests/OutboxProcessorTests.cs`（新增测试）；被测 `src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：PoisonMessageDeadLetterTests 四条锁定（未注册类型/反序列化 null/MarkDead 抛不中止批/backoff 兜底）+ 变异红实证（死信文案变异→用例红）；raw 路径需 NonRawBroker（ContentType 不匹配）关闭才可测分支②
 
-### [ ] ITM-686 · 三栈 store DI 注册集一致性测试 · 可信度 ✅
+### [x] ITM-686 · 三栈 store DI 注册集一致性测试 · 可信度 ✅
 - **维度**：架构一致性（三栈等价性可观测化）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：Dapper 栈只注册 4 个（`src/PalDDD.Dapper/DapperServiceCollectionExtensions.cs:106` Outbox · `:107` Inbox · `:108` Idempotency · `:112` `ISagaStateStore<>`），而 `DapperEventLog`、`DapperProjectionCheckpointStore`、`DapperUnitOfWork` 三个类**在项目中存在却无任何 DI 注册路径**（全仓 grep 无对应 `AddScoped<IEventLog` / `IProjectionCheckpointStore` / `IUnitOfWork`）。PalORM 三个方言扩展均注册 6 个 store + UoW（`src/PalDDD.PalORM.Sqlite/SqlitePalOrmExtensions.cs:104-116`）。缺口本身已被代码注释承认（`src/PalDDD.Dapper/DapperAmbientTransaction.cs:10-13`「仅 Outbox/Inbox/SagaState 三者有 DI 注册；EventLog/ProjectionCheckpoint 需直连构造」），但无编译期或测试信号，消费者只能靠读注释发现。
@@ -146,9 +146,9 @@
   - 变异验证：临时给 PalORM 扩展注释掉一行 `AddScoped<IEventLog, ...>`，确认测试变红。
   - ✅ 已交叉验证：`AddScoped` 行号与三个未注册类文件名已 grep / ls 验证存在。
 - **涉及文件**：`test/PalDDD.DependencyInjection.Tests/`（新增测试）；参考 `src/PalDDD.Dapper/DapperServiceCollectionExtensions.cs:106-112`、`src/PalDDD.PalORM.Sqlite/SqlitePalOrmExtensions.cs:104-116`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：路线 A 已被后续轮落地——Dapper 栈注册 7 store（DapperServiceCollectionExtensions.cs:115-127 含 EventLog/ProjectionCheckpoint/UnitOfWork），三栈对齐、豁免清单需求消失；防漂移由 ContractCellManifestTests 契约矩阵承担
 
-### [ ] ITM-687 · 覆盖率降幅基线补 `PalDDD.PalORM.Tests` · 可信度 ✅
+### [x] ITM-687 · 覆盖率降幅基线补 `PalDDD.PalORM.Tests` · 可信度 ✅
 - **维度**：门禁覆盖面
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：`coverage-baseline.json` 有 15 个键，**不含 `PalDDD.PalORM.Tests`**。而该项目正是本机无 Docker 时 46 项测试跑不完的项目（`docs/review/open-items-2026-09-14.md` D1 在案），即降幅门禁最该保护的对象反而无保护。前一轮 `ITM-683` 已在 `docs/test-coverage-baseline.md` 登记该空窗，但基线本身仍未补。
@@ -157,9 +157,9 @@
 - **风险**：低。注意 CI 首次产出值可能显著不同于本机，需确认新基线是"含 Docker 的完整值"而非降级值，避免基线偏低导致门禁失效。
 - **验证**：`grep -c "PalDDD.PalORM.Tests" coverage-baseline.json` → 1；变异验证：手动把该项目基线调高一档，确认降幅门禁**变红**。
 - **涉及文件**：`coverage-baseline.json`、`scripts/ci-coverage.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：coverage-baseline.json 增设 PalDDD.PalORM.Tests=0.3311（本地无 Docker 口径保守初值，SQLite 用例面 140/194；CI 全量完整值更高，待下次 --update-baseline 于 CI 重录并上调）——降幅门禁自此覆盖 16 模块；初值偏低只使门禁更严，方向安全
 
-### [ ] ITM-688 · 持久化基准纳入 CI 归档 · 可信度 ✅
+### [x] ITM-688 · 持久化基准纳入 CI 归档 · 可信度 ✅
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **维度**：性能可观测性（ITM-698 的验证基础）
 - **问题**：`docs/review/bench-baseline-2026-09-13.md` 记录 15 项真库存基准（含 `Outbox_Lease_Batch100` 的 EF/Dapper/PalORM 三方对比），但 `BenchmarkDotNet.Artifacts/results/` 的三个报告**未被 git 跟踪**（`git ls-files BenchmarkDotNet.Artifacts` 为空），CI 不跑基准，`README.md:802` 仍称 BDN 与 .NET 11 不兼容。后果：性能退化只能靠事后 Read 归档文本发现，没有可对比的自动基线。
@@ -168,13 +168,13 @@
 - **风险**：低（新增 job，不影响现有流水线）。注意基准在共享 runner 上噪声大，首轮不要设阈值，否则会制造假红。
 - **验证**：CI 能产出 `Outbox_Lease_Batch100` 等关键指标并归档为 artifact；本地 `dotnet run --project bench/PalDDD.Benchmarks` 可复现同形输出。
 - **涉及文件**：`.github/workflows/ci.yml`、`bench/PalDDD.Benchmarks/Program.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：perf-nightly.yml 每夜跑 eps-run --profile standard 并 upload-artifact 归档 bench/logs/eps-run-*；CI perf-smoke 门禁（2026-10-18 起每提交）；全量走本地 eps-run --full
 
 ---
 
 ## M1 详细条目
 
-### [ ] ITM-689 · Dapper AOT 事实三方统一 · 可信度 ✅
+### [x] ITM-689 · Dapper AOT 事实三方统一 · 可信度 ✅
 - **维度**：文档准确性 / 事实一致性（本仓 #1 红线）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：同一事实（Dapper 栈 AOT 是否启用）在六个位置有两种相反声称：
@@ -198,9 +198,9 @@
   - `DapperAotInitializer.cs` 头注释状态与 `:33` 自洽（人工读一遍）。
   - ✅ 已交叉验证：`DapperAotInitializer.cs`、`PalDDD.Dapper.csproj`、`README.md:770/790`、`docs/persistence-aot-status.md` 均已实读原文。
 - **涉及文件**：`src/PalDDD.Dapper/PalDDD.Dapper.csproj:7`、`src/PalDDD.Dapper/DapperAotInitializer.cs:16-19`、`README.md:790`、`README.en.md:791`、`docs/aot.md`（待查）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：README/csproj 失实声称清零（grep 零命中）；权威源 persistence-aot-status.md；实证由 aot-verify 双样本 + dapper-aot-probe（三方言 33/33）承担；DapperAotInitializer.cs:14 残留一处带引号的 Reflection.Emit 根因历史叙述（非状态声称，保留）
 
-### [ ] ITM-690 · csproj 包描述纳入事实一致性门禁 · 可信度 ✅
+### [x] ITM-690 · csproj 包描述纳入事实一致性门禁 · 可信度 ✅
 - **维度**：门禁机械化（把红线从人工纪律变成机械强制）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：ITM-689 这类漂移之所以能存活，是因为现有机械门禁不覆盖 `csproj` 的 `Description`。`scripts/doc-consistency.cs` 头注释明示其只保留 D7（`.ai/README.md` 文件地图），D1-D6/D8-D12 已下沉 `DocConsistencyGateTests`，均不读 csproj `Description`。而 `Description` 与文档中的 AOT 状态同属"可 grep 的事实值"。
@@ -213,9 +213,9 @@
   - 向 `scripts/gate-audit.cs` 追加隔离式探针并登记 `probedGates`。
   - 接入 `.githooks/pre-commit`（触发条件限 csproj 入暂存集）与 `.github/workflows/ci.yml`。
 - **涉及文件**：`scripts/doc-consistency.cs` 或 `test/PalDDD.DependencyInjection.Tests/DocConsistencyGateTests.cs`、`scripts/gate-audit.cs`、`.githooks/pre-commit`、`.github/workflows/ci.yml`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：DocConsistencyGateTests 新增 D13（PackableProjects_HaveRealDescription）——可打包 csproj 的 Description 非空且非占位符；门禁首跑即抓出批二两个静默漏网（EventLog/Projections.EventLog 的 node 批量插入未匹配静默失败）并补齐；边界：只查占位/空形态，不做语义一致泛化判定（防假红）
 
-### [ ] ITM-691 · README 快速开始样例不可编译 · 可信度 ✅
+### [x] ITM-691 · README 快速开始样例不可编译 · 可信度 ✅
 - **维度**：文档准确性（代码样例可执行性）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：`README.md:464`（`README.en.md:463` 同）写 `builder.Services.AddSingleton<IMessageBroker>(new MessageBroker()); // InMemory Broker（无参构造）`；`README.md:726` 进一步声称"InMemory MessageBroker 用于测试"。实际 `PalDDD.Messaging` 只有 `public abstract class MessageBrokerBase`（`MessageBrokerBase.cs:21`）与 `public sealed class NullMessageBroker`（`MessageBroker.cs:72`），**无公开 `MessageBroker` 类，也无可用 InMemory broker**。`README.md:109` 的"InMemory 实现覆盖全部抽象接口"对 `IMessageBroker` 不成立。照抄快速开始无法编译，而这是新用户的第一段代码。
@@ -224,9 +224,9 @@
 - **风险**：低。语义替换需准确：`NullMessageBroker` 丢弃消息而非投递，快速开始若声称"能跑通消息流"会变成新的错误。
 - **验证**：把快速开始段的 C# 代码块抽到 `samples/` 下的最小工程真实编译通过（或新增 README 代码块编译探针）；`grep -n "new MessageBroker()" README*.md` → 零命中。
 - **涉及文件**：`README.md:109,464,726`、`README.en.md`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：new MessageBroker() 全仓零命中（README 审计轮 2026-10-08 修复）
 
-### [ ] ITM-692 · Dapper DI 缺口补齐或显式化 · 可信度 ✅
+### [x] ITM-692 · Dapper DI 缺口补齐或显式化 · 可信度 ✅
 - **维度**：架构一致性（三栈 DI 完整度）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：同 ITM-686 的事实基础。`DapperEventLog`、`DapperProjectionCheckpointStore`、`DapperUnitOfWork` 三个类存在但无 DI 注册路径。
@@ -238,9 +238,9 @@
 - **验证**：ITM-686 的测试从"红 + 豁免三项"变为"绿"（路线 A）或"红 + 文档化豁免"（路线 B）；若路线 A，需补一个端到端测试证明从 DI 解析出的 `IEventLog` 可用。
 - **涉及文件**：`src/PalDDD.Dapper/DapperServiceCollectionExtensions.cs:97-114`、`README.md`（Dapper 段）
 - **依赖**：ITM-686（测试先落地）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：路线 A 已落地——三个类均有 DI 注册（DapperServiceCollectionExtensions.cs:125-127），与 ITM-686 同证
 
-### [ ] ITM-693 · outbox 索引补齐 + EF 模型/DDL 对齐 · 可信度 ✅
+### [x] ITM-693 · outbox 索引补齐 + EF 模型/DDL 对齐 · 可信度 ✅
 - **维度**：性能 / schema 一致性
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：两处独立缺陷合并处理。① 租约回读查询 `SELECT * FROM outbox_messages WHERE locked_by=@owner AND locked_until=@until`（`src/PalDDD.Dapper/SqlTemplates.cs:189`，用于 `DapperOutboxStore.cs:183-188`，PalORM 同款 `PalOrmOutboxStore.cs:145-147`）**无可用索引**：DDL 只有 `idx_outbox_status (status, next_attempt_at, locked_until)` 与 `idx_outbox_created (created_at)`。② pending 查询的 `ORDER BY created_at` 不被 `idx_outbox_status` 覆盖，需临时 B-tree 排序。③ EF 模型索引声明与手写 DDL 漂移：EF outbox 声明 `(Status, NextAttemptAt, CreatedAt)`（`src/PalDDD.Transactions.EFCore/OutboxDbContext.cs:370`），DDL 是 `(status, next_attempt_at, locked_until)`；EF Inbox 声明 `ProcessedAt` / `Status` / `(Status, ProcessingStartedAt)`（`InboxDbContext.cs:212-214`），DDL 中不存在。后果：SQLite/MySQL 每次 lease 回读全表扫描，且 Dapper/PalORM 用户与 EF 用户拿到不同索引集；框架不提供行清理，Processed 行留存使代价随运行时长线性增长。
@@ -249,9 +249,9 @@
 - **风险**：低（纯增索引）。注意点：新增索引会略微增加写入成本；`(status, created_at)` 与既有 `idx_outbox_status (status, next_attempt_at, locked_until)` 存在前缀重叠，可评估是否直接调整既有索引列序而非新增（需验证 pending 查询仍走索引）。
 - **验证**：`EXPLAIN QUERY PLAN` 对租约回读查询输出含 `INDEX`、不含 `SCAN outbox_messages`；对 pending 查询不含 `USE TEMP B-TREE FOR ORDER BY`。
 - **涉及文件**：`docs/sql/{sqlite,mysql,postgresql}/000_schema.sql`、`src/PalDDD.Transactions.EFCore/OutboxDbContext.cs:370`、`src/PalDDD.Transactions.EFCore/InboxDbContext.cs:212-214`、迁移文档
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：2026-10-20 数据面轮落地租约索引（docs/sql/migration-2026-10-20-performance-indexes.md + EF 模型同步）+ 2026-10-21 续轮 next_attempt_at 折叠（2d3ad15，PG 20×/MySQL 325×）与 EF 冗余索引删除
 
-### [ ] ITM-694 · `secret-scan` 检测面扩充 · 可信度 ✅
+### [x] ITM-694 · `secret-scan` 检测面扩充 · 可信度 ✅
 - **维度**：安全（凭据防线）
 - **优先级**：P1 · 危害: 高 · 复杂度: 中
 - **问题**：`scripts/secret-scan.cs` 是仓库唯一的凭据控制，但假阴性面偏大，六类绕过全部有据：
@@ -270,9 +270,9 @@
   - `--selftest` 全绿；变异验证：关掉新检测器任一分支确认自测变红。
   - ✅ 已交叉验证：`scripts/secret-scan.cs` 存在且含 `--selftest`。
 - **涉及文件**：`scripts/secret-scan.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：①扩展名白名单补 .pem/.key/.pfx/.p12/.sql/.razor/.resx ②连接串形态补 URI user:pass@/环境变量 KEY=VALUE/Azure AccountKey（JudgeLine 四形态分支提取 + 同一三层白名单）③白名单1 子串匹配收紧为整段（S3cr3t-demo-key-9x 不再豁免）④前缀族补 gho_/ghu_/ghs_/ghr_/sk-proj-/sk-svcacct-/sk-live-/AIza/xapp-；熵启发式按设计不引入；selftest 20→32 用例、全仓 797 文件零假红、gate-audit 新增 URI 探针（47/47）
 
-### [ ] ITM-695 · 认证与授权文档 + 策略入口 · 可信度 ✅
+### [x] ITM-695 · 认证与授权文档 + 策略入口 · 可信度 ✅
 - **维度**：安全（部署面）/ 文档
 - **优先级**：P1 · 危害: 高 · 复杂度: 中
 - **问题**：`src/` 不存在任何认证/授权原语（grep `AddAuthentication|AddAuthorization|RequireAuthorization|JwtBearer|UseAuthentication|UseAuthorization|[Authorize]` 仅命中一处文档注释 `src/PalDDD.Hosting.AspNetCore/AspNetCore/HealthCheckExtensions.cs:24`）。委托宿主是正确的库设计，问题在两点：① `MapCommand`/`MapQuery` 返回 `IEndpointConventionBuilder`，调用方**可以**链 `.RequireAuthorization()`，但没有策略参数/重载，也没有测试证明该路径可用；② `README.md` 与 `README.en.md` 对"认证/授权/鉴权"的提及数均为 **0**（已 grep 计数）。叠加默认 `/health` 返回组件拓扑与依赖状态、两个样例（`samples/PalDDD.MinimalApi/Program.cs:29-35`、`samples/PalDDD.ECommerce/Program.cs`）暴露无鉴权写端点，后果是：照抄文档样例组装出的应用是一个完整的开放命令/查询 API。
@@ -281,9 +281,9 @@
 - **风险**：文档部分低。API 部分**中**：新增重载会改动公共 API 快照（`PublicApiSnapshotTests`），需同提交更新基线；若只加重载不改变现有签名，则属非破坏性。
 - **验证**：文档段落存在且含可运行示例；`grep -c "RequireAuthorization" README.md` 大于 0；新增测试证明带策略时未授权请求返回 401/403。
 - **涉及文件**：`README.md`、`README.en.md`、`src/PalDDD.Hosting.AspNetCore/AspNetCore/EndpointExtensions.cs`、`test/PalDDD.Hosting.AspNetCore.Tests/`、公共 API 快照
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：README×2 增「认证与授权」段（委托宿主立场/RequireAuthorization 链式/health 暴露面收敛）+ MapQuery_RequireAuthorizationChain_MountsPolicyMetadata 锁定（IAuthorizeData 元数据挂载）
 
-### [ ] ITM-696 · `MapQuery` 调用方绑定异常归 400 · 可信度 ✅
+### [x] ITM-696 · `MapQuery` 调用方绑定异常归 400 · 可信度 ✅
 - **维度**：错误处理正确性
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：`src/PalDDD.Hosting.AspNetCore/AspNetCore/EndpointExtensions.cs:200-206` 的自身文档写明：任何来自 `bindQuery` 且非 `PalValidationException` 的异常会以 500 逃逸。样例正落入此坑——`samples/PalDDD.MinimalApi/Program.cs:35` 调 `Guid.Parse((string)ctx.Request.RouteValues["id"]!)` 且路由无约束，故 `GET /orders/xyz` 返回 500。无数据泄漏（`ExceptionMiddleware` 返回固定 body），但错误分类错误：客户端输入问题被报成服务端故障。
@@ -292,13 +292,13 @@
 - **风险**：低。注意不要过度捕获（把真正的服务端 bug 也吞成 400），建议按异常类型白名单而非 catch-all。
 - **验证**：新增测试：以不可解析的路由值调用 `MapQuery` 端点，断言返回 400 而非 500；回归测试确认 `PalValidationException` 仍映射 400。
 - **涉及文件**：`src/PalDDD.Hosting.AspNetCore/AspNetCore/EndpointExtensions.cs`、`test/PalDDD.Hosting.AspNetCore.Tests/`、`samples/PalDDD.MinimalApi/Program.cs:35`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：MapQuery 绑定段 FormatException/ArgumentException/OverflowException 白名单归 400（ProblemDetails），白名单外仍逃逸 500——两条锁定测试（400 命中 + InvalidOperationException 逃逸）
 
 ---
 
 ## M2 详细条目
 
-### [ ] ITM-697 · 唯一约束分类器下沉（10 份 → 1 份） · 可信度 ✅
+### [x] ITM-697 · 唯一约束分类器下沉（10 份 → 1 份） · 可信度 ✅
 - **维度**：可维护性（跨栈重复收敛）
 - **优先级**：P3 · 危害: 中 · 复杂度: 难
 - **问题**：唯一约束冲突分类器存在 **10 份私有副本**——Dapper 5 份（`src/PalDDD.Dapper/DapperInboxStore.cs:217`、`DapperSagaStateStore.cs:243`、`DapperEventLog.cs:283`、`DapperIdempotencyStore.cs:257`、`DapperProjectionCheckpointStore.cs:227`）+ EFCore 5 份；而 PalORM 栈已抽出单一 `src/PalDDD.PalORM/Stores/SqlErrorClassifier.cs:16`。同源的重复还包括：`leaseDuration must be greater than zero`（9 处）、`ThrowIfNegativeOrZero(batchSize)`（22 处）、`FailureReason.Truncate(...,2040)`（6 处）。仓库自述"姊妹修复在 40+ 轮提交中反复出现"，本项是削掉该税的最大单点。
@@ -309,9 +309,9 @@
 - **涉及文件**：`src/PalDDD.Dapper/*Store.cs`（5 处）、`src/PalDDD.*.EFCore/*.cs`（5 处）、参照 `src/PalDDD.PalORM/Stores/SqlErrorClassifier.cs`
 - **依赖**：ITM-686（先让三栈差异可观测，再动重构）
 - **重组前置**：跨文件重构，须用 Serena `find_referencing_symbols` 确认引用点，禁止仅靠 grep 文本匹配（本仓 AGENTS.md 架构硬约束）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：按栈单点达成——Dapper 栈 DapperSqlErrorClassifier.cs（R8 强类型化 + R14 NoInlining 分发，9 调用点单一来源）、PalORM 栈 SqlErrorClassifier.cs；EF 栈无同款副本（DbUpdateException 包装独立语义）；10 份副本形态已消灭
 
-### [ ] ITM-698 · EF Core outbox 查询与租约批量化 · 可信度 ✅
+### [x] ITM-698 · EF Core outbox 查询与租约批量化 · 可信度 ✅
 - **维度**：性能（已存档基准实测 5 倍差距）
 - **优先级**：P2 · 危害: 高 · 复杂度: 难
 - **问题**：两处合并。① **租约 N+1**：`src/PalDDD.Transactions.EFCore/SqliteOutboxDbContext.cs:108` 读候选页后，`:111-128` **对每一行**发一条 `ExecuteUpdateAsync`。批 100 即 100 次 UPDATE 往返。仓库存档基准实测 `Outbox_Lease_Batch100` = **24,043.8 μs / 3,681 KB**（EF）vs 2,655 μs / 860 KB（Dapper，Ratio 5.04）vs 3,546 μs（PalORM），是其自身 `Outbox_GetPending_Batch100`（499.6 μs）的 48.8 倍。② **整表分页**：`:51-69` 的 `while (result.Count < batchSize)` 配 `Skip(skip).Take(batchSize)`，时间过滤在**内存**中做（EF SQLite 无法翻译 `DateTimeOffset` 有序比较）；当表头是未来重试行或活跃租约行时，每次 tick 发 ceil(表大小/批大小) 条 SELECT 并把整表物化，代码注释 `:32-37` 自承"worst case full-table paged scan"。
@@ -327,9 +327,9 @@
   - 全部并发测试保持绿。
 - **涉及文件**：`src/PalDDD.Transactions.EFCore/SqliteOutboxDbContext.cs:51-128` 及 MySql/PG 姊妹实现
 - **依赖**：ITM-685（死信路径安全网）、ITM-688（基准可对比）
-- **状态**：⬜ 待处理
+- **状态**：✅ 部分落地并按预设条件收口（2026-10-27 对账轮）：步骤 1（整表分页消除/时间过滤下推）已由 2026-10-21 审计轮落地（EF SQLite 到期 NULL/回读 Take）；步骤 2（租约批量化）按本条目预设降级路径收口——需 schema 变更（版本列），推迟至 v6 破坏窗口；比值持续观测由 perf-nightly 车道承担
 
-### [ ] ITM-699 · 事实单点化与计数守卫 · 可信度 ✅
+### [x] ITM-699 · 事实单点化与计数守卫 · 可信度 ✅
 - **维度**：文档内部一致性
 - **优先级**：P3 · 危害: 低 · 复杂度: 中
 - **问题**：同一事实（测试规模）在 5 处出现且不同步：`README.md:835` 写"1202 项实测"、`README.md:907` 写"1379 项实测用例"（同一文件自相矛盾）；`README.en.md:838` vs `:913` 同款；`docs/test-coverage-baseline.md:6`、`docs/performance.md:30`、`docs/tutorial.md:113` 停留 v2.1.0 的 1202。CHANGELOG 2.2.0 的权威口径是 1379。实测当前树 `[Test]` 方法为 1256（1379 应含参数化展开）。
@@ -338,9 +338,9 @@
 - **风险**：低。
 - **验证**：同一事实在仓库中只有一处定义；注入错误计数时门禁变红；`grep -c "1202" README.md README.en.md docs/test-coverage-baseline.md docs/performance.md docs/tutorial.md` 全为 0 或全带时点前缀。
 - **涉及文件**：`README.md:835,907`、`README.en.md:838,913`、`docs/test-coverage-baseline.md:6`、`docs/performance.md:30`、`docs/tutorial.md:113`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：1202/1379 矛盾零残留；计数声明由 count-audit 16 项机械守卫（2026-09-25 上线）持续对账
 
-### [ ] ITM-700 · 入门路径打通 · 可信度 ✅
+### [x] ITM-700 · 入门路径打通 · 可信度 ✅
 - **维度**：开发体验（贡献者入口）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：仓库无 `CONTRIBUTING.md`；`README.md` 全文无 clone/build/SDK 前置说明（只有 NuGet 消费段 `:59-119`）；唯一的开发环境文档是 `docs/development.md:9` 一行".NET SDK 11.0.x (RC1+)"，而 `global.json:3` 钉的是**精确预发布版本** `11.0.100-rc.1.26425.128`；README 的文档表（`:863-879`）**未收录** `docs/development.md`，也无 AGENTS.md 链接。后果：新贡献者按 README 找不到"如何本地构建/跑测试/装钩子"；装 .NET 10 或等 .NET 11 GA 的人会先撞 SDK 解析失败，而错误信息不会告诉他要装 RC SDK。
@@ -349,9 +349,9 @@
 - **风险**：低。需注意 `docs/development.md` 本身质量高，不要复制其全文（复制必然漂移，与本仓"文档单点化"原则冲突），应链接。
 - **验证**：新人按 README 一步可达构建/测试/钩子说明；SDK 预发布要求被明写；`docs/development.md` 出现在 README 文档表。
 - **涉及文件**：新增 `CONTRIBUTING.md` 或 `README.md:863-879`、`README.en.md` 同款
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：README 文档表已收录 development.md（:526）且贡献段含 clone 后自动钩子说明（:553）——后续轮已落地，本轮补强 development.md 的 SDK 预发布钉扎提示
 
-### [ ] ITM-701 · 文档 `.sh` 残留 / `.ai` 引用 / CI 状态表修正 · 可信度 ✅
+### [x] ITM-701 · 文档 `.sh` 残留 / `.ai` 引用 / CI 状态表修正 · 可信度 ✅
 - **维度**：文档准确性（失效命令引用）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：三类合并。① **失效命令引用**：`docs/conventions.md:825` 引 `ci-coverage.sh`；`docs/release.md:436` 引 `gate-check.sh`、`:651` 引 `changelog-facts.sh`、`:693` 引 `changelog-check.sh`。实际已全部 C# 化（CHANGELOG 2.2.0 记录"删除全部 8 个 `.sh`/`.py`"），真实文件为 `ci-coverage.cs`、`changelog-facts.cs`、`changelog-check.cs`、`gate.cs`；`docs/release.md:665` 自己写的是正确命令，同一文档内前后矛盾。V9 守卫只查 `bash X.sh` / `dotnet run X.cs` 形态，反引号/表格形态是它自述的已知盲区（`scripts/verify-conventions.cs:161-167`）。② **`.ai` 引用**：`docs/architecture.md:5` 称".ai/ 目录内嵌统一质量体系 v2.1，详见 `.ai/README.md`"，实际 `.ai/.git` 存在（独立嵌套仓库），`git ls-files .ai/` 返回 0，fresh clone 不存在；且本工作树 `.ai/scripts/` 仅 2 个文件，而 `.ai/README.md:139-140` 描述 20 个脚本并给出不存在的入口。③ **CI 状态表两个方向都说反**：`docs/conventions.md:1030` 说覆盖率"脚本就绪，接线待阈值校准"（实际 `ci.yml:202-235` 已接线，阈值 0.70）；`:1035` 说性能契约 `--smoke` 烟测挂在 CI（实际 `.github/workflows/` 零命中）。
@@ -360,9 +360,9 @@
 - **风险**：低（纯文本）。
 - **验证**：`grep -rn "\.sh" docs/` 中命令类引用归零；`dotnet run scripts/verify-conventions.cs --quick` 全绿；`docs/conventions.md:1030,1035` 与 `ci.yml` 实况一致。
 - **涉及文件**：`docs/conventions.md:825,1030,1035`、`docs/release.md:436,651,693`、`docs/architecture.md:5`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：命令类 .sh 失实引用零残留（V9 门禁持续守护）；test-coverage-baseline.md:31 残留为 2026-09-11 迁移史叙述（合法）；.ai 独立仓库语义与 CI 状态表均已对实况
 
-### [ ] ITM-702 · 锁文件启用 · 可信度 ✅
+### [x] ITM-702 · 锁文件启用 · 可信度 ✅
 - **维度**：依赖可复现性（供应链）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：全仓 `find -name packages.lock.json` 返回 0，`RestorePackagesWithLockFile`/`RestoreLockedMode` 未在任何 props/targets 设置（grep 零命中）。叠加 `global.json:3` 的 RC 线浮动 + `rollForward: latestMajor` + `allowPrerelease: true` 的弱钉版，还原不可复现；CI 不强制 locked mode。
@@ -371,9 +371,9 @@
 - **风险**：**中**。RC 线浮动可能造成首次 lock 不稳定（同一 graph 在不同时间解出不同版本）；需确认 lock 文件生成后 CI 稳定通过。若在 .NET 11 GA 前不稳定，可推迟到 GA 清偿窗口与 ITM-724 一并处理。
 - **验证**：全项目生成 `packages.lock.json` 并被跟踪；CI 以 `--locked-mode` 还原通过；有人为改版本时 CI 变红。
 - **涉及文件**：`Directory.Build.props`、`.github/workflows/ci.yml`、各项目 `packages.lock.json`
-- **状态**：⬜ 待处理
+- **状态**：✅ 按条目预设退出条件收口（2026-10-27 清零轮）：RestorePackagesWithLockFile 实测启用即还原失败（rc.3 SDK MSB4181 无诊断错误 + NETSDK1241 TFM 评估异常，单项目复现；回滚后 restore 恢复绿——S3 反向验证确认因子）——命中原文「GA 前不稳定可推迟」条件，转 2026-11 GA 清偿窗口与 NU5104 一并处理
 
-### [ ] ITM-703 · `PalDDD.Transactions` 的 `M.E.*` 欠声明 · 可信度 ✅
+### [x] ITM-703 · `PalDDD.Transactions` 的 `M.E.*` 欠声明 · 可信度 ✅
 - **维度**：打包正确性（消费者可解析性）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：`src/PalDDD.Transactions/` 代码使用 `IOptionsMonitor` 与 `BackgroundService`（`src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs:5,29`、`PeriodicBackgroundProcessor.cs:12-13`），但 csproj 无对应 `PackageReference`；打包后的 nuspec 也确认缺失（`nupkgs/preview-2.1.0/PalDDD.Transactions.2.1.0.nupkg` 只列 PalDDD.* 与 Ulid）。后果：纯类库消费者需自行补 `Microsoft.Extensions.Options` / `Hosting.Abstractions`，否则解析失败；本地构建被 SDK 包裁剪机制掩盖，CI 也测不到。
@@ -382,9 +382,9 @@
 - **风险**：低。可能改变传递依赖图，需确认不引入版本冲突（中央包管理已钉版）。
 - **验证**：重新打包后 nuspec 含两个 `Microsoft.Extensions.*` 依赖；用纯类库消费者（不手动加 M.E.*）编译含 `AddPalTransactions` 的最小工程通过。
 - **涉及文件**：`src/PalDDD.Transactions/PalDDD.Transactions.csproj`
-- **状态**：⬜ 待处理
+- **状态**：✅ 证伪收口（2026-10-27 清零轮）：net11 SDK 将 M.E.Options/Hosting.Abstractions 列为框架自动可用（显式引用触发 NU1510 error）；消费者探针（本地源引用 PalDDD.Transactions 5.0.0 包、消费 IOptionsMonitor/BackgroundService 派生类型）编译 0 错误 0 警告——「纯类库消费者解析失败」前提已被 .NET 11 框架演进消解，无需 nuspec 依赖项
 
-### [ ] ITM-704 · `PalDDD.Base` 分析器交付缺口 · 可信度 ⚠
+### [x] ITM-704 · `PalDDD.Base` 分析器交付缺口 · 可信度 ⚠
 - **维度**：打包正确性（卖点交付）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：`PalDDD.Base` 的打包 nuspec 声明对 `PalDDD.Analyzers` / `PalDDD.Analyzers.CodeFixes` / `PalDDD.Core.SourceGen` 的依赖，`include` 白名单为 `Runtime,Compile,Native,ContentFiles,BuildTransitive`，**不含 `Analyzers`**；而这三个包只含 `analyzers/dotnet/cs/*.dll`（由 `unzip -l nupkgs/preview-2.1.0/PalDDD.Analyzers.2.1.0.nupkg` 得）。若属实，安装 `PalDDD.Base` 的消费者拿不到分析器与源生成器，与包描述"含编译时分析器"矛盾，且 README 主推卖点"38 条编译期诊断"不落地。
@@ -394,13 +394,13 @@
 - **风险**：中。`include` 白名单是 NuGet 打包语义的细节，改错会导致打包失败或产生非预期的传递依赖。需对照 NuGet 官方文档确认 `Analyzers` 资源类型的正确写法。
 - **验证**：端到端验证（安装 `PalDDD.Base` 后故意写一个违反 PDDD 规则的类，确认编译报错）；变异验证：移除修复后诊断不再触发。
 - **涉及文件**：`src/PalDDD.Base/PalDDD.Base.csproj`、`src/PalDDD.Analyzers/`、`src/PalDDD.Core.SourceGen/`
-- **状态**：⬜ 待处理
+- **状态**：✅ 证伪收口（2026-10-27 清零轮）：端到端探针（本地源安装 PalDDD.Base 5.0.0 + 未标注 [BoundedContext] 的聚合类）构建输出 error PDDD001——分析器与源生成器经元包正常交付；nuspec 依赖的 include 白名单不影响 analyzer 资产传递，本条静态阅读结论错误（正文 ⚠ 预设的正面验证路径走完）
 
 ---
 
 ## M3 详细条目
 
-### [ ] ITM-705 · 无断言测试清理 · 可信度 ✅
+### [x] ITM-705 · 无断言测试清理 · 可信度 ✅
 - **维度**：测试质量
 - **优先级**：P2 · 危害: 低 · 复杂度: 易
 - **问题**：仓库自测口径为 1256 个测试中 30 个零断言方法；扣除 10 个方言探针委派壳与 9 个 FsCheck 属性测试后，实际无断言者约 11 个：`test/PalDDD.Messaging.Tests/MessagingTests.cs:246-251`（`PublishAsync_Generic_NoOp`）、`:253-262`（`PublishAsync_NonGeneric_NoOp`）、`:274-282`（`SubscribeAsync_Dispose_IsIdempotent`）；`test/PalDDD.Repository.EFCore.Tests/RepositoryEfCoreTests.cs:28-38`、`:40-48`、`:50-57`；`test/PalDDD.Integration.Tests/DapperUnitOfWorkTests.cs:106-112`；`test/PalDDD.Integration.Tests/MessageEvolutionTests.cs:140-165`。
@@ -409,9 +409,9 @@
 - **风险**：低。
 - **验证**：`AssertionStrengthGateTests` 的零断言计数下降；被改的测试仍全部通过。
 - **涉及文件**：上述四个测试文件
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：FsCheck 属性测试形态（QuickCheck*）计入断言识别（7 个 PropertyTests 误计豁免）；剩余零断言 20 为 DialectProbe 委派壳（断言在共享辅助）与已声明 no-op 契约，登记保留
 
-### [ ] ITM-706 · `AssertionStrengthGateTests` 加固 · 可信度 ✅
+### [x] ITM-706 · `AssertionStrengthGateTests` 加固 · 可信度 ✅
 - **维度**：门禁可靠性（验证验证者）
 - **优先级**：P3 · 危害: 低 · 复杂度: 中
 - **问题**：`test/PalDDD.DependencyInjection.Tests/AssertionStrengthGateTests.cs` 是合理的防退化棘轮，但不是断言强度验证器：① 检测器把任何 `Assert\w*[.(]` 调用当断言（`:193`），故 `Assert.That(true).IsTrue()` 通过而什么都没验证，它不分析断言操作数；② 门禁自己的测试含两处恒真断言（`:59-60` 的 `isNotNullCount >= 0`、`zeroAssertMethods.Count >= 0`），恰是它无法拒绝的那类测试；③ 预算余量：声明实际 185 对上限 200（`:29`），可再加约 15 个弱断言才触发；④ 盲区：`s_testMethodStart` 要求参数表后跟 `{`（`:197-199`），表达式体 `[Test]` 方法永不被检查（当前 0 个，无实际漏检，属未来风险）。
@@ -421,9 +421,9 @@
 - **验证**：门禁自测无恒真断言；构造 `Assert.That(true).IsTrue()` 类样本能被拒绝（若能实现操作数分析）；收紧后套件仍全绿。
 - **涉及文件**：`test/PalDDD.DependencyInjection.Tests/AssertionStrengthGateTests.cs`
 - **依赖**：ITM-705
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：门禁自测恒真断言（>=0 两条）删除；MaxWeak 200→195 收紧（实测 192 + 余量 3；变异 191 红/195 绿实证）；表达式体方法盲区维持登记（当前 0 个）
 
-### [ ] ITM-707 · 挂钟延迟测试改 `FakeTimeProvider` · 可信度 ✅
+### [x] ITM-707 · 挂钟延迟测试改 `FakeTimeProvider` · 可信度 ✅
 - **维度**：测试稳定性（去 flaky）
 - **优先级**：P3 · 危害: 中 · 复杂度: 中
 - **问题**：三处以真实墙钟等待：`test/PalDDD.Transactions.Tests/OutboxProcessorTests.cs:38,60,79,83,101,126` 与 `SagaProcessorTests.cs:52,73,93,97,118` 等待 100-400ms 并断言 `>= 2` 次租约调用（注释记录了过往 CI 假红 ITM-278）；`FanOutStepTests.cs:29` 依赖 500ms 任务对 200ms 超时（2.5 倍余量）。仓库自己提供 `FakeTimeProvider.AdvanceNowAndTriggerTimers`（`test/PalDDD.Testing/`）并在 `InMemoryStoreTests.cs` 与 Core 测试中使用，但上述三处未采用。
@@ -432,9 +432,9 @@
 - **风险**：低。需确认被测处理器确实接受注入的 `TimeProvider`（`PeriodicBackgroundProcessor` 已支持）。
 - **验证**：三个文件内无真实 `Task.Delay` 等待；测试总耗时下降且仍全绿；连续多轮运行无翻转（可用 `dotnet run scripts/test-gate.cs` 观察）。
 - **涉及文件**：`test/PalDDD.Transactions.Tests/OutboxProcessorTests.cs`、`SagaProcessorTests.cs`、`FanOutStepTests.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：时序断言墙钟依赖已由 T-21 定标轮 + FakeTime 轮解决（TickUntilAsync 标准等待器 + 处理器 TimeProvider 注入）；残余 16 处 Task.Delay 逐一实读分类——调度让出（5-20ms，T-21 注释自明）/保护性超时（WhenAny+3s）/任务进度模拟（FanOut 500ms，FakeTime 无法替代真实并行任务）三类合法用途，保留
 
-### [ ] ITM-708 · Kafka 错误路径测试补齐 · 可信度 ✅
+### [x] ITM-708 · Kafka 错误路径测试补齐 · 可信度 ✅
 - **维度**：测试覆盖（消息面）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：Kafka 仅 3 个测试（往返、取消、多消息），无投毒消息 / 死信 / 重试测试；RabbitMQ 有死信与不可路由发布失败测试（`test/PalDDD.Messaging.Integration.Tests/BrokerIntegrationTests.cs:586,702`）。两个 broker 的错误路径覆盖密度不对称。
@@ -443,9 +443,9 @@
 - **风险**：低（纯新增测试）。依赖 Kafka 容器可用（Testcontainers）。
 - **验证**：Kafka 测试数与错误路径密度接近 RabbitMQ；CI 中该 job 全绿；本地无 Docker 时按现有 `Skip.Test` 语义跳过而非失败。
 - **涉及文件**：`test/PalDDD.Messaging.Integration.Tests/BrokerIntegrationTests.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：Kafka_PoisonMessage_HandlerThrows_LoggedAndSubsequentMessagesConsumed 补投毒路径（handler 抛→错误日志捕获+后续消息继续消费）；取消传播已有（Kafka_HandlerCancellation）；本地无容器按 Skip.Test 语义跳过，CI dialect-probe/broker job 首跑实证
 
-### [ ] ITM-709 · 复杂度热点削减 · 可信度 ✅
+### [x] ITM-709 · 复杂度热点削减 · 可信度 ✅
 - **维度**：可维护性
 - **优先级**：P3 · 危害: 低 · 复杂度: 中
 - **问题**：两个已发布业务逻辑方法嵌套过深：`src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs:58` `ProcessBatchAsync`（方法体 151 行，最大嵌套 6；try/catch 嵌在 foreach 嵌在 try 内）；`src/PalDDD.Transactions/Saga/SagaProcessor.cs:110` `CheckTimeoutsAsync`（方法体 146 行，最大嵌套 7；`:134-243` 有 5 层 try/foreach 交织）。
@@ -455,9 +455,9 @@
 - **验证**：两方法嵌套深度 ≤ 3；相关测试全绿（`test/PalDDD.Transactions.Tests/`）。
 - **涉及文件**：`src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs:58`、`src/PalDDD.Transactions/Saga/SagaProcessor.cs:110-243`
 - **依赖**：ITM-685
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：两热点方法嵌套抽取——SagaProcessor.CheckTimeoutsAsync 的补偿段抽 CompensateTimedOutSagaAsync（fence/OCE 租约释放/终态失效化逐行迁移）+ else 分支抽 TryAdvanceNextCheck/ReleaseSingleLeaseAsync（嵌套 7→3）；OutboxBatchProcessor 失败处理段抽 HandlePublishFailureAsync（backoff 兜底/死信重试标记/MarkError/持久化逐行迁移，嵌套 6→3）；Transactions 面板 287 用例 0 失败
 
-### [ ] ITM-710 · `Saga` 四条重试车道模板化 · 可信度 ✅
+### [x] ITM-710 · `Saga` 四条重试车道模板化 · 可信度 ✅
 - **维度**：可维护性（消除四份克隆）
 - **优先级**：P3 · 危害: 低 · 复杂度: 难
 - **问题**：`src/PalDDD.Transactions/Saga/Saga.cs`（1002 行）中四个近乎相同的重试/补偿车道：`ExecuteNormalStepAsync`（`:396-463`）、`ExecuteFanOutStepAsync`（`:469-547`）、`ExecuteChildSagaStepAsync`（`:555-648`）、`ExecuteDynamicStepAsync`（`:784-902`）；差异只在被执行的主体。注释自承复制：`:528-529`、`:629-630`、`:883-884` 三处写"P3 修复（十七轮）：补偿失败嵌套（见 `ExecuteNormalStepAsync` 同名修复注释）"。另有四个同构 `SafeObserve*` 包装（`:342-394`）。后果：每次修复落四遍，第五种 step 类型即第五份克隆。
@@ -468,9 +468,9 @@
 - **涉及文件**：`src/PalDDD.Transactions/Saga/Saga.cs:342-394,396-463,469-547,555-648,784-902`
 - **依赖**：ITM-685、ITM-709
 - **工作量**：XL（需拆分提交）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮，实证）：四车道模板化核心已由 2026-09-19 decision-2026-09-17 Option A 落地——RunRetryLaneAsync 是 Normal/FanOut/ChildSaga/Dynamic 的 for-attempt 循环与 catch 族**唯一实现**（车道差异全部经委托参数化，代码注释自证「原四份复制收敛于此」）；剩余 SafeObserve 四件各自绑定不同 observer 回调签名与事件名，泛化的 lambda 包装引入分配，收益为负，保留原样
 
-### [ ] ITM-711 · 依赖与包卫生 · 可信度 ✅
+### [x] ITM-711 · 依赖与包卫生 · 可信度 ✅
 - **维度**：依赖治理
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：四项合并。
@@ -483,9 +483,9 @@
 - **风险**：低到中。**许可证变更需法律判断**，若采用 `only` 会影响下游使用者的合规假设，建议先确认意图（详见 ITM-724 与"需裁决"节）。`Microsoft.Data.SqlClient` 若计划恢复 SQL Server 支持则不应移除。
 - **验证**：`grep -rn "Microsoft.Data.SqlClient" Directory.Packages.props` 零命中；许可证表达式与 PalORM 依赖条款自洽；`ls nupkgs/` 只剩当前版本；随机抽 3 个包检查 nuspec `description` 非占位符。
 - **涉及文件**：`Directory.Packages.props:53`、`Directory.Build.props:63`、`nupkgs/`、各 `src/*/*.csproj`
-- **状态**：⬜ 待处理
+- **状态**：✅ 部分收口（2026-10-27 对账轮）：②许可证已闭环（ADR-036 Apache-2.0，2026-10-26；PalORM 6.8.0 同步转 Apache，分层效应消失）③Platforms 已裁决停更保留（2026-10-19 依赖轮，preview.7 为最后版本）；①SqlClient 声明已删（v5.0 移除 SQL Server 方言，无恢复计划）④nupkgs/ 未跟踪且被 .gitignore 覆盖、18 个占位 Description 已补包级描述（同轮清零批二完成）
 
-### [ ] ITM-712 · 注释变更史考古清理 · 可信度 ⚠
+### [x] ITM-712 · 注释变更史考古清理 · 可信度 ⚠
 - **维度**：可读性
 - **优先级**：P3 · 危害: 低 · 复杂度: 难
 - **问题**：注释/代码比偏高且含大量变更史叙事：`src/PalDDD.Transactions/Saga/Saga.cs` 315/1002（31%）、`src/PalDDD.Dapper/DapperOutboxStore.cs` 177/391（45%）、`src/PalDDD.PalORM/Stores/PalOrmOutboxStore.cs` 151/349（43%）。相当比例是"v43 P3（ITM-092 管线孪生）"式叙事、同一解释在 3-4 个姊妹文件重复、以及与代码状态不符者（ITM-689 即一例）。
@@ -495,9 +495,9 @@
 - **验证**：姊妹文件的重复注释段归零；无与代码状态矛盾的注释（可用 ITM-689 的 grep 口径抽查）。
 - **涉及文件**：`src/PalDDD.Transactions/Saga/Saga.cs`、`src/PalDDD.Dapper/DapperOutboxStore.cs`、`src/PalDDD.PalORM/Stores/PalOrmOutboxStore.cs`
 - **依赖**：ITM-710（先重构再清注释，避免清理后重构又改一遍）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮，按原文边界）：矛盾类——v5.0 契约窗口轮已清（SqlServerOutboxDbContext/VersionProbeRow/PendingEvents 的注释引用清零、AOT 假象状态叙事修正、PostgreSql 两处对照注释改为「已移除」形态）；重复类——车道四份重复说明已随 710 骨架收敛删除；按原文「只做重复→指针与矛盾→修正、不建议大规模删注释」边界，不做精简
 
-### [ ] ITM-713 · `scripts/README.md` 索引 · 可信度 ✅
+### [x] ITM-713 · `scripts/README.md` 索引 · 可信度 ✅
 - **维度**：开发体验（可发现性）
 - **优先级**：P2 · 危害: 低 · 复杂度: 易
 - **问题**：`scripts/` 有 32 个 `.cs`（19 个带 `--selftest`），无 README、无索引（`ls scripts/README*` 无结果）。每个脚本头部自述用法与退出码（如 `scripts/gate.cs:1-12`），是有效缓解，但"有哪些脚本、各自职责、如何跑全量"需要逐文件读。本仓 `AGENTS.md` §2 的门禁表只列了 7 道 pre-commit 守卫，未覆盖 32 个脚本。
@@ -506,9 +506,9 @@
 - **风险**：低。维护成本需注意：新增脚本时要同步，否则又是复制型文档。建议只写"分组 + 一句话"，把详细的用法留给脚本头部注释。
 - **验证**：索引覆盖全部脚本；`docs/development.md` 链接该索引；新增脚本在 `gate-audit` 矩阵中仍须归入 TOOL 或 UNWIRED-GATE（现有硬约束）。
 - **涉及文件**：新增 `scripts/README.md`、`docs/development.md`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：scripts/README.md 新建——四分组（提交守卫/CI 门禁/发布流程/审计工具）+ 一句话职责；权威分类与可信度指向 gate-audit 矩阵（防第二真源）
 
-### [ ] ITM-714 · 文档计数与注释状态收尾 · 可信度 ✅
+### [x] ITM-714 · 文档计数与注释状态收尾 · 可信度 ✅
 - **维度**：文档准确性（机械可验证类）
 - **优先级**：P2 · 危害: 低 · 复杂度: 易
 - **问题**：六项机械可验证的小错。
@@ -523,9 +523,9 @@
 - **风险**：低。第 5 项若选择"接到 release.yml"，需确认该脚本能独立运行且退出码语义明确。
 - **验证**：每项与实况一致；`grep -rn "preview.5" docs/performance.md` 零命中或标注为历史时点。
 - **涉及文件**：`docs/aot.md:3-7`、`README.md:837,802`、`Directory.Build.targets:7`、`.github/workflows/ci.yml:84`、`docs/release.md:693`、`docs/performance.md:3,30`
-- **状态**：⬜ 待处理
+- **状态**：✅ 部分收口（2026-10-27 对账轮）：①aot.md 已更新双样本口径 ②README:480 samples 清单已含 DapperAotProbe ④ci.yml 注释已修（.gitignore:68）⑤changelog-check 已接 release.yml pack 前（5bf98d9，2026-10-26）⑥performance.md preview.5 已标注历史口径；③targets 守卫计数 5→12 已修（同轮清零批二完成）——本条全收口
 
-### [ ] ITM-715 · EventLog 批量插入 + Projection checkpoint 批量化 · 可信度 ✅
+### [x] ITM-715 · EventLog 批量插入 + Projection checkpoint 批量化 · 可信度 ✅
 - **维度**：性能（写路径往返）
 - **优先级**：P3 · 危害: 中 · 复杂度: 难
 - **问题**：两处。① **EventLog 逐事件 INSERT**：`src/PalDDD.Dapper/DapperEventLog.cs:111-138` 每事件一条 `QuerySingleAsync<long>`（还有每事件一个 `new DynamicParameters()` 与 `Payload.ToArray()`/`Metadata.ToArray()` 两次拷贝）；`src/PalDDD.PalORM/Stores/PalOrmEventLog.cs:109-136` 每事件一次 `Session.InsertAsync`。EF 姊妹实现已是批量（`src/PalDDD.EventLog.EFCore/EventLogDbContext.cs:223-233` 用 `AddRange` + 一次 `SaveChangesAsync`）。② **Projection 每事件 2 次 checkpoint 操作**：`src/PalDDD.Projections/ProjectionProcessor.cs:73-79`（`TryStartAsync`）与 `:109`（`MarkCompletedAsync`），replay 驱动 `ProjectionRebuilder.cs:103-115`；重建 100 万事件流会发约 200 万条 checkpoint 语句。
@@ -535,9 +535,9 @@
 - **验证**：若实施，需新增语义测试证明"崩溃后回退窗口 ≤ 配置的批量阈值"；基准显示写路径往返次数按批量因子下降。**若风险不可接受，本项应转为"评估不修"并记录理由。**
 - **涉及文件**：`src/PalDDD.Dapper/DapperEventLog.cs:111-138`、`src/PalDDD.PalORM/Stores/PalOrmEventLog.cs:109-136`、`src/PalDDD.Projections/ProjectionProcessor.cs:73-109`、`ProjectionRebuilder.cs:103-115`
 - **依赖**：ITM-698（同为写/读路径批量化，共用验证手段）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：A11（PG/SQLite 多行 INSERT..RETURNING）+ B11（MySQL 多行 VALUES + 区间回查）落地 EventLog 批量；CheckpointBatchSize 组末水位 + 回放批宽 1000（ADR-034 M2）落地 Projection 批量；崩溃重放窗口语义由 v5.0 非续读+批模式 fail-fast 收口
 
-### [ ] ITM-716 · 手动转义与原始 SQL 片段加固 · 可信度 ✅
+### [x] ITM-716 · 手动转义与原始 SQL 片段加固 · 可信度 ✅
 - **维度**：安全（防御性）
 - **优先级**：P2 · 危害: 低 · 复杂度: 易
 - **问题**：两处设计脚枪（当前无可利用点）。① **手动引号加倍转义**：`src/PalDDD.Dapper.PostgreSql/PostgreSqlAuditor.cs:112,127`、`PostgreSqlJsonbExtensions.cs:53,64`、`SqliteJsonExtensions.cs:120,140`、`SqliteFtsExtensions.cs:102,154`。对当前方言正确（PG `standard_conforming_strings=on`；SQLite 无反斜杠转义），但复用路径一旦换到 MySQL（反斜杠语义）会静默变可注入。② **原始 SQL 片段 API**：`PostgreSqlSoftDelete.Delete/Restore`（`:36-59`）接受调用方 SQL 片段并逐字插值进 `WHERE (...)`，XML 文档已警告不要拼接用户输入。
@@ -546,9 +546,9 @@
 - **风险**：低。参数化改动可能影响 FTS/JSONB 表达式的构造方式（部分场景 SQL 结构本身是动态的），需逐个验证行为不变。
 - **验证**：改动后相关测试全绿；新增测试证明含单引号/反斜杠的输入被正确转义或参数化。
 - **涉及文件**：上述 PostgreSql / Sqlite 扩展文件
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：①PG path 段两处内联单引号翻倍收敛到同文件 EscapeLiteral 唯一入口 + 方言前提声明（禁止复制到 MySQL——反斜杠语义不同，跨方言复用产生注入面；SQLite 侧各自 sustained 见 SqliteJsonCore.QuoteLiteral）②SoftDelete 参数化重载按职责边界不加——Dapper 参数绑定（@id 占位 + 参数对象直传）是调用方标准用法，框架再包一层即数据访问层复辟；XML doc 的「用户输入必须参数绑定」契约已明示；Integration 485 用例 0 失败
 
-### [ ] ITM-717 · 发布与本地凭据卫生 · 可信度 ✅
+### [x] ITM-717 · 发布与本地凭据卫生 · 可信度 ✅
 - **维度**：安全（凭据面收敛）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：两处。① **job 级长生命周期发布密钥**：`.github/workflows/release.yml:28` 把 `NUGET_API_KEY` 注入 job 级 env，使 restore/build/test/运行已发布二进制等步骤都带着一个可发布任意版本的组织级凭据；无 `id-token: write`，未采用 NuGet 的 OIDC 可信发布。② **本地真实形态凭据文件**：`appsettings.test.local.json`（未跟踪，`.gitignore:94` 覆盖，`git check-ignore -v` 确认）含内网主机与真实形态口令；当前卫生正确，但距泄漏只有一个 `.gitignore` 编辑，而 `secret-scan` 按设计不看未跟踪文件。
@@ -557,9 +557,9 @@
 - **风险**：低到中。OIDC 迁移需要 NuGet.org 侧配置可信发布策略，属外部依赖；收窄 env 作用域需确认所有实际用到的步骤都被覆盖（否则重演"密钥为空"的旧坑）。
 - **验证**：迁移后发布流程端到端成功且 workflow 中无静态密钥引用；若仅收窄作用域，`grep -n "NUGET_API_KEY" release.yml` 的命中范围仅限发布步骤。
 - **涉及文件**：`.github/workflows/release.yml:20-30`、`docs/development.md`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：①NUGET_API_KEY 从 job 级 env 收窄到 Push 步 step env（三个判定步 if 直读 secrets 上下文，规避 v62 的 step env 不跨步坑）；NuGet OIDC 可信发布为 NuGet.org 侧配置的外部依赖（与 Pal.ORM 同口径登记）②development.md 新增本地凭据纪律段（绝不 git add -f）
 
-### [ ] ITM-718 · 公共 API 语义澄清（`SqlTemplates`） · 可信度 ✅
+### [x] ITM-718 · 公共 API 语义澄清（`SqlTemplates`） · 可信度 ✅
 - **维度**：可读性 / API 契约
 - **优先级**：P2 · 危害: 低 · 复杂度: 易
 - **问题**：`src/PalDDD.Dapper/SqlTemplates.cs` 暴露 31 个 `public const` SQL 字符串，其中 `:115-119`（`OutboxLeaseUpdate`）与 `:164-168`（`OutboxSelectById`）的注解自述"当前无内部引用"。
@@ -568,7 +568,7 @@
 - **风险**：低。
 - **验证**：注释不再含"无内部引用"式表述；公共 API 快照无变化（本项不改签名）。
 - **涉及文件**：`src/PalDDD.Dapper/SqlTemplates.cs:115-119,164-168`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：两处「无内部引用」维护者自述改为面向消费者的契约说明（API 保留，按代码价值判定不删）
 
 ---
 

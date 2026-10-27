@@ -4,7 +4,7 @@
 
 **A DDD/CQRS/Event Sourcing infrastructure framework for .NET 11: zero runtime reflection, complete Native AOT pipeline, no over-abstraction.**
 
-[![NuGet](https://img.shields.io/badge/nuget-v4.0.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
+[![NuGet](https://img.shields.io/badge/nuget-v5.0.0--preview.1-orange)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
@@ -534,6 +534,13 @@ flowchart TB
 
 ## FAQ
 
+### Authentication & Authorization
+
+Pal.DDD is a library, not a host — it ships and enables no authentication/authorization middleware by default (delegating to the host is the intended design). Two things to know (ITM-695):
+
+- **Endpoint authorization**: `MapCommand`/`MapQuery` (including streaming endpoints) return `IEndpointConventionBuilder` — chain `.RequireAuthorization("policy-name")` directly to attach the authorization convention (policy metadata mounting is locked by a test; 401/403 enforcement is performed by the ASP.NET Core authorization middleware per policy). The sample code omits authorization to stay focused — **chain authorization onto every write endpoint in production**, and add `AddAuthentication`/`UseAuthentication`/`UseAuthorization` as needed.
+- **`/health` exposure**: `AddPalHealthChecks` registers `/health` which reports component topology and dependency status. Fine for internal deployments; when exposed to the public internet, bind the health endpoint to a restricted port/network face or replace it with an anonymous minimal probe.
+
 **What is the relationship with MediatR?**
 MediatR is an in-process command dispatcher. Pal.DDD ships an equivalent Dispatcher + PipelineBehavior, and on top of that provides Outbox, Inbox, Saga, EventLog, and Projection. If you only need command dispatch, the CQRS layer can replace MediatR; if you also need reliable message delivery and Saga orchestration, Pal.DDD provides the entire chain. For the relationship with MassTransit, see the [comparison table](#comparison-with-existing-solutions): the framework does not bind a transport — the Outbox adapts to any Broker via the `IMessageBroker` abstraction.
 
@@ -550,7 +557,7 @@ It relies on .NET 11 static features (JsonSerializerContext source-generation en
 Does not support .NET 8/9/10 (single target net11.0). Three AOT limitations (honestly declared via source `[RequiresDynamicCode]`): ① Saga ChildSaga child-flow dispatch (`MakeGenericMethod`/`MakeGenericType`, see `Saga.cs`) and ② dynamic event routing share the same root; ③ `ISpecification.Compile()` expression-tree compilation is unsupported under Native AOT — in AOT scenarios use `ToExpression()` and pass it to your query provider (the in-memory path `IsSatisfiedBy` uses `Expression.Compile`, unsupported under Native AOT). No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves. CQRS pipeline note: the parameterless open-generic `AddPalPipelineBehaviors()` triggers `AotCannotCreateGenericValueType` for value-type responses under Native AOT; AOT apps use `AddPalCommandHandler<T...>` or the explicit `AddPalPipelineBehaviors<TRequest, TResponse>()` (the two registrations are first-wins and mutually exclusive).
 
 **Who is using it in production?**
-Current version v4.0.0 (tag v4.0.0 published; SemVer major — the ADR-026 contract window: `IPalOutboxStore` four sync methods removed in favor of async signatures (breaking; migration map in the `[4.0.0]` Changed [Breaking] entry of CHANGELOG), cross-stack fencing contract unified for terminal outbox writes, `Dispatcher` instance-registration path plus `IImmediateWriteOutboxStore`/`ISagaLeaseBatchStore` added, MySQL ≥8.0.18 lease SKIP LOCKED, PalORM 6.4.1 dependency uplift and the EPSL performance-fix family; public API snapshot +46/−25). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects; the test measurement basis is in footnote ¹ at the top. If you implement `IPalOutboxStore` yourself, read the CHANGELOG migration notes before upgrading. You are welcome to try it in non-production environments and provide feedback.
+Current version v5.0.0 **preview** (`5.0.0-preview.1`, SemVer major preview; the same content is promoted to 5.0.0 after .NET 11 GA, with preview feedback folded into the GA round — public API snapshot +468/−64: `AddPalFullStack` extension and the `MySqlLeasePolicy` class removed, `SagaState.ExecutedStepKeys` changed to `List<string>` (ADR-035), `AddPalOrm*` extension signatures and several ctor/method signatures changed (migration notes in the `[5.0.0-preview.1]` compatibility quote block and the Changed/Removed entries of CHANGELOG); license relicensed AGPL-3.0-or-later → Apache-2.0 (ADR-036; previously published versions remain AGPL); new SSE streaming reads (ADR-030), detached stream resume (ADR-031), SQLite FTS5/JSON1 dual-stack API (ADR-032), Outbox Auto batch delivery (ADR-033) and four performance migrations (ADR-034); dependencies fully refreshed (Microsoft 11-line rc.3 + PalORM 6.8.0 + TUnit 1.76.28)). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects; the test measurement basis is in footnote ¹ at the top. If you implement custom stores/extensions, read the CHANGELOG migration notes before upgrading. You are welcome to try it in non-production environments and provide feedback.
 
 ## Contributing
 
@@ -558,8 +565,8 @@ Issues and PRs are welcome. The first build after cloning automatically configur
 
 ## License
 
-[GNU Affero General Public License v3.0 or later](LICENSE)
+**Version boundary**: v5.0 and later (including `5.0.0-preview.1`) use [Apache-2.0](LICENSE); previously published versions (v1.x–v4.0.0 and packages already on NuGet.org) remain AGPL-3.0-or-later and cannot be retroactively relicensed (see [ADR-036](docs/decisions/036-license-apache-2.0.md)).
+
+Apache-2.0 is permissive: commercial use, modification and closed-source integration are allowed, with an explicit patent grant; distribution must retain copies of [LICENSE](LICENSE) and [NOTICE](NOTICE) and state significant changes; trademarks are not granted. See the [LICENSE](LICENSE) file or <https://www.apache.org/licenses/LICENSE-2.0> for details.
 
 Copyright (C) 2026 SuperLee
-
-This project uses the Apache-2.0 license: a permissive license that allows commercial use, modification, and closed-source integration, with an explicit patent grant. Distribution must retain copies of [LICENSE](LICENSE) and [NOTICE](NOTICE) and state significant changes; trademarks are not granted. The AGPL-era network-service source-disclosure obligation no longer applies. The storage engine PalORM is also Apache-2.0 as of 6.8.0, leaving no copyleft component in the dependency chain. See the [LICENSE](LICENSE) file or <https://www.apache.org/licenses/LICENSE-2.0> for details.

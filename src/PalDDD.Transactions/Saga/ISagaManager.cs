@@ -9,12 +9,15 @@ namespace PalDDD.Transactions;
 /// Saga 管理器——用于恢复中断的 Saga、查询待决策 Saga、以及执行子 Saga。
 /// </summary>
 /// <remarks>
-/// v65 P3（实现约束声明）：本接口含 <c>internal</c> 成员
-/// <see cref="ExecuteChildSagaNonGenericAsync"/>——C# 的 internal 接口成员使实现类型必须与
-/// 本接口同程序集，<b>程序集外类型无法实现本接口</b>（编译期 CS0535：不能实现 internal 成员）。
-/// 故外部自定义管理器不受支持，<see cref="Saga{TState}.SagaManager"/> 实际只接受框架内实例
-/// （当前唯一实现为 sealed 的 <see cref="DefaultSagaManager"/>）。开放外部实现需在破坏性
-/// 变更中把该成员提升为 public/DIM 默认实现。
+/// v5.0 接口公开化（2026-10-27，兑现 v65 P3 声明的「破坏性变更中开放外部实现」窗口）：
+/// 本接口原含 <c>internal</c> 成员使程序集外类型无法实现（CS0535），现该成员（非泛型
+/// 子 Saga 分派）整体移出接口——反射路由与 manager 实例状态无关（纯 object →
+/// ProcessEventAsync 路由），平移至框架内 <c>SagaChildDispatch</c> 静态分派器，不再属于
+/// manager 契约；若留在接口上（无论 internal 还是 public），public 面的 DAM 标注都会
+/// 与「AOT 兼容程序集公共面零 <c>RequiresDynamicCode</c>」红线冲突。
+/// <see cref="InvalidateInterrupted"/>/<see cref="AcquireInvalidationFenceAsync"/> 为 DIM
+/// 空默认（无进程内中断条目语义的实现可直接放行）。外部程序集可实现本接口提供持久化
+/// manager；进程内语义（中断条目、失效集、决策栅栏）见 <see cref="DefaultSagaManager"/>。
 /// </remarks>
 public interface ISagaManager
 {
@@ -66,19 +69,27 @@ public interface ISagaManager
         where TChildState : SagaState, new();
 
     /// <summary>
-    /// 非泛型子 Saga 执行——用于 ChildSagaStep 从非泛型上下文调用。<br/>
-    /// 默认实现在 <see cref="DefaultSagaManager"/> 中通过反射委托给泛型版本。
+    /// 失效指定 Saga 的中断条目——超时兜底补偿把 Saga 置终态后调用，使迟到决策可见失败。
     /// </summary>
-    /// <param name="childSaga">子 Saga 编排器实例（object 类型）</param>
-    /// <param name="childState">子 Saga 初始状态</param>
-    /// <param name="triggerEvent">触发子 Saga 的事件</param>
-    /// <param name="ct">取消令牌</param>
-    /// <returns>执行后的子 Saga 状态</returns>
-    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("Non-generic child saga dispatch relies on reflection; not compatible with trimming.")]
-    [System.Diagnostics.CodeAnalysis.RequiresDynamicCode("Uses MakeGenericMethod/MakeGenericType for non-generic dispatch; not compatible with native AOT.")]
-    internal ValueTask<SagaState> ExecuteChildSagaNonGenericAsync(
-        object childSaga,
-        SagaState childState,
-        object triggerEvent,
-        CancellationToken ct);
+    /// <remarks>
+    /// DIM 空默认：无进程内中断条目语义的实现（外部持久化 manager）无物可失效；
+    /// <see cref="DefaultSagaManager"/> 覆写为「先写失效集再移除条目」（v29 语义）。
+    /// v5.0 前此调用点以 <c>is DefaultSagaManager</c> 模式匹配绕过接口（外部实现被排除），
+    /// 公开化后纳入接口契约。
+    /// </remarks>
+    void InvalidateInterrupted(PalUlid sagaId) { }
+
+    /// <summary>
+    /// 获取失效栅栏——超时补偿**开始前**调用：先写失效集（拒绝新决策注册与派发），
+    /// 再持有 per-saga 互斥门，直至返回句柄 Dispose。
+    /// </summary>
+    /// <remarks>
+    /// v5.0 manager 侧 fencing（2026-10-27，根治 v37 P2 声明的「补偿进行中」半边窗口）：
+    /// <see cref="DefaultSagaManager"/> 的 <see cref="ResumeAsync{TDecision}"/> 决策派发全程
+    /// 持同一 per-saga 门——补偿持栅栏期间到达的决策等待补偿完成后按「无条目/已失效」
+    /// 可见失败，不再在正被回滚的 Saga 上产生副作用并假成功。
+    /// DIM 空默认（空栅栏）：外部持久化 manager 无进程内条目，补偿不受本地栅栏约束。
+    /// </remarks>
+    ValueTask<IAsyncDisposable> AcquireInvalidationFenceAsync(PalUlid sagaId, CancellationToken ct)
+        => new(NullInvalidationFence.Instance);
 }

@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Messaging.Kafka</RootNamespace>
+    <Description>Pal.DDD Kafka 适配器 — Confluent.Kafka 发布/订阅、幂等默认与消费健康信号（非 AOT 栈）。</Description>
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>

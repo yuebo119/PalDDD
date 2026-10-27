@@ -189,8 +189,7 @@ TState>
             try
             {
                 // P3 修复（八轮）：补偿指标移到持久化成功后再计——提前计数会在
-                // 保存失败/0 行时重复累加（下一 tick 重做补偿再 +1）
-                var compensationSucceeded = false;
+                // 保存失败/0 行时重复累加（下一 tick 重做补偿再 +1）；声明随 ITM-709 抽取迁入 CompensateTimedOutSagaAsync
                 if (_orchestrator.IsTimedOut(sagaState, now, out var timedOutSteps))
                 {
                     foreach (var step in timedOutSteps)
@@ -200,93 +199,15 @@ TState>
                             sagaState.SagaId, sagaState.CurrentState, step.Name);
                     }
 
-                    try
-                    {
-                        await _orchestrator.CompensateAsync(sagaState, ct).ConfigureAwait(false);
-                        sagaState.Status = SagaStatus.Compensated;
-                        sagaState.CompletedAt = now;
-                        sagaState.CurrentState = SagaState.CompensatedStateName;
-                        sagaState.NextCheckAt = null; // M1：终态不再参与超时扫描
-                        compensationSucceeded = true;
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // 外部取消：仍释放租约避免该 Saga 对其他实例不可见（ITM-010），
-                        // 然后重新抛出让上层感知关停信号。租约释放用独立 CT（不响应本次取消）。
-                        // SaveChanges 失败不掩盖原始 OCE —— 关停时 DB 连接可能已断。
-                        sagaState.LeasedBy = null;
-                        // 扫描轮转：写回本 tick 时刻而不是 NULL，legacy 扫描按 leased_until
-                        // NULLS FIRST 排序时该行退到未扫描行之后，避免同一批每 tick 重租。
-                        sagaState.LeasedUntil = now;
-                        try
-                        {
-                            var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
-                            if (releaseSaved == 0)
-                            {
-                                // v26 P3：OCE 关停路径的租约释放 0 行——乐观锁冲突（LeaseDuration 兜底）。
-                                // 与下方补偿路径/非超时路径的 0 行 Warning 对齐（排障三处都看），
-                                // 原实现忽略返回值使关停期冲突静默
-                                _logger.Warning($"Saga {sagaState.SagaId} lease release save affected 0 rows during cancellation (optimistic concurrency conflict); lease will expire by LeaseDuration");
-                            }
-                        }
-                        catch (Exception releaseEx) when (releaseEx is not OperationCanceledException)
-                        {
-                            _logger.Error(releaseEx, PalLogEventIds.SagaLeaseReleaseFailed,
-                                "Saga {SagaId} lease release failed during cancellation; lease will expire by LeaseDuration",
-                                sagaState.SagaId);
-                        }
-                        throw;
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        _logger.Error(ex, PalLogEventIds.SagaCompensationFailed,
-                            "Saga {SagaId} compensation failed", sagaState.SagaId);
-                        // ITM-200 修复（三十一轮）：截断后再入库——Error 列 HasMaxLength(2048)
-                        // （SagaStateDbContext），补偿异常（AggregateException/FanOut 聚合消息）超长
-                        // 会让 SaveChangesAsync 抛 DbUpdateException → 被外层 catch 吞 → Saga
-                        // 停留 Processing 无限重租重补偿且 CompensationFailed 永不落库。
-                        // 二轮评审 T6：改用共享 FailureReason.Normalize（截断 + F2 空白归一——
-                        // 后者此前为 Saga 漏网姊妹，ex.Message 为 null 时旧内联版直接 NRE）。
-                        sagaState.Error = Core.FailureReason.Normalize(ex.Message);
-                        sagaState.CurrentState = SagaState.CompensationFailedStateName;
-                        sagaState.Status = SagaStatus.CompensationFailed;
-                        sagaState.ErrorAt = now;
-                        sagaState.NextCheckAt = null; // M1：终态不再参与超时扫描
-                    }
-
-                    sagaState.LeasedBy = null;
-                    sagaState.LeasedUntil = null;
-                    // v26 P1 修复：补偿终态同步失效 Manager 中断条目——迟到决策走"无条目"
-                    // IOE 可见失败。此前仅靠 DefaultSagaManager.ResumeAsync 的终态分支，
-                    // 但条目闭包捕获中断时旧实例、补偿写的是 store successor（CloneForLease
-                    // 后继），旧实例永远停留 AwaitingHumanDecision——终态分支不可达，迟到
-                    // 决策会在已回滚 Saga 上执行副作用并假成功
-                    if ((sagaState.Status == SagaStatus.Compensated || sagaState.Status == SagaStatus.CompensationFailed)
-                        && _orchestrator.SagaManager is DefaultSagaManager defaultManager)
-                    {
-                        defaultManager.InvalidateInterrupted(sagaState.SagaId);
-                    }
-                    // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消——收集到环后
-                    // 由批量冲刷以 CancellationToken.None 保存（与上方 OCE 路径语义对齐）
+                    // ITM-709（2026-10-27 清零轮）：补偿段抽私有方法——CheckTimeoutsAsync 主体嵌套 7→3，
+                    // 语句序与语义逐行保持（fence 获取/OCE 租约释放/终态失效化全部原样迁移）
+                    var compensationSucceeded = await CompensateTimedOutSagaAsync(sagaState, timedOutSteps, now, ct).ConfigureAwait(false);
                     (pendingTerminal ??= []).Add((sagaState, compensationSucceeded));
                 }
                 else
                 {
-                    // 到期过滤下，已到期但未超时的行（时钟偏差/步骤重入等）必须推进
-                    // NextCheckAt，否则同一批行每 tick 重复被租，饿死后续到期 Saga。
-                    if (options.EnableDueTimeFilter && sagaState.NextCheckAt is not null)
-                    {
-                        // 与 Saga.UpdateNextCheckAt 同口径：无待检查超时写哨兵而非 null，
-                        // 避免下一 tick 又以「NULL = 存量行」被租一次。
-                        var nextCheck =
-                            _orchestrator.ComputeNextCheckAt(sagaState) ?? SagaState.NoPendingTimeout;
-                        if (nextCheck != sagaState.NextCheckAt)
-                        {
-                            sagaState.NextCheckAt = nextCheck;
-                            (pendingNextCheck ??= []).Add(sagaState);
-                        }
-                    }
-
+                    // ITM-709：两块抽私有助手（判据只量本方法嵌套——else 体 5 层 → 调用点 3 层）
+                    pendingNextCheck = TryAdvanceNextCheck(sagaState, options, pendingNextCheck);
                     // P0-FIX-3: 非超时 Saga 也必须释放租约 —— 否则超时检测平均延迟 = LeaseDuration（2 分钟）
                     // 而非 PollInterval（30 秒），多实例下该 Saga 对其他实例不可见
                     if (_store is ISagaLeaseBatchStore<TState>)
@@ -297,16 +218,7 @@ TState>
                     }
                     else
                     {
-                        sagaState.LeasedBy = null;
-                        sagaState.LeasedUntil = now;
-                        // P2 修复（取消路径对称）：同上——终态写入不响应取消
-                        var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
-                        if (releaseSaved == 0)
-                        {
-                            // P3 修复（八轮）：0 行 = 乐观锁冲突——租约释放未落库（LeaseDuration 到期兜底），
-                            // 记 Warning 与补偿路径对齐
-                            _logger.Warning($"Saga {sagaState.SagaId} lease release save affected 0 rows (optimistic concurrency conflict); lease will expire by LeaseDuration");
-                        }
+                        await ReleaseSingleLeaseAsync(sagaState, now).ConfigureAwait(false);
                     }
                 }
             }
@@ -341,6 +253,144 @@ TState>
         await FlushTerminalAndReleaseAsync(
             pendingTerminal, pendingNextCheck, pendingRelease, now, options.LeaseOwner)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// ITM-709（2026-10-27 清零轮）：单个超时 Saga 的补偿段（原 CheckTimeoutsAsync 内联块的逐字迁移）——
+    /// fence 获取（拒新决策 + per-saga 互斥）、补偿 try/catch（OCE 租约释放/一般失败终态化）、
+    /// 租约清理与中断条目失效化。返回是否补偿成功（供终态批量冲刷的指标口径使用）。
+    /// </summary>
+    private async ValueTask<bool> CompensateTimedOutSagaAsync(
+        TState sagaState,
+        System.Collections.Generic.IReadOnlyList<SagaStep> timedOutSteps,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        foreach (var step in timedOutSteps)
+        {
+            _logger.Warning(PalLogEventIds.SagaTimedOut,
+                "Saga {SagaId} timed out at state {State}, step {Step}. Compensating...",
+                sagaState.SagaId, sagaState.CurrentState, step.Name);
+        }
+
+        var compensationSucceeded = false;
+        // v5.0 manager 侧 fencing（2026-10-27）：补偿开始前先取失效栅栏——写失效集拒新决策
+        // + per-saga 互斥，与 ResumeAsync 决策派发全程互斥，根治「补偿进行中决策在
+        // 正被回滚的 Saga 上产生副作用且假成功」窗口（v37 P2 声明的根治兑现）。
+        await using (var invalidationFence = _orchestrator.SagaManager is { } fenceManager
+            ? await fenceManager.AcquireInvalidationFenceAsync(sagaState.SagaId, ct).ConfigureAwait(false)
+            : null)
+        {
+            try
+            {
+                await _orchestrator.CompensateAsync(sagaState, ct).ConfigureAwait(false);
+                sagaState.Status = SagaStatus.Compensated;
+                sagaState.CompletedAt = now;
+                sagaState.CurrentState = SagaState.CompensatedStateName;
+                sagaState.NextCheckAt = null; // M1：终态不再参与超时扫描
+                compensationSucceeded = true;
+            }
+            catch (OperationCanceledException)
+            {
+                // 外部取消：仍释放租约避免该 Saga 对其他实例不可见（ITM-010），
+                // 然后重新抛出让上层感知关停信号。租约释放用独立 CT（不响应本次取消）。
+                // SaveChanges 失败不掩盖原始 OCE —— 关停时 DB 连接可能已断。
+                sagaState.LeasedBy = null;
+                // 扫描轮转：写回本 tick 时刻而不是 NULL，legacy 扫描按 leased_until
+                // NULLS FIRST 排序时该行退到未扫描行之后，避免同一批每 tick 重租。
+                sagaState.LeasedUntil = now;
+                try
+                {
+                    var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                    if (releaseSaved == 0)
+                    {
+                        // v26 P3：OCE 关停路径的租约释放 0 行——乐观锁冲突（LeaseDuration 兜底）。
+                        // 与下方补偿路径/非超时路径的 0 行 Warning 对齐（排障三处都看），
+                        // 原实现忽略返回值使关停期冲突静默
+                        _logger.Warning($"Saga {sagaState.SagaId} lease release save affected 0 rows during cancellation (optimistic concurrency conflict); lease will expire by LeaseDuration");
+                    }
+                }
+                catch (Exception releaseEx) when (releaseEx is not OperationCanceledException)
+                {
+                    _logger.Error(releaseEx, PalLogEventIds.SagaLeaseReleaseFailed,
+                        "Saga {SagaId} lease release failed during cancellation; lease will expire by LeaseDuration",
+                        sagaState.SagaId);
+                }
+                throw;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Error(ex, PalLogEventIds.SagaCompensationFailed,
+                    "Saga {SagaId} compensation failed", sagaState.SagaId);
+                // ITM-200 修复（三十一轮）：截断后再入库——Error 列 HasMaxLength(2048)
+                // （SagaStateDbContext），补偿异常（AggregateException/FanOut 聚合消息）超长
+                // 会让 SaveChangesAsync 抛 DbUpdateException → 被外层 catch 吞 → Saga
+                // 停留 Processing 无限重租重补偿且 CompensationFailed 永不落库。
+                // 二轮评审 T6：改用共享 FailureReason.Normalize（截断 + F2 空白归一——
+                // 后者此前为 Saga 漏网姊妹，ex.Message 为 null 时旧内联版直接 NRE）。
+                sagaState.Error = Core.FailureReason.Normalize(ex.Message);
+                sagaState.CurrentState = SagaState.CompensationFailedStateName;
+                sagaState.Status = SagaStatus.CompensationFailed;
+                sagaState.ErrorAt = now;
+                sagaState.NextCheckAt = null; // M1：终态不再参与超时扫描
+            }
+        } // 失效栅栏释放：此后到达的决策按「无条目/已失效」可见失败
+
+        sagaState.LeasedBy = null;
+        sagaState.LeasedUntil = null;
+        // v26 P1 修复：补偿终态同步失效 Manager 中断条目——迟到决策走"无条目"
+        // IOE 可见失败。此前仅靠 DefaultSagaManager.ResumeAsync 的终态分支，
+        // 但条目闭包捕获中断时旧实例、补偿写的是 store successor（CloneForLease
+        // 后继），旧实例永远停留 AwaitingHumanDecision——终态分支不可达，迟到
+        // 决策会在已回滚 Saga 上执行副作用并假成功
+        // v5.0 接口公开化：失效经接口契约（原 is DefaultSagaManager 模式匹配把
+        // 外部实现排除在失效语义外；DIM 空默认——无进程内条目的实现无物可失效）
+        if (sagaState.Status == SagaStatus.Compensated || sagaState.Status == SagaStatus.CompensationFailed)
+        {
+            _orchestrator.SagaManager?.InvalidateInterrupted(sagaState.SagaId);
+        }
+        // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消——收集到环后
+        // 由批量冲刷以 CancellationToken.None 保存（与上方 OCE 路径语义对齐）
+
+        return compensationSucceeded;
+    }
+
+    /// <summary>
+    /// ITM-709（2026-10-27 清零轮）：到期过滤下的 NextCheckAt 推进（原 else 分支前段迁移）——
+    /// 推进值不变时不入批（零额外写）；返回可能更新的 pendingNextCheck 环。
+    /// </summary>
+    private List<TState>? TryAdvanceNextCheck(TState sagaState, SagaProcessorOptions options, List<TState>? pendingNextCheck)
+    {
+        // 到期过滤下，已到期但未超时的行（时钟偏差/步骤重入等）必须推进
+        // NextCheckAt，否则同一批行每 tick 重复被租，饿死后续到期 Saga。
+        if (!options.EnableDueTimeFilter || sagaState.NextCheckAt is null)
+            return pendingNextCheck;
+
+        // 与 Saga.UpdateNextCheckAt 同口径：无待检查超时写哨兵而非 null，
+        // 避免下一 tick 又以「NULL = 存量行」被租一次。
+        var nextCheck = _orchestrator.ComputeNextCheckAt(sagaState) ?? SagaState.NoPendingTimeout;
+        if (nextCheck == sagaState.NextCheckAt)
+            return pendingNextCheck;
+        sagaState.NextCheckAt = nextCheck;
+        (pendingNextCheck ??= []).Add(sagaState);
+        return pendingNextCheck;
+    }
+
+    /// <summary>
+    /// ITM-709（2026-10-27 清零轮）：无批量能力的存储的单条租约释放（原 else 分支尾段迁移）。
+    /// </summary>
+    private async ValueTask ReleaseSingleLeaseAsync(TState sagaState, DateTimeOffset now)
+    {
+        sagaState.LeasedBy = null;
+        sagaState.LeasedUntil = now;
+        // P2 修复（取消路径对称）：同上——终态写入不响应取消
+        var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+        if (releaseSaved == 0)
+        {
+            // P3 修复（八轮）：0 行 = 乐观锁冲突——租约释放未落库（LeaseDuration 到期兜底），
+            // 记 Warning 与补偿路径对齐
+            _logger.Warning($"Saga {sagaState.SagaId} lease release save affected 0 rows (optimistic concurrency conflict); lease will expire by LeaseDuration");
+        }
     }
 
     /// <summary>

@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.DependencyInjection</RootNamespace>
+    <Description>Pal.DDD DI 组装 — AddPalCoreStack/AddPalCqrs 等组件级注册入口与 IPalLogger 门面接线。</Description>
     <!-- IL3058: ZLogger 传递分析器警告 -->
     <!-- v16 P2-5 声明：本项目无 IsAotCompatible 显式行——继承 Build.props 的 true（CI PalOrmSample
          AOT publish+run 实证 AddPalDDD/AddPalCommandHandler 链路可行）。IL3058 为 ZLogger 传递

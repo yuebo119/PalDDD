@@ -163,7 +163,7 @@ public static class PostgreSqlJsonb
         // P3 修复（八轮评审）：path 元素内单引号改 SQL 标准翻倍（对齐同文件 EscapeLiteral）——
         // 此前 Replace("'","\\") 的反斜杠转义在 standard_conforming_strings=on（PG 默认）下不生效，
         // 含单引号的 path 元素会提前终止字符串字面量。PG path 数组格式为 '{a,b}'（元素不带外层引号）。
-        var p = string.Join(",", path.Select(k => k.Replace("'", "''")));
+        var p = string.Join(",", path.Select(EscapeLiteral));
         return $"{Escape(column)} #>> '{{{p}}}'";
     }
 
@@ -194,7 +194,7 @@ public static class PostgreSqlJsonb
         // P3 修复（八轮评审）：path 元素内单引号改 SQL 标准翻倍（对齐同文件 EscapeLiteral）——
         // 此前 Replace("'","\\") 的反斜杠转义在 standard_conforming_strings=on（PG 默认）下不生效，
         // 含单引号的 path 元素会提前终止字符串字面量。PG path 数组格式为 '{a,b}'（元素不带外层引号）。
-        var p = string.Join(",", path.Select(k => k.Replace("'", "''")));
+        var p = string.Join(",", path.Select(EscapeLiteral));
         return $"{Escape(column)} #> '{{{p}}}'";
     }
 
@@ -253,6 +253,13 @@ public static class PostgreSqlJsonb
     /// <b>不做反斜杠翻倍</b>：<c>\\</c> 在 <c>on</c> 下被解释为两个字面反斜杠——翻倍会在
     /// 默认配置下破坏当前合法的含反斜杠键，两种服务端配置下不存在统一正确的转义形态，
     /// 故保持现状并声明。需要绝对安全时请改用参数化查询（<c>payload ? @key</c>）。
+    /// </para>
+    /// <para>
+    /// ITM-716（2026-10-27）：本助手是 PG 方言前提下的字面量转义<b>唯一入口</b>（path 段与
+    /// JSON 值共用）——<b>禁止复制到 MySQL 方言</b>：MySQL 默认开启反斜杠转义语义
+    /// （<c>NO_BACKSLASH_ESCAPES</c> 未启用时），同样的 <c>'→''</c> 逻辑之外还需处理
+    /// <c>\</c>，跨方言复用本单引号翻倍实现会静默产生注入面。SQLite 侧同名能力见
+    /// <c>SqliteJsonCore.QuoteLiteral</c>（各自方言自洽）。
     /// </para>
     /// </summary>
     private static string EscapeLiteral(string value)

@@ -125,9 +125,9 @@ public static class SqlTemplates
     public const string OutboxRequeueDead =
         "UPDATE outbox_messages SET status=0,processed_at=NULL,error=@audit,next_attempt_at=@next,locked_by=NULL,locked_until=NULL WHERE id=@id AND status=2";
 
-    /// <summary>原子租约获取 — UPDATE 子句。
-    /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
-    /// 消费方保留，删除前须按代码价值判定六项核查（docs 定位/roadmap/git 演进/测试覆盖）。</summary>
+    /// <summary>原子租约获取 — UPDATE 子句（供外部消费方拼装自定义租约 SQL）。
+    /// 契约：@owner/@until 为租约目标值；WHERE id IN 后接消费方提供的 ID 谓词（框架内部
+    /// 用 <see cref="OutboxLeaseUpdatePG"/> 等方言完整形态，本常量是方言无关的裸 UPDATE 头）。</summary>
     public const string OutboxLeaseUpdate =
         "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until, next_attempt_at=@until WHERE id IN ";
 
@@ -198,9 +198,8 @@ public static class SqlTemplates
         + " AND next_attempt_at<=@now"
         + " ORDER BY next_attempt_at, created_at LIMIT @n) RETURNING *";
 
-    /// <summary>按 ID 批量查询（用于 PG RETURNING * 替代路径）。
-    /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
-    /// 消费方保留，删除前须按代码价值判定六项核查。另勘正原注释错字 "RETURING"。</summary>
+    /// <summary>按 ID 批量查询 — SELECT 头（供外部消费方拼装自定义回读 SQL）。
+    /// 契约：WHERE id IN 后接消费方提供的 ID 谓词；参数占位符逐个绑定 Ulid 文本。</summary>
     public const string OutboxSelectById =
         "SELECT * FROM outbox_messages WHERE id IN ";
 

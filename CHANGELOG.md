@@ -4,8 +4,8 @@
 日志格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范（完整规则见 [`docs/release.md`](docs/release.md) §十一）：
 **消费者可见变更在上**（Added/Changed/Deprecated/Removed/Fixed/Security + 本项目扩展 Dependencies/Documentation/Tests），**工程过程叙事入附录**；数字必须可验证；`[Unreleased]` 与发布段**同次提交转正、先于 tag**。
 
-> **当前版本**：`VersionPrefix=4.0.0` / `VersionSuffix=`（空——见 `Directory.Build.props`；4.0.0 升位依据：ADR-026 契约窗口——③④ `IPalOutboxStore` 四同步方法删除改异步签名（含 `AddMessagesAsync` 补 ct 尾参）与既有 `Dispatcher.Register(Type,Type,Type,RequestExecutor)` 重载加 `needsScope` 尾参属**签名破坏**，② Outbox 终态写 fencing 契约跨栈统一属**行为破坏**，按 release.md 判据「破坏性 API 变更」定为 Major；公共 API 快照 +48/−27（排除程序集版本引用行，含 `VersionProbeRow` 属性 v/v2→V/V2 命名合规改名）；3.3.0 升位依据：零公共 API 变化（快照唯一差异为程序集版本引用行 3.2.0.0 → 3.3.0.0）、无破坏性行为变更，变更面为依赖消费者可见上移（PalORM 五包跨上游主版本线 5.6.0→6.3.1 / Confluent.Kafka 2.16.0 / NativeCompressions 跨 1.0 稳定线 1.0.1）与 Kafka broker 后台可观测增强，按 release.md 判据「向后兼容的功能增强」定为 Minor；3.2.0 升位依据：新增 3 项公共 API 均向后兼容（预热参数带默认值 / 新增重载 / 可选标注），公开 API 快照 653 行新增、1 行删除（唯一删除为程序集版本引用 3.1.0.0 → 3.2.0.0），唯一争点（压缩损坏帧异常类型统一为 `InvalidDataException`）经裁决按破坏面量级定为 Minor，非 Major；3.1.0 的升位依据是两处三栈行为对齐属**放宽/对齐**而非转严，故为 Minor；3.0.0 的升位依据是 M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务的"静默错误转 fail-fast"，性质不同）
-> **发布状态**：4.0.0 已发布（2026-10-11，tag `v4.0.0`，SemVer Major——ADR-026 契约窗口（③④ 接口异步化签名破坏 + ② fencing 行为统一 + ① Dispatcher 实例注册路径）+ ADR-025 MySQL SKIP LOCKED 租约 + EPSL 性能修复族 + PalORM 6.4.1 依赖上移）；3.3.0 已发布（2026-10-08，tag `v3.3.0` → 本提交，SemVer Minor——零公共 API 变更（快照唯一差异为版本引用行 3.2.0.0 → 3.3.0.0），变更面为依赖消费者可见上移与 Kafka 后台可观测增强，无破坏性变更）；3.2.0 已发布（2026-09-25，tag `v3.2.0` → 本提交，SemVer Minor——新增公共 API 向后兼容 + 压缩错误路径异常类型统一，快照 653+/1−（唯一删除为版本引用行）无签名破坏）；3.1.0 已发布（2026-09-23，tag `v3.1.0`，SemVer Minor——三栈行为对齐 + 版本承诺守卫类变更，无破坏性 API 变更）；3.0.0 已发布（2026-09-20 tag `v3.0.0`，SemVer Major——M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务 fail-fast 两处行为破坏性变更）；2.2.0 已于 2026-09-15 发布（tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag `v4.0.0` 之后的变更见 `[Unreleased]`。
+> **当前版本**：`VersionPrefix=5.0.0` / `VersionSuffix=preview.1`（见 `Directory.Build.props`；5.0.0 升位依据：公共 API 快照 +468/−64 的签名破坏面——`AddPalFullStack` 扩展与 `MySqlLeasePolicy` 类移除、ADR-035 `ExecutedStepKeys` `Collection<string>`→`List<string>`、`AddPalOrm*` 三扩展与多处 ctor/方法签名变更——加批模式回放 fail-fast 等行为破坏，按 release.md 判据「破坏性 API 变更」定为 Major，与源码既有 `[Obsolete("... will be removed in v5.0.0")]` 预告一致；4.0.0 升位依据：ADR-026 契约窗口——③④ `IPalOutboxStore` 四同步方法删除改异步签名（含 `AddMessagesAsync` 补 ct 尾参）与既有 `Dispatcher.Register(Type,Type,Type,RequestExecutor)` 重载加 `needsScope` 尾参属**签名破坏**，② Outbox 终态写 fencing 契约跨栈统一属**行为破坏**，按 release.md 判据「破坏性 API 变更」定为 Major；公共 API 快照 +48/−27（排除程序集版本引用行，含 `VersionProbeRow` 属性 v/v2→V/V2 命名合规改名）；3.3.0 升位依据：零公共 API 变化（快照唯一差异为程序集版本引用行 3.2.0.0 → 3.3.0.0）、无破坏性行为变更，变更面为依赖消费者可见上移（PalORM 五包跨上游主版本线 5.6.0→6.3.1 / Confluent.Kafka 2.16.0 / NativeCompressions 跨 1.0 稳定线 1.0.1）与 Kafka broker 后台可观测增强，按 release.md 判据「向后兼容的功能增强」定为 Minor；3.2.0 升位依据：新增 3 项公共 API 均向后兼容（预热参数带默认值 / 新增重载 / 可选标注），公开 API 快照 653 行新增、1 行删除（唯一删除为程序集版本引用 3.1.0.0 → 3.2.0.0），唯一争点（压缩损坏帧异常类型统一为 `InvalidDataException`）经裁决按破坏面量级定为 Minor，非 Major；3.1.0 的升位依据是两处三栈行为对齐属**放宽/对齐**而非转严，故为 Minor；3.0.0 的升位依据是 M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务的"静默错误转 fail-fast"，性质不同）
+> **发布状态**：5.0.0-preview.1 已转正待发布（2026-10-27，workflow_dispatch 预览通道；GA 轮清空 VersionSuffix 后同内容转正 5.0.0）；4.0.0 已发布（2026-10-11，tag `v4.0.0`，SemVer Major——ADR-026 契约窗口（③④ 接口异步化签名破坏 + ② fencing 行为统一 + ① Dispatcher 实例注册路径）+ ADR-025 MySQL SKIP LOCKED 租约 + EPSL 性能修复族 + PalORM 6.4.1 依赖上移）；3.3.0 已发布（2026-10-08，tag `v3.3.0` → 本提交，SemVer Minor——零公共 API 变更（快照唯一差异为版本引用行 3.2.0.0 → 3.3.0.0），变更面为依赖消费者可见上移与 Kafka 后台可观测增强，无破坏性变更）；3.2.0 已发布（2026-09-25，tag `v3.2.0` → 本提交，SemVer Minor——新增公共 API 向后兼容 + 压缩错误路径异常类型统一，快照 653+/1−（唯一删除为版本引用行）无签名破坏）；3.1.0 已发布（2026-09-23，tag `v3.1.0`，SemVer Minor——三栈行为对齐 + 版本承诺守卫类变更，无破坏性 API 变更）；3.0.0 已发布（2026-09-20 tag `v3.0.0`，SemVer Major——M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务 fail-fast 两处行为破坏性变更）；2.2.0 已于 2026-09-15 发布（tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag `v4.0.0` 之后的变更见 `[Unreleased]`。
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---
@@ -13,6 +13,61 @@
 ## [Unreleased]
 
 ### Added
+
+- **2026-10-27 历史审计挂账清零轮（42 条全部闭环，五次 checkpoint 提交 7613d79/3eb568e/24af9a1/1c7e6e1/06219fc）**：
+  背景：`docs/review/` 三份 2026-09 全量审计的 42 条未回勾条目（09-10 一条 + 09-15 三十九条 + 09-16 两条），
+  其中约 15 条实为后续轮已落地而未回勾、25 条真实开放、2 条按条目预设退出条件处置。处置形态：
+  ①**回勾带证据 34 条**（后续轮已落地：Dapper 7 store 全注册、数据面索引、AOT 事实统一、
+  count-audit/断言棘轮、perf-nightly 基准归档、A11/B11 批量、M2 检查点组末水位等——逐条在
+  action-items 文档状态字段注明落地轮次与实况验证）；
+  ②**新实施 12 条**：`OutboxBatchProcessor` 毒消息四分支锁定测试（ITM-685）、`MapQuery` 绑定段
+  输入异常归 400 白名单（ITM-696）、README×2 认证授权段 + 授权约定链锁定（ITM-695）、断言棘轮
+  FsCheck 豁免与收紧 200→195（ITM-705/706）、`FakeTimeProvider` 时钟改为回调前推进（ITM-785，
+  五面板零翻转）、Kafka 投毒消息错误路径（ITM-708）、csproj 包描述门禁 D13（ITM-690，首跑抓出
+  两处占位漏网）、secret-scan 检测面扩充（扩展名 7 类 + URI/env/AccountKey 三形态 + 白名单
+  子串收紧 + 9 个令牌前缀族，selftest 32/32、gate-audit 47/47）、`NUGET_API_KEY` 收窄到推送步、
+  18 包补 Description、`scripts/README.md` 索引（ITM-713）、两个复杂度热点方法嵌套 7/6→3（ITM-709）、
+  PG path 转义收敛单一入口（ITM-716）；
+  ③**双证伪 2 条**（端到端探针实证：`PalDDD.Base` 分析器正常交付 PDDD001；net11 框架自动提供
+  M.E.Options/Hosting.Abstractions，显式引用反触发 NU1510）；
+  ④**按预设退出条件 2 条**（ITM-702 锁文件在 rc.3 SDK 实测还原失败、S3 反向验证后转 GA 清偿
+  窗口；ITM-710 实证核心已由 2026-09-19 decision Option A 落地，SafeObserve 四件泛化收益为负保留）。
+  ⑤配套：`coverage-baseline.json` 增设 `PalDDD.PalORM.Tests` 键（本地无 Docker 保守初值 0.3311，
+  降幅门禁覆盖 16 模块；CI 全量待重录上调）。
+
+## [5.0.0-preview.1] — 2026-10-27
+
+> **预发布说明（2026-10-27 用户裁决）**：本段内容为 5.0.0 正式版的预览发布（`5.0.0-preview.1`，workflow_dispatch 预览通道）。.NET 11 GA（2026-11）轮把 `VersionSuffix` 清空后，**同内容**以 5.0.0 正式版转正发布；预览期收集的消费者反馈并入 GA 轮修订。SemVer 判据与兼容性承诺与 5.0.0 一致（预发布标签已明示破坏窗口）。上方 `[Unreleased]` 的 2026-10-27 清零轮条目为预览之后的变更，随 GA 后的下一版本发布。
+> **范围**：`v4.0.0`（2026-10-11，tag 提交）→ `5.0.0-preview.1`（本提交），221+ 个提交（`git rev-list --count v4.0.0..HEAD` 为 221，另有本版发版轮提交）。
+> **兼容性**：SemVer **Major**。公共 API 快照 **+468/−64**：签名破坏含 `AddPalFullStack` 扩展移除（2026-10-21 契约审计第 2 轮裁决）、`MySqlLeasePolicy` 静态类移除、`SagaState.ExecutedStepKeys` `Collection<string>` → `List<string>`（ADR-035）、`AddPalOrmPostgreSql/MySql/Sqlite` 三扩展与 `DapperEventLog`/`OutboxProcessor` 等多处 ctor/方法签名变更、Dapper `SqlTemplates` SQL 常量改值（`InboxMarkProcessed` 补 `last_error=NULL` 等）、到期承诺清偿移除（`DomainCapabilityAttribute`/`AggregateNameAttribute`/`VersionProbeRow`/`OutboxDomainEventInterceptor.PendingEvents`/`SqlServerOutboxDbContext`）；行为破坏含批模式回放 fail-fast（非续读 checkpoint store + `CheckpointBatchSize>1` 显式拒绝）、`InMemoryInboxStore.MarkProcessedManyAsync` 异消费者批改抛 `ArgumentException`（对齐生产栈契约）、PalORM EventLog 冲突分类三段判定（ITM-075：撞库原样上抛不再误译为并发异常）。另有许可证 **AGPL-3.0-or-later → Apache-2.0**（ADR-036——已发布历史版本 v1.x~v4.0.0 永久保持 AGPL 不可追溯）。新增面：`IStreamQuery`/`IStreamQueryHandler` SSE 流式读（ADR-030）、断线续跑注册表与三端点（ADR-031）、SQLite FTS5/JSON1 双栈 API（ADR-032）、Outbox Auto 时间界批量投递（ADR-033）、性能迁移四项（ADR-034：到期索引/检查点组末水位/每订阅 consumer channel/EventId 二进制列）、**`ISagaManager` 接口公开化与 manager 侧决策 fencing（12 处到期承诺清偿）**、`IMessageBrokerHealth`/`ReplayDetailedAsync` 等可观测与契约收口、依赖全量核新（微软 11 线 rc.3 + PalORM 6.8.0 + TUnit 1.76.28）。
+> **组织方式**：按 Keep a Changelog 分类给出消费者可见变更，条目按轮次即时累积（Phase 0 纪律）；规范见 [`docs/release.md`](docs/release.md) §十一。
+
+### Added
+
+- **2026-10-27 v5.0 契约窗口：12 处到期版本承诺全量兑现（工程窗口 5 项）**：
+  ①**`ISagaManager` 接口公开化（公共 API）**：原 internal 成员 `ExecuteChildSagaNonGenericAsync`（外部程序集无法实现接口的根因）整体移出接口——反射路由与 manager 实例状态无关，平移至框架内 `SagaChildDispatch` 静态分派器（留在接口上会与「AOT 兼容程序集公共面零 DAM 标注」红线冲突）；接口新增 `InvalidateInterrupted`（DIM 空默认）与 `AcquireInvalidationFenceAsync`（DIM 空栅栏）契约——外部程序集从此可实现本接口提供持久化 Saga manager（此前 CS0535 编译阻断）。锁定测试 `ISagaManager_IsImplementableOutsideFrameworkAssembly_DimDefaultsUsable`（测试程序集即外部程序集，编译即锁）。
+  ②**manager 侧决策 fencing（根治「超时补偿进行中决策假成功」窗口）**：`DefaultSagaManager.ResumeAsync` 决策派发全程持 per-saga 门（`SemaphoreSlim`，同 sagaId 决策串行契约由调用方约定升级为框架内强制）；超时补偿处理器在补偿开始前经 `AcquireInvalidationFenceAsync` 先写失效集（拒新决策/新注册）再持同一门——两向互斥下，补偿进行中到达的决策等待补偿完成后按「无条目/已失效」`InvalidOperationException` 可见失败，不再在正被回滚的 Saga 上产生副作用并假成功；补偿失败（CompensationFailed）同样在栅栏期拒决策。锁定测试 `InvalidationFence_HeldDuringCompensation_BlocksResumeUntilReleased_ThenFailsVisibly`（变异红实证：移除失效集检查即红）。
+  ③**PalORM EventLog 冲突分类三段判定（行为变更）**：批与逐行路径的唯一索引冲突分类由单一版本判定升级为对齐 EFCore 实现的三段判定——批内 EventId 重复 / 表中已存在批内任一 EventId（逐事件单值 COUNT，与 PG 单条快路径同源）→ 数据错误原样上抛；EventId 全新但流被并发推进 → 转 `EventStreamConcurrencyException`。此前「撞库 + 并发推进同窗叠加误译为并发异常」的权衡（会诱导盲目重试的调用方无限循环）关闭。锁定测试：批内重复与撞既有 ID 两用例断言「非并发异常」类型（变异红实证）；**Not-Tested**：叠加窗口的行为差异面本地不可构造（SQLite 批 INSERT 单语句原子、MAX 不被部分推进；MySQL 逐行部分成功叠加由 CI `dialect-probe` 覆盖）。
+  ④**dynKey 双键轨迹定案（DECISION-2026-10-27-saga-dynkey-trajectory）**：DynamicStep 失败路径保留 dynKey 于轨迹（补偿连带回滚路由决策副作用）——维持现状，删 dynKey 的改向否决（漏补偿无兜底）。
+  ⑤**CloneForLease 深隔离定案（DECISION-2026-10-27-saga-cloneforlease-deep-isolation）**：维持浅拷贝共享集合（僵尸步骤必须能被后继者补偿——2026-09-19 审计回滚实证深拷贝致漏补偿静默消失）；复活条件 = copy-on-write 容器方案凭新决策重开。
+  公共 API 快照随此净 +3 行（`ISagaManager` 两新成员 + `DefaultSagaManager` 继承面；非泛型分派成员移出接口为删除行）；`VersionPromises_AreNotExpired` 守卫自此零到期承诺。
+
+- **2026-10-26 发版流程对齐 Pal.ORM 最新发版流程（4 项）**：
+  ①**CHANGELOG 结构校验接入发布流水线**：release.yml 在 pack 前运行
+  `scripts/changelog-check.cs`（此前仅本地清单项，发布路径无任何 CHANGELOG 校验），
+  脚本新增 C6–C10 五项检查（顶部版本对账 / 标题格式 / 段日期与 tag 提交日一致 /
+  日期单调 / 条目非空）与 `--selftest`，漏转正或日期失实在推送 NuGet 前被拦截；
+  gate-audit 登记两极隔离探针（失配必红 / 干净放行）。
+  ②**GitHub Release body 改为当前版本段自动提取**：此前 body 是整个 CHANGELOG.md
+  全文，现提取目标版本段 + 动态包表（从实际 nupkg 产物生成，增减包零维护）+
+  与上一版本的对比链接；Release 标题改为「PalDDD <tag 名>」。
+  ③**发布审批门**：release job 声明 `environment: production`——GitHub
+  Settings → Environments 配置 required reviewers 后推送 NuGet 前需人工批准，
+  未配置时无行为变化。
+  ④**版本一致性与 checkout 加固**：tag/input 版本比对改为 VersionPrefix+
+  VersionSuffix 组合全版本（preview tag 不再被前缀比对误拒）、grep -oP 改
+  POSIX sed（脱离 PCRE 依赖）、checkout 补 `fetch-depth: 0`（SourceLink 完整
+  历史与 tag 日期比对需要）。
 
 - **2026-10-22 R14 审计优化续：可观测与契约收口（7 项）**：
   ①**新增可选能力接口 `IMessageBrokerHealth`（公共 API）**：`IsConsumingHealthy` +
@@ -295,6 +350,10 @@
 
 ### Removed 移除
 
+- **12 处到期版本承诺全量兑现（2026-10-27，用户裁决「全部实现，实现了再发版 5.0」——VersionPromises 守卫清零）**：
+  ①**废弃 API 移除（8 条承诺）**：`DomainCapabilityAttribute` 与 `AggregateNameAttribute`（战略元数据双 Attribute，框架零消费，2026-08-26 精炼裁决）、`PalDDD.PalORM.Models.VersionProbeRow`（已被 `DbConnection.ServerVersion` 取代，全仓 0 引用）、`OutboxDomainEventInterceptor.PendingEvents` 公开诊断属性（诊断读取经 internal `PendingEventsCore`，IVT 测试在案）、`Transactions.EFCore.SqlServerOutboxDbContext`（零测试覆盖的未验证方言基类——需要 SQL Server 请自行派生 `OutboxDbContext`，参照 `UPDLOCK`/`READPAST` 原子租约形态并补测试）；同步出账 `TechDebtGuardTests` 关系覆盖白名单（三项→两项）与契约矩阵 AcceptedGap 冻结集合（13 格→12 格，SQLServer Outbox 格撤销）。
+  ②**工程窗口兑现（5 条承诺）**见下方 Added 对应条目（ISagaManager 公开化、manager 侧 fencing、ITM-075 分类对齐、dynKey 双键轨迹定案、CloneForLease 深隔离定案）。
+
 - **移除 Dependabot 依赖升级（2026-10-26，用户裁决「去除依赖升级这个功能」）**：删除 `.github/dependabot.yml`（nuget + github-actions 两条监视线，2026-09-20 审计 O2 引入），删除远端 5 条 `dependabot/*` 分支（对应 PR #10–#14，随分支删除自动关闭）。动因：git 历史已改写为单一版权人 SuperLee（2026-10-26），Dependabot 会持续以 `dependabot[bot]` 身份产生提交与分支，与单一版权目标冲突；依赖升级转人工核新轮（2026-10-11/17/19/20 既有实践）。防线不丢：Verify.TUnit ≥ 33 商业门由 `license-policy` 包级禁令继续机械执行；`config-policy` 检查 A 保留为再引入防线（dependabot.yml 重新出现即恢复校验，文件缺失改为 SKIP，此前为 fail-closed）。
 
 - **SQLite FTS5/JSON1 v4 API（ADR-032，破坏式清理）**：删除对 TEXT/ULID 主键不可用的 external-content `CreateOutboxIndex` 旧语义、`Match(index, query)`、`ExtractPath`、`Array`、`BuildObject` 以及返回 `string` 的 `CreateEventLogIndex`/`CreateOutboxIndex`、`Rebuild`/`Optimize`/`Drop` 旧入口；旧触发器名不再生成。升级顺序与逐项替换见 [`docs/migration/sqlite-fts-json-v5.md`](docs/migration/sqlite-fts-json-v5.md)：先执行 `DropLegacyStatements`，再建新索引。PalORM 包首次获得同语义 API。
@@ -320,6 +379,7 @@
   验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；全量 1851 用例 / 1771 通过 / 80 跳过 / 0 失败；新增 3 个锁定测试（notifier 组件级解析、批量 skipped 标签、pending-confirmation 值），每个各做一次变异探针（移除门面调用 / 删除 skipped 标签 / 改 result 值 → 对应用例红，其余绿）。公共 API 无变化。
 
 - **分离流心跳在等待期满分支被 continue 跳过（2026-10-20，S1854 死赋值暴露）**：`StreamRun.StreamToAsync` 原实现给 `heartbeat` 赋值后无条件 `continue`，写 `:keepalive` 的 `if (heartbeat)` 分支永远不可达——`MapDetachedStreamQuery` 的 `keepAliveInterval` 自 ADR-031 起实际未生效。修正为「唤醒直接 continue，等待期满才落下去写心跳并 flush」；新增 `StreamToAsync_IdleWithKeepAlive_WritesHeartbeat` 锁定（旧码红/新码绿）。
+- **DapperEventLog 真流式读取在 PG 上的列序缺陷（2026-10-19）**：M4 的 `event_id_bin` 由 `ALTER TABLE` 追加在物理列末，与逻辑列序不同；`CommandBehavior.SequentialAccess` 要求按物理列序单调读取，按列名取 ordinal 后跨列回读会抛 `Invalid attempt to read from column ordinal`。改为 `CommandBehavior.SingleResult`，仍逐行流式（不物化全部行），允许行内随机列访问。M4 真库探针在 PG/MySQL 均通过。
 - **存量第三方分析器告警归零（2026-10-20）**：`StreamRunRegistry._gate` 的 `object` 锁改 `System.Threading.Lock`（MA0158）；`StreamRun.FinishAsync` 的 `Cancel()` 改 `await CancelAsync()`（S6966）；`DapperEventLog.ReadOrdinals` 与 `OutboxBatchProcessor.DeliveryPolicy` 补 `[StructLayout(LayoutKind.Auto)]`（MA0008）；`Dispatcher` 的 `SendAsync`/`QueryAsync`、两个序列化器的 `Deserialize` 重载归位（S4136）；`PalOrmEventLog` 两处参数化动态 SQL 以 `#pragma warning disable S2077` 定点抑制并注依据。`quality-analyzers` 从 11 条回到基线 0；全量 1749 用例 0 失败。
 - **SQLite JSON1 路径段单引号未按 SQL 字面量翻倍（2026-10-19 质量系统评审，ADR-032 重构回归）**：v4 的 `EscapeJsonPathSegment` 对路径键做 `' → ''`；v5 改为引号路径后 `WritePathLiteral` 只处理 `\` 与 `"`，含单引号的键（如 `O'Brien`）会生成 `'$."a'b"'` 这类未终止字面量——执行期语法错误，且路径段若来自外部输入构成 SQL 注入面（实证 `Path("x' OR '1'='1")` 产出可解析的布尔表达式而非单一字符串）。修复：`PathLiteralLength` 与 `WritePathLiteral` 增加单引号翻倍；锁定测试 `Path_QuotesSpecialKeys`（含 `j'k`）、`Path_SingleQuote_InjectionAttempt_StaysInsideLiteral`、`Extract_SpecialKeys_ExecutesOnRealSqlite`（真实 SQLite 取值）。v4 的同名防线由 `SqliteDialectTests.Extract_KeyWithSingleQuote_IsEscaped` 覆盖，ADR-032 删除该文件时未迁移此用例，本轮补回。
 - **rc.2 SDK PublishAot 文档文件路径缺陷致 aot-verify MSB3030（2026-10-17，CI run 39002067257 实证）**：IL2070 修复后发布推进到复制步骤再红——rc.2 SDK 在 `PublishAot` + RID 路径下把 `DocumentationFile` 落到非 RID 目录（`bin/Release/net11.0/` 而非 `bin/Release/net11.0/<rid>/`），publish 复制步骤 MSB3030「找不到文件」（普通 `build -r` 落点正常、仅 publish 路径异常；rc.1 时代无此行为，属 SDK 钉扎扶正 rc.2 后暴露的连带面；增量旧产物会掩盖为假绿——本地清洁复现存证）。修复：两个 AOT 样本项目（PalOrmSample/AotSample，均 `IsPackable=false` 非发布诊断件，XML 无消费方）设 `GenerateDocumentationFile=false`，CI 与本地 publish 双修。验证：本地按 CI 原序列（无 RID restore → 带 RID PublishAot → 实跑）双样本 0 错误 + 断言全过。
@@ -340,10 +400,6 @@
 - **NativeCompressions 1.1.0 → 1.2.0（2026-10-15 核新，性能实施轮 R1~R10 后窗口，`dotnet list --outdated` 双通道实测）**：1.x 线内次版本，本轮唯一可升项；包内容 diff 逐项一致（8 文件同布局，仅 nupkg 自引用不同，LZ4/ZStd 消费面零变化）；破坏面按 PD9 由编译 + 往返测试实证（`NativeCompressionTests`）。同轮核新维持：MediatR 14.2.0（license 禁商业）、Verify.TUnit 33.3.3（禁令 ≥33）、CAP 10.1.0-preview / BDN 0.16.0-preview.2（仅预发布）不升。
 - **全量升级（2026-10-11 三升，v4.0.0 发布后核新，`dotnet list --outdated` 双通道实测）**：PalORM 五包 6.4.1 → **6.5.0**（次版本线；XML diff 1090 行实证变更面为上游 internal 基础设施族——新增 `DataSessionPool<T>` 会话池化、`EntityInfoCache` 实体元数据缓存、`QueryBuilderShared`/`PooledCts` 等，三契约文本逐字未动复核（PreWarmAsync 灌暖/会话级熔断作用域/readFromReplica 回落主库与 READ-002 教义），适配层对全部变更类型零消费；PD9 纪律：Release 0W0E + 16 项目面板 0 失败 + 6 处适配层注释与 deployment-performance.md 契约引用同提交升号）；ByteAether.Ulid 1.4.1 → **1.4.2**（rc 转稳定，解除「仅预发布不升」钉扎；元包 PalDDD.Base/Extension 字面版本同步——元包走 `ManagePackageVersionsCentrally=false` 需双改）；TUnit / TUnit.FsCheck 1.73.19 → **1.75.0**（MTP 传递维持 2.5.1，conventions §10.6 与 testing.md 版本行同提交更新）；微软 11 线 rc.1 → **11.0.0-rc.2.26504.105**（rc.2 已发，18 处中央钉扎全量 + Extension 元包两处字面版本；flatcontainer 逐包验证九包同批在案；SDK 维持 rc.1——API go-live 冻结故 rc.2 包对 rc.1 运行时逐位兼容由面板实证，SDK/GA 统一升位随 2026-11 GA 轮评估；global.json 头注同步）。
 - **钉扎维持（核新后复核）**：MediatR 维持 **12.5.0**（现最新 14.2.0，13.0.0 起 Lucky Penny 商业许可，license-policy 禁商业裁决；bench 对比锚）；Verify.TUnit 维持 **32.0.1**（现最新 33.3.3，license-policy 包级禁令 ≥33）；CAP 维持 **10.0.2**（10.1.0-preview 仅预发布不升）；BenchmarkDotNet 0.15.8（0.16.0-preview.2 仅预发布不升）。
-
-### Fixed
-
-- **DapperEventLog 真流式读取在 PG 上的列序缺陷（2026-10-19）**：M4 的 `event_id_bin` 由 `ALTER TABLE` 追加在物理列末，与逻辑列序不同；`CommandBehavior.SequentialAccess` 要求按物理列序单调读取，按列名取 ordinal 后跨列回读会抛 `Invalid attempt to read from column ordinal`。改为 `CommandBehavior.SingleResult`，仍逐行流式（不物化全部行），允许行内随机列访问。M4 真库探针在 PG/MySQL 均通过。
 
 ### Tests 测试
 

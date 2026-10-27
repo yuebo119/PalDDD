@@ -3,20 +3,33 @@
 // （MIG-012-C，2026-09-11；由 scripts/changelog-check.sh 107 行 bash 等价迁移）
 //
 // 用法（在仓库根执行）：
-//   dotnet run scripts/changelog-check.cs --     校验当前工作树
+//   dotnet run scripts/changelog-check.cs --                校验当前工作树
+//   dotnet run scripts/changelog-check.cs -- <目标版本>     顶部已发布段须 == 目标版本
+//   dotnet run scripts/changelog-check.cs -- --selftest    自测（C6–C10 判定函数正反例）
 //
 // 挂接点（docs/release.md）：§4.1 本地必跑 + §5.1 打 tag 前步骤 2.5；
-// 本门禁 FAIL 时禁止打 tag（CHANGELOG 先行纪律的机械强制，§九教训 1/2）。
+// 2026-10-26 起接入 .github/workflows/release.yml（pack 前阻断，对齐 Pal.ORM
+// changelog-check 的 M1-3 位次：校验必须在推送 NuGet 之前，放 push 之后形同虚设）。
+// 本门禁 FAIL 时禁止打 tag / 禁止发布（CHANGELOG 先行纪律的机械强制，§九教训 1/2）。
 //
 // 检查项：
 //   C1 CHANGELOG 首个版本段必须是 [Unreleased]
-//   C2 当前 VersionPrefix 若已存在同名 tag → 必须已有 [版本号] 转正段
+//   C2 当前版本（VersionPrefix[+VersionSuffix] 组合全版本）若已存在同名 tag
+//      → 必须已有 [版本号] 转正段（组合后 preview tag 不再被前缀失真漏判）
 //   C3 最新发布段分类层顺序符合 §11.2（Added→Changed→Deprecated→Removed→
 //      Fixed→Security→Dependencies→Documentation→Tests）
 //   C4 Tests 段禁止预估口径数字（"约 N"/"~N"/"预计"）[WARN 不阻断]
 //   C5 分类层禁内部术语泄漏（ITM-\d+ / v\d+ 轮次引用等）[WARN 不阻断——
 //      分类层=最新发布段至附录之间]
-// 退出码：0=无 FAIL；1=任一 FAIL。
+//   C6 顶部已发布段版本 == 目标版本（目标 = 参数 ?? props 组合全版本；
+//      与 §11.3 规则 5「转正与版本三件套同次提交」联动，2026-10-26 增）
+//   C7 顶部已发布段标题格式 = ## [X.Y.Z] — YYYY-MM-DD（§11.4 长破折号格式；
+//      解析失败时 C6/C8/C9/C10 跳过，不叠加误报）
+//   C8 段日期 == tag 提交日（tag 存在时；无 tag 视为首发正常跳过）
+//   C9 段日期单调：不早于下一发布段（防回填错位）
+//   C10 目标段条目非空（至少 1 条 "- "，防空段转正）
+//   C6–C10 只校验顶部第一个已发布段——历史段是审计记录，不回改也不扫。
+// 退出码：0=无 FAIL；1=任一 FAIL；2=用法错。
 //
 // 迁移说明：
 //   1) PASS 计数器语义保持（P3 修复后）：按实际执行的检查项累加——C4/C5 在
@@ -36,6 +49,16 @@ using System.Text.RegularExpressions;
 // 重定向行尾默认 \r\n（bash 为 \n），统一为 \n 保证双跑逐字节可比
 Console.OutputEncoding = Encoding.UTF8;
 Console.Out.NewLine = "\n";
+
+// 参数（2026-10-26 增）：--selftest 走自测；单个自由参数为目标版本（release.yml 从
+// tag 名剥 v 后传入），缺省取 Directory.Build.props 组合全版本。多参数一律用法错。
+if (args.Length == 1 && args[0] == "--selftest") return SelfTest();
+if (args.Length > 1)
+{
+    Console.Error.WriteLine("usage: dotnet run scripts/changelog-check.cs [--selftest | <目标版本>]");
+    return 2;
+}
+var targetArg = args.Length == 1 ? args[0] : "";
 
 const string changelog = "CHANGELOG.md";
 var pass = 0;
@@ -61,8 +84,13 @@ else
 }
 
 // ── C2 同名 tag 已存在 → 必须已转正 ──────────────────────────
-var version = Regex.Match(File.ReadAllText("Directory.Build.props"), "(?<=<VersionPrefix>)[^<]+").Value;
-if (version.Length == 0)
+// 2026-10-26 起 tag 判定与段名匹配均用 VersionPrefix+VersionSuffix 组合全版本：
+// preview 期 tag 是 v5.0.0-preview.1，只看前缀会漏判（v5.0.0 不存在 → 转正义务漏检）。
+var propsText = File.ReadAllText("Directory.Build.props");
+var versionPrefix = Regex.Match(propsText, "(?<=<VersionPrefix>)[^<]+").Value;
+var versionSuffix = Regex.Match(propsText, "(?<=<VersionSuffix>)[^<]+").Value;
+var version = ComposeFullVersion(versionPrefix, versionSuffix);
+if (versionPrefix.Length == 0)
 {
     Fail(2, "无法从 Directory.Build.props 解析 VersionPrefix");
 }
@@ -222,6 +250,24 @@ if (latestLine is not null && appendixLine is not null)
     }
 }
 
+// ── C6–C10 目标版本段对账（2026-10-26 增，对齐 Pal.ORM changelog-check）──
+// 目标版本 = 参数（CI 从 tag 剥 v 传入）优先，缺省取 props 组合全版本；
+// 只校验顶部第一个已发布段（[Unreleased] 跳过）——历史段是审计记录，不回改也不扫。
+var targetVersion = targetArg.Length > 0 ? targetArg : version;
+if (targetVersion.Length == 0)
+{
+    Fail(6, "无法确定目标版本（props 无 VersionPrefix 且未传目标版本参数）");
+}
+else
+{
+    foreach (var (id, kind, msg) in ValidateTargetSection(lines, targetVersion, TagCommitDate(targetVersion)))
+    {
+        if (kind == 0) Pass(id, msg);
+        else if (kind == 1) Warn(id, msg);
+        else Fail(id, msg);
+    }
+}
+
 Console.WriteLine($"═══ 结果: {pass} 通过 / {warn} 警告 / {fail} 失败 ═══");
 return fail == 0 ? 0 : 1;
 
@@ -248,4 +294,169 @@ static (int Exit, string Output) RunCapture(string fileName, string arguments)
     process.WaitForExit();
     process.WaitForExit();   // 双调用：确保异步缓冲 flush（沿 check-all.cs 先例）
     return (process.ExitCode, output);
+}
+
+// ─── C6–C10 判定函数（纯函数，供 --selftest 直接调用生产逻辑）───
+// Kind：0=PASS；1=WARN（跳过/不阻断，含 C7 失败后的级联跳过）；2=FAIL。
+static List<(int Id, int Kind, string Msg)> ValidateTargetSection(string[] lines, string targetVersion, string tagDate)
+{
+    var results = new List<(int Id, int Kind, string Msg)>();
+    var headings = lines
+        .Select((l, i) => (Line: l, No: i))
+        .Where(x => x.Line.StartsWith("## [", StringComparison.Ordinal))
+        .ToList();
+    // 第一个非 [Unreleased] 的 ## [ 段（与 C3 的排除口径一致：行内容含 Unreleased 即排除）
+    var firstReleased = headings.FirstOrDefault(h => !h.Line.Contains("Unreleased"));
+    if (firstReleased.Line is null)
+    {
+        results.Add((7, 2, "CHANGELOG 无任何已发布段标题（期望 ## [X.Y.Z] — YYYY-MM-DD）——目标版本段不存在"));
+        AddCascadeSkips(results, "跳过（C7 未过：无已发布段）");
+        return results;
+    }
+
+    var parsed = ParseVersionHeading(firstReleased.Line);
+    if (parsed is null)
+    {
+        results.Add((7, 2, $"已发布段标题格式不符 §11.4（期望 ## [X.Y.Z] — YYYY-MM-DD 长破折号）: {firstReleased.Line}"));
+        AddCascadeSkips(results, "跳过（C7 未过：标题不可解析）");
+        return results;
+    }
+    results.Add((7, 0, $"已发布段标题格式符合 §11.4: {firstReleased.Line}"));
+    var (topVersion, topDate) = parsed.Value;
+
+    // C6 顶部已发布段版本 == 目标版本
+    if (topVersion == targetVersion)
+        results.Add((6, 0, $"顶部已发布段 [{topVersion}] == 目标版本 {targetVersion}"));
+    else
+        results.Add((6, 2, $"顶部已发布段 [{topVersion}] ≠ 目标版本 {targetVersion}——新版本段必须置于顶部（转正与版本三件套同次提交，§11.3 规则 5）"));
+
+    // C8 段日期 == tag 提交日（tag 存在时；沿 C2 口径，无 tag 视为首发正常）
+    if (tagDate.Length == 0)
+        results.Add((8, 0, $"tag v{targetVersion} 尚未创建（首发正常），跳过与 tag 提交日的比对"));
+    else if (tagDate != topDate)
+        results.Add((8, 2, $"版本段日期 {topDate} ≠ tag v{targetVersion} 提交日 {tagDate}"));
+    else
+        results.Add((8, 0, $"段日期与 tag v{targetVersion} 提交日一致（{topDate}）"));
+
+    // C9 日期单调：不早于下一发布段（不可解析的历史段标题跳过，不扫历史内容）
+    (string Version, string Date)? next = null;
+    foreach (var h in headings)
+    {
+        if (h.No <= firstReleased.No) continue;
+        var p = ParseVersionHeading(h.Line);
+        if (p is not null) { next = p; break; }
+    }
+    if (next is null)
+        results.Add((9, 0, "无更早版本段，日期单调检查跳过"));
+    else if (string.CompareOrdinal(topDate, next.Value.Date) < 0)
+        results.Add((9, 2, $"日期倒序：[{topVersion}] 为 {topDate}，早于下一版本 [{next.Value.Version}] 的 {next.Value.Date}"));
+    else
+        results.Add((9, 0, $"日期单调：{topDate} ≥ [{next.Value.Version}] 的 {next.Value.Date}"));
+
+    // C10 目标段条目非空（段区间 = 本标题行到下一 ## [ 行；附录层条目同样计入）
+    var nextHeadingNo = headings.Where(h => h.No > firstReleased.No).Select(h => (int?)h.No).FirstOrDefault() ?? lines.Length;
+    var bullets = 0;
+    for (var i = firstReleased.No + 1; i < nextHeadingNo; i++)
+    {
+        if (lines[i].StartsWith("- ", StringComparison.Ordinal)) bullets++;
+    }
+    if (bullets == 0)
+        results.Add((10, 2, $"[{topVersion}] 段无任何条目（至少 1 条 \"- \" 变更描述）"));
+    else
+        results.Add((10, 0, $"[{topVersion}] 段条目数 {bullets} 条"));
+
+    return results;
+}
+
+// 段标题解析：## [X.Y.Z] — YYYY-MM-DD（§11.4 长破折号；不锚定行尾，容忍日期后副标题）。
+// [Unreleased] 与缺日期/缺分隔符的标题均返回 null（C7 FAIL / 跳过的分界）。
+static (string Version, string Date)? ParseVersionHeading(string line)
+{
+    var m = Regex.Match(line, @"^## \[(?<ver>[^\]]+)\]\s*—\s*(?<date>\d{4}-\d{2}-\d{2})");
+    return m.Success ? (m.Groups["ver"].Value, m.Groups["date"].Value) : null;
+}
+
+// 全版本组合：VersionPrefix + （非空 VersionSuffix 时）"-" + VersionSuffix；空前缀返回空串。
+static string ComposeFullVersion(string prefix, string suffix) =>
+    prefix.Length == 0 ? "" : suffix.Length == 0 ? prefix : $"{prefix}-{suffix}";
+
+// C7 失败后的级联跳过：C6/C8/C9/C10 以 WARN 记跳过，不叠加误报（阻断由 C7 FAIL 承担）。
+static void AddCascadeSkips(List<(int Id, int Kind, string Msg)> results, string why)
+{
+    results.Add((6, 1, why));
+    results.Add((8, 1, why));
+    results.Add((9, 1, why));
+    results.Add((10, 1, why));
+}
+
+// 自测断言辅助：指定检查项是否存在指定判定（避免常量数组实参触发 CA1861）。
+static bool HasKind(List<(int Id, int Kind, string Msg)> results, int id, int kind) =>
+    results.Any(r => r.Id == id && r.Kind == kind);
+
+// tag 提交日（作者日期，--date=short）：tag 不存在返回空串（C8 视为首发跳过）。
+static string TagCommitDate(string version)
+{
+    var (_, output) = RunCapture("git", $"log -1 --format=%ad --date=short v{version}");
+    return output.Trim();
+}
+
+// ─── 自测：C6–C10 判定函数正反例（调用生产函数本身，非字符串语料）───
+static int SelfTest()
+{
+    Console.WriteLine("═══ changelog-check.cs 自测（C6–C10 判定函数正反例）═══");
+    var pass = 0;
+    var total = 0;
+    void Case(string name, bool ok)
+    {
+        total++;
+        if (ok) { pass++; Console.WriteLine($"  ok   {name}"); }
+        else Console.WriteLine($"  FAIL {name}");
+    }
+
+    // ComposeFullVersion
+    Case("全版本组合：空后缀 = 前缀", ComposeFullVersion("4.0.0", "") == "4.0.0");
+    Case("全版本组合：preview 后缀拼接", ComposeFullVersion("5.0.0", "preview.1") == "5.0.0-preview.1");
+    Case("全版本组合：空前缀 = 空串（失败路径）", ComposeFullVersion("", "preview.1").Length == 0);
+
+    // ParseVersionHeading
+    Case("标题解析：本仓长破折号格式", ParseVersionHeading("## [4.0.0] — 2026-10-11") == ("4.0.0", "2026-10-11"));
+    Case("标题解析：[Unreleased] 不可解析", ParseVersionHeading("## [Unreleased]") is null);
+    Case("标题解析：缺分隔符不可解析（C7 FAIL 路径）", ParseVersionHeading("## [4.0.0] 2026-10-11") is null);
+    Case("标题解析：容忍日期后副标题", ParseVersionHeading("## [5.0.0] — 2026-10-11 · 副标题")!.Value.Version == "5.0.0");
+
+    // ValidateTargetSection：干净输入全过
+    var clean = new[] { "# PalDDD 变更日志", "", "## [Unreleased]", "", "- 累积中", "", "## [9.9.9] — 2026-01-02", "", "### Added 新增", "", "- 新条目" };
+    var cleanResult = ValidateTargetSection(clean, "9.9.9", "2026-01-02");
+    Case("干净输入：零 FAIL", cleanResult.All(r => r.Kind != 2));
+    Case("干净输入：C6/C7/C8/C10 均 PASS",
+        HasKind(cleanResult, 6, 0) && HasKind(cleanResult, 7, 0) && HasKind(cleanResult, 8, 0) && HasKind(cleanResult, 10, 0));
+
+    // 目标版本失配 → C6 FAIL（报文两侧版本都要有，可定位）
+    var mismatch = ValidateTargetSection(clean, "9.9.8", "");
+    Case("目标版本失配：C6 FAIL 且报文含两侧版本", mismatch.Any(r => r.Id == 6 && r.Kind == 2 && r.Msg.Contains("9.9.8") && r.Msg.Contains("9.9.9")));
+
+    // 日期与 tag 提交日不一致 → C8 FAIL
+    Case("tag 日期失配：C8 FAIL", ValidateTargetSection(clean, "9.9.9", "2026-01-03").Any(r => r.Id == 8 && r.Kind == 2));
+
+    // 日期倒序 → C9 FAIL
+    var mono = new[] { "## [Unreleased]", "", "## [9.9.9] — 2026-01-02", "", "- a", "", "## [8.8.8] — 2026-05-05", "", "- b" };
+    Case("日期倒序：C9 FAIL", ValidateTargetSection(mono, "9.9.9", "").Any(r => r.Id == 9 && r.Kind == 2));
+
+    // 条目为空 → C10 FAIL
+    var emptySection = new[] { "## [Unreleased]", "", "## [9.9.9] — 2026-01-02", "", "### Added 新增", "", "## [8.8.8] — 2025-12-01", "", "- b" };
+    Case("版本段零条目：C10 FAIL", ValidateTargetSection(emptySection, "9.9.9", "").Any(r => r.Id == 10 && r.Kind == 2));
+
+    // 标题格式破坏 → C7 FAIL + 后续检查级联跳过（WARN，不叠加误报）
+    var badFmt = new[] { "## [Unreleased]", "", "## [9.9.9] 2026-01-02", "", "- a" };
+    var badFmtResult = ValidateTargetSection(badFmt, "9.9.9", "");
+    Case("标题格式破坏：C7 FAIL", badFmtResult.Any(r => r.Id == 7 && r.Kind == 2));
+    Case("标题格式破坏：C6/C8/C9/C10 级联跳过",
+        HasKind(badFmtResult, 6, 1) && HasKind(badFmtResult, 8, 1) && HasKind(badFmtResult, 9, 1) && HasKind(badFmtResult, 10, 1));
+
+    // 无已发布段 → C7 FAIL（首个发布前形态）
+    var none = new[] { "## [Unreleased]", "", "- 累积中" };
+    Case("无已发布段：C7 FAIL", ValidateTargetSection(none, "9.9.9", "").Any(r => r.Id == 7 && r.Kind == 2));
+
+    Console.WriteLine($"═══ 自测结果: {pass}/{total} ═══");
+    return pass == total ? 0 : 1;
 }

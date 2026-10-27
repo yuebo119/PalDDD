@@ -77,7 +77,8 @@ var wiredNames = CollectWiredNames(root);
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
 string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage",
     "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai", "config-policy", "license-policy", "count-audit",
-    "quality-baseline", "review-freshness", "xml-guard", "vuln-scan", "test-change-guard", "new-skip-guard", "perf-registry-check"];
+    "quality-baseline", "review-freshness", "xml-guard", "vuln-scan", "test-change-guard", "new-skip-guard", "perf-registry-check",
+    "changelog-check"];
 
 // 门禁覆盖形态声明（T-34，2026-09-22）：每个**已探针**门禁必须在此声明它覆盖哪些形态。
 // 为什么是机械要求而非文档建议：V25 的实证——一个已接线、能红、报错精确到行的门禁，
@@ -86,7 +87,7 @@ string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "g
 // 断言：probedGates 每项必须在此有条目（缺失即 ERROR 退出），故新增探针时无法绕过本声明。
 var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
 {
-    ["secret-scan"] = "硬编码凭据模式（含零可扫描文件 fail-closed）",
+    ["secret-scan"] = "硬编码凭据模式（含零可扫描文件 fail-closed；ITM-694 扩：gho_/sk-proj-/AIza/xapp- 前缀族、URI user:pass@、环境变量 KEY=VALUE、AccountKey、扩展名 .pem/.key/.pfx/.sql/.razor/.resx、白名单子串收紧为整段）",
     ["encoding-gate"] = "E1-E5 编码形态（CRLF/BOM/mojibake/verified LF/源文件裸 LF）",
     ["dapper-param-guard"] = "匿名 Dapper 参数枚举直传（CI #94 根因）",
     ["gate-lite"] = "根目录快速门禁（缺 src/ fail-closed）",
@@ -113,6 +114,7 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     // （元测试形态，diff 对称与豁免兜底）；行内 // 剥除的漏报路径（方向安全）——
     // 由 --selftest 的 13 断言覆盖。
     ["new-skip-guard"] = "test/**.cs 新增 Skip 标注四形态（[Skip( / Skip = \" / .Skip(\" / Skip.If(）净增拦截；干净文件放行；删 1 加 1 的 reason 修改放行（对称判定，防搬掩护洗白）；LINQ .Skip(1) 不误伤；**不覆盖**：字符串字面量内 Skip 文本（豁免兜底）",
+    ["changelog-check"] = "隔离探针覆盖两极：目标版本对账失配（顶部段 ≠ props/参数版本）必红（C6，2026-10-26 接线 release.yml 后的阻断形态）/ 干净 CHANGELOG 放行必绿（负向对照，防恒红）；**不覆盖**：C8 tag 提交日比对（夹具无 tag——由真实仓库 v* tag 的本地/CI 运行承担）、C1–C5 既有检查（生产运行多月，selftest 16 断言另覆盖 C6–C10 判定函数）",
     ["perf-registry-check"] = "bench/bench-registry.json ↔ --list flat 的类/方法/case/profile/预算/重复跑类/过滤器方法对账（--from-flat 隔离探针）；**不覆盖**：真实 bench 工程构建与 Program.cs 接线（由 eps-perf-check 与 CI 构建承担）",
 };
 
@@ -124,7 +126,7 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
 var manualTools = new Dictionary<string, string>(StringComparer.Ordinal)
 {
     ["changelog-facts"] = "发布流程 Phase 1 事实收集，按 need 运行",
-    ["changelog-check"] = "发布流程 Phase 4 结构校验，打 tag 前运行",
+    ["changelog-check"] = "发布流程 Phase 4 结构校验（本地打 tag 前 + release.yml pack 前，2026-10-26 接线 CI 后本条目仅作回退登记）",
     ["check-all"] = "开发者全量自检（format+CA+编译），按需运行",
     ["fix-completeness"] = "修复提交前运行的姊妹轴覆盖验证",
     ["fix-orchestrator"] = "guard 失败时输出的修复指引入口",
@@ -228,6 +230,20 @@ var probes = new List<Probe>
             var fakeKey = string.Concat("AK", "IA", "IOSFODNN7EXAMPLE");
             File.WriteAllText(Path.Combine(dir, "bad.cs"), $"var k = \"{fakeKey}\";\n");
             return ["bad.cs"];
+        }),
+    new(
+        // ITM-694（2026-10-27 清零轮）：新增形态探针——URI 内嵌密码（原「Host+Password
+        // 同行」形态之外的user:pass@），自指规避同上（含真实形态长密码，运行期拼接）。
+        Name: "secret-scan 拒绝 URI 内嵌密码（ITM-694 新形态）",
+        Gate: "secret-scan",
+        ExpectExit: 1,
+        MustContainInStdout: "conn.env",
+        Setup: dir =>
+        {
+            var longPwd = string.Concat("Real", "Pass", "w0rd", "X9mQ2", "zK7pL");
+            File.WriteAllText(Path.Combine(dir, "conn.env"),
+                $"DB_URL=postgres://admin:{longPwd}@db.internal:5432/prod\n");
+            return ["conn.env"];
         }),
     new(
         Name: "secret-scan 放行干净输入（负向对照）",
@@ -836,6 +852,38 @@ var probes = new List<Probe>
         MustContainInStdout: "不在任何车道",
         ExtraArgs: "-- --from-flat bench/flat.txt --skip-cases",
         Setup: dir => SetupPerfRegistryFixture(dir, removeCoreLane: true)),
+
+    // 2026-10-26 增：changelog-check 接线 release.yml（pack 前阻断）后的两极探针。
+    // CWD 系门禁（读 CWD 的 CHANGELOG.md + Directory.Build.props，无 CallerFilePath），
+    // 直接在隔离目录构造夹具即可，无需 CopyScriptIntoIsolation。
+    new(
+        Name: "changelog-check 拒绝目标版本对账失配（C6）",
+        Gate: "changelog-check",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL C6",
+        Setup: dir =>
+        {
+            // props 宣告 9.9.9，CHANGELOG 顶部已发布段却是 [9.8.0]——release.yml 从
+            // tag 剥 v 传入目标版本时，此形态即「发布段缺失/未转正」，必须在 pack 前转红。
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.props"),
+                "<Project><PropertyGroup><VersionPrefix>9.9.9</VersionPrefix><VersionSuffix></VersionSuffix></PropertyGroup></Project>\n");
+            File.WriteAllText(Path.Combine(dir, "CHANGELOG.md"),
+                "# PalDDD 变更日志\n\n## [Unreleased]\n\n- 累积中\n\n## [9.8.0] — 2026-01-01\n\n### Added 新增\n\n- 上一版条目\n");
+            return ["Directory.Build.props", "CHANGELOG.md"];
+        }),
+    new(
+        Name: "changelog-check 放行干净 CHANGELOG（负向对照）",
+        Gate: "changelog-check",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS C6",
+        Setup: dir =>
+        {
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.props"),
+                "<Project><PropertyGroup><VersionPrefix>9.9.9</VersionPrefix><VersionSuffix></VersionSuffix></PropertyGroup></Project>\n");
+            File.WriteAllText(Path.Combine(dir, "CHANGELOG.md"),
+                "# PalDDD 变更日志\n\n## [Unreleased]\n\n- 累积中\n\n## [9.9.9] — 2026-01-02\n\n### Added 新增\n\n- 新条目\n");
+            return ["Directory.Build.props", "CHANGELOG.md"];
+        }),
 };
 
 // perf-registry-check 探针夹具：最小注册表 + 平坦清单。负向夹具删掉核心车道并把

@@ -305,13 +305,15 @@ public sealed class SagaProcessorTests
         // ITM-801（2026-09-19）：补消息子串——裸 Throws<IOE> 非区分性（未注册/终态/
         // 已失效多路径同类型）。本场景实际走"无已注册的中断条目"路径（CheckTimeouts
         // 补偿后条目已被清理，DIAG 实证），终态分支是条目滞留时的姊妹路径——两子串
-        // 取一即锚定"可见失败"语义
+        // 取一即锚定"可见失败"语义。v5.0 fencing（2026-10-27）新增第三路径：超时
+        // 补偿的失效栅栏先写失效集，迟到决策在条目检查前按「已被超时补偿失效」拒绝
         var ex = await Assert.That(async () =>
             await manager.ResumeAsync(state.SagaId, new TimeoutApprove(true), ct))
             .Throws<InvalidOperationException>();
         await Assert.That(
             ex!.Message.Contains("无已注册的中断条目", StringComparison.Ordinal)
-            || ex!.Message.Contains("已处于终态", StringComparison.Ordinal)).IsTrue();
+            || ex!.Message.Contains("已处于终态", StringComparison.Ordinal)
+            || ex!.Message.Contains("已被超时补偿失效", StringComparison.Ordinal)).IsTrue();
         await Assert.That(state.CurrentState).IsNotEqualTo("Approved");
     }
 
@@ -329,6 +331,63 @@ public sealed class SagaProcessorTests
         Assert.Throws<InvalidOperationException>(() =>
             manager.RegisterInterrupted(sagaId,
                 static (decision, ct) => ValueTask.FromResult<SagaState>(null!)));
+    }
+
+    [Test]
+    public async Task InvalidationFence_HeldDuringCompensation_BlocksResumeUntilReleased_ThenFailsVisibly()
+    {
+        // v5.0 fencing 锁定（2026-10-27，根治 v37 P2 声明的「补偿进行中」半边窗口）：
+        // 栅栏在位（= 补偿进行中）时到达的决策被 per-saga 门挡住（不再在正被回滚的
+        // Saga 上派发并假成功）；栅栏释放（补偿完成）后按「已失效」可见失败。
+        // 变异语义：若 ResumeAsync 不持门，resumeTask 在栅栏期间即完成（条目尚未移除，
+        // 旧形态会真的派发并假成功）；若不查失效集，释放后错误路径派发。
+        var manager = new DefaultSagaManager();
+        var sagaId = PalUlid.New();
+        manager.RegisterInterrupted(sagaId,
+            static (decision, ct) => ValueTask.FromResult<SagaState>(null!));
+
+        // 手动获取/释放（不用 await using：本测试需在断言中途释放，语义由显式调用承担）
+        var fence = await manager.AcquireInvalidationFenceAsync(sagaId, CancellationToken.None);
+
+        // 栅栏在位：决策在门上等待（未完成）——「补偿进行中」的决策不进入派发
+        var resumeTask = manager.ResumeAsync(sagaId, new TimeoutApprove(true), CancellationToken.None).AsTask();
+        await Assert.That(resumeTask.IsCompleted).IsFalse();
+
+        // 栅栏释放（补偿完成语义）：等待中的决策按「已失效」可见失败
+        await fence.DisposeAsync();
+        var ex = await Assert.That(async () => await resumeTask).Throws<InvalidOperationException>();
+        await Assert.That(ex!.Message.Contains("已被超时补偿失效", StringComparison.Ordinal)).IsTrue();
+    }
+
+    /// <summary>
+    /// v5.0 接口公开化编译锁定：外部程序集（测试程序集）可实现 ISagaManager——
+    /// 修复前接口含 internal 成员（ExecuteChildSagaNonGenericAsync），程序集外实现
+    /// 编译失败（CS0535）。本实现不覆写任何 DIM 默认成员。
+    /// </summary>
+    private sealed class ExternalSagaManager : ISagaManager
+    {
+        public ValueTask ResumeAsync<TDecision>(PalUlid sagaId, TDecision decision, CancellationToken ct)
+            where TDecision : notnull => ValueTask.CompletedTask;
+
+        public ValueTask<IReadOnlyList<SagaState>> GetInterruptedSagasAsync(CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<SagaState>>([]);
+
+        public ValueTask<TChildState> ExecuteChildSagaAsync<TChildState>(
+            Saga<TChildState> childSaga, TChildState childState, object triggerEvent, CancellationToken ct)
+            where TChildState : SagaState, new() => ValueTask.FromResult(childState);
+    }
+
+    [Test]
+    public async Task ISagaManager_IsImplementableOutsideFrameworkAssembly_DimDefaultsUsable()
+    {
+        // 编译通过即锁定公开化；DIM 空默认可调（无进程内条目语义的实现对失效/栅栏直通）。
+        // 变量声明为接口类型：DIM 默认成员只能经接口引用调用（类形态调用是 CS1061）。
+        ISagaManager external = new ExternalSagaManager();
+        external.InvalidateInterrupted(PalUlid.New());
+        await using var fence = await external.AcquireInvalidationFenceAsync(PalUlid.New(), CancellationToken.None);
+        await fence.DisposeAsync();
+        var interrupted = await external.GetInterruptedSagasAsync(CancellationToken.None);
+        await Assert.That(interrupted.Count).IsEqualTo(0);
     }
 }
 

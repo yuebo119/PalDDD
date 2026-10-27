@@ -25,8 +25,11 @@ public sealed class AssertionStrengthGateTests
     ///    （断言在共享辅助方法内、壳方法体内零 Assert）——python 的花括号配对在原文上进行，
     ///    SQL raw string 内不平衡花括号使块边界错位而漏检；同时剔除 2 个 raw string 内的
     ///    [Test] 伪签名（BadParameterizedName 等，python 曾误计入）。净化后计数为真实存量。
+    /// ITM-705/706（2026-10-27 清零轮）：FsCheck 属性测试形态计入断言（QuickCheck 即断言本体，
+    /// 7 个 PropertyTests 方法豁免）+ 恒真自检断言删除，实测 172+20=192，上限收紧至 195（余量 3）。
+    /// 剩余零断言 20 为 DialectProbe 委派壳（断言在共享辅助）与已声明的 no-op 契约用例，登记保留。
     /// 新增测试必须使用行为断言。</summary>
-    internal const int MaxWeak = 200;
+    internal const int MaxWeak = 195;
 
     private static readonly string Root = FindRepositoryRoot();
 
@@ -56,8 +59,7 @@ public sealed class AssertionStrengthGateTests
         var overBaseline = isNotNullCount + zeroAssertMethods.Count > MaxWeak;
 
         await Assert.That(overBaseline).IsFalse().Because(detail);
-        await Assert.That(isNotNullCount).IsGreaterThanOrEqualTo(0);
-        await Assert.That(zeroAssertMethods.Count).IsGreaterThanOrEqualTo(0);
+        // ITM-706（2026-10-27）：删除两条恒真断言（计数 >= 0 恒真，正是本门禁自身无法拒绝的弱形态）
         Console.WriteLine(detail);
         foreach (var m in zeroAssertMethods.Take(20))
             Console.WriteLine($"  零断言: {m}");
@@ -275,8 +277,10 @@ public sealed class AssertionStrengthGateTests
 
     /// <summary>块内断言判定（与原 python 同口径）：Assert* 调用、Throws/ThrowsAsync 调用形态、
     /// mock.Verify( 调用任一存在即视为有断言。Throws 用词边界 + 后随 ( 或 &lt;——方法名恰含
-    /// Throws（如 AssertThrowsHelper）不再满足（ITM-426 修复口径）。</summary>
-    private static readonly Regex s_hasAssertion = new(@"\bAssert\w*[.(]|\bThrows(Async)?\s*[<(]|\.Verify\(", RegexOptions.Compiled);
+    /// Throws（如 AssertThrowsHelper）不再满足（ITM-426 修复口径）。
+    /// ITM-705（2026-10-27）：FsCheck 属性测试形态（QuickCheck/QuickCheckThrowOnFailure）计入
+    /// 断言——属性测试的断言本体就是 QuickCheck 的失败抛出，此前被误计为零断言方法。</summary>
+    private static readonly Regex s_hasAssertion = new(@"\bAssert\w*[.(]|\bThrows(Async)?\s*[<(]|\.Verify\(|QuickCheck(ThrowOnFailure)?\(", RegexOptions.Compiled);
 
     /// <summary>[Test] 方法定位（与原 python 同款正则）：[Test] 后跨行至「返回类型 方法名(参数) {」。
     /// 在净化文本上匹配——raw string 与 // 注释行已抹为等长空白，伪 [Test] 天然不可见。</summary>

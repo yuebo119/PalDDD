@@ -4,7 +4,7 @@
 
 **面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架：默认零反射（反射路径显式标注）、Native AOT 链路完整、无过度抽象。仅支持 .NET 11（单目标，见 [ADR-005](docs/decisions/005-net11-single-target.md)）。**
 
-[![NuGet](https://img.shields.io/badge/nuget-v4.0.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
+[![NuGet](https://img.shields.io/badge/nuget-v5.0.0--preview.1-orange)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
@@ -530,6 +530,13 @@ flowchart TB
 
 ## FAQ
 
+### 认证与授权
+
+Pal.DDD 是库不是宿主——不内置也不默认启用任何认证/授权中间件（委托宿主是库设计的立场）。两点须知（ITM-695）：
+
+- **端点授权**：`MapCommand`/`MapQuery`（含流式端点）返回 `IEndpointConventionBuilder`，直接链 `.RequireAuthorization("策略名")` 即可挂授权约定（策略元数据挂载有测试锁定；401/403 由 ASP.NET Core 授权中间件按策略执行）。样例代码为了聚焦 Pal.DDD 用法未加授权——**生产部署请为所有写端点链授权**，并按需加 `AddAuthentication`/`UseAuthentication`/`UseAuthorization`。
+- **`/health` 暴露面**：`AddPalHealthChecks` 默认注册的 `/health` 会返回组件拓扑与依赖状态。内网部署可直接用；面向公网时建议对健康端点限定端口/网络面，或改为匿名最小探针。
+
 **和 MediatR 什么关系？**
 MediatR 是进程内命令分发器。Pal.DDD 内置与之等价的 Dispatcher + PipelineBehavior，并在此基础上提供 Outbox、Inbox、Saga、EventLog、Projection。只需要命令分发时，CQRS 层可以替代 MediatR；还需要可靠消息投递和 Saga 编排时，Pal.DDD 提供整条链路。与 MassTransit 的关系见[对比表](#与现有方案的差异)：框架不绑定传输，Outbox 经 `IMessageBroker` 抽象适配任意 Broker。
 
@@ -546,7 +553,7 @@ MediatR 是进程内命令分发器。Pal.DDD 内置与之等价的 Dispatcher +
 不支持 .NET 8/9/10（单目标 net11.0）。AOT 场景三处限制（源码 `[RequiresDynamicCode]` 诚实声明）：① Saga 的 ChildSaga 子流程分发（`MakeGenericMethod`/`MakeGenericType`，见 `Saga.cs`）与②动态事件路由同源；③ `ISpecification.Compile()` 表达式树编译在 Native AOT 下不受支持，AOT 场景改用 `ToExpression()` 传给查询提供者（内存路径 `IsSatisfiedBy` 走 `Expression.Compile`，Native AOT 下不支持）。不含内置 EventStore 快照机制，需要快照策略的项目自行实现。CQRS 管道注意：无参开放泛型 `AddPalPipelineBehaviors()` 在 Native AOT 下对值类型响应触发 `AotCannotCreateGenericValueType`，AOT 应用改用 `AddPalCommandHandler<T...>` 或显式 `AddPalPipelineBehaviors<TRequest, TResponse>()`（两种注册先到先得互斥）。
 
 **生产环境有谁在用？**
-当前版本 v4.0.0（tag v4.0.0 发布，SemVer Major——ADR-026 契约窗口：`IPalOutboxStore` 四同步方法异步化（签名破坏，迁移映射见 CHANGELOG `[4.0.0]` Changed [Breaking] 条）、Outbox 终态写 fencing 契约跨栈统一、`Dispatcher` 实例注册路径与 `IImmediateWriteOutboxStore`/`ISagaLeaseBatchStore` 新增、MySQL ≥8.0.18 租约 SKIP LOCKED、PalORM 6.4.1 依赖上移与 EPSL 性能修复族；公共 API 快照 +46/−25）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试口径见文首速览表脚注¹。自定义 `IPalOutboxStore` 实现方升级前请先读 CHANGELOG 迁移说明。欢迎在非生产环境中试用并反馈。
+当前版本 v5.0.0 **预览版**（`5.0.0-preview.1`，SemVer Major 预览；.NET 11 GA 后同内容转正 5.0.0，预览期反馈并入 GA 轮——公共 API 快照 +468/−64：`AddPalFullStack` 扩展与 `MySqlLeasePolicy` 类移除、`SagaState.ExecutedStepKeys` 改 `List<string>`（ADR-035）、`AddPalOrm*` 三扩展与多处 ctor/方法签名变更（迁移说明见 CHANGELOG `[5.0.0-preview.1]` 兼容性引用块与各 Changed/Removed 条）；许可证 AGPL-3.0-or-later → Apache-2.0（ADR-036，已发布历史版本保持 AGPL）；新增 SSE 流式读（ADR-030）、断线续跑（ADR-031）、SQLite FTS5/JSON1 双栈 API（ADR-032）、Outbox Auto 批量投递（ADR-033）与性能迁移四项（ADR-034）；依赖全量核新（微软 11 线 rc.3 + PalORM 6.8.0 + TUnit 1.76.28））。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试口径见文首速览表脚注¹。自定义 store/扩展实现方升级前请先读 CHANGELOG 迁移说明。欢迎在非生产环境中试用并反馈。
 
 ## 贡献
 
@@ -560,8 +567,8 @@ QQ 交流群 **1125599744**（C#/.NET 新技术交流群）：使用问题、特
 
 ## 许可证
 
-[GNU Affero General Public License v3.0 or later](LICENSE)
+**版本分界**：v5.0 及以后（含 `5.0.0-preview.1`）采用 [Apache-2.0](LICENSE)；v5.0 之前的已发布版本（v1.x–v4.0.0 及已上 NuGet.org 的包）为 AGPL-3.0-or-later，不可追溯变更（见 [ADR-036](docs/decisions/036-license-apache-2.0.md)）。
+
+Apache-2.0 为宽松许可：允许商用、修改与闭源集成，附显式专利授权；分发须保留 [LICENSE](LICENSE) 与 [NOTICE](NOTICE) 并对修改作出声明；不授予商标权。详见 [LICENSE](LICENSE) 或 <https://www.apache.org/licenses/LICENSE-2.0>。
 
 Copyright (C) 2026 SuperLee
-
-本项目使用 Apache-2.0 许可证：宽松许可，允许商用、修改与闭源集成，并附带显式专利授权；要求分发时保留 [LICENSE](LICENSE) 与 [NOTICE](NOTICE) 副本并对修改作出声明；不授予商标权。AGPL 时代的网络服务开源义务不再适用。存储引擎 PalORM 自 6.8.0 起同为 Apache-2.0，全依赖链无 copyleft 组件。详见 [LICENSE](LICENSE) 文件或 <https://www.apache.org/licenses/LICENSE-2.0>。

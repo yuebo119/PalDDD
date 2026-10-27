@@ -318,9 +318,7 @@ Outbox 批处理同时通过 `PalActivitySource` 发出 `Outbox Process` activit
 
 Outbox 批处理还会通过 `PalMetrics` 记录 `paldd.outbox.processed` 与 `paldd.outbox.failed`；重试耗尽转入死信的消息由独立的 `paldd.outbox.dead` 计数（3.0.0 起与 `failed` 分离，死信积压可直接告警），标记已尝试但未落库的条目由 `paldd.outbox.persist_failed` 计数（`processed` 不再混入此类，与 DB 真相一致）。发布吞吐、重试和死信路径因此可以在不解析日志的情况下被告警和看板聚合。
 
-生产持久化通过可选 `PalDDD.Transactions.EFCore` 包提供 `OutboxDbContext` 与四方言 base context（`SqlServerOutboxDbContext`/`PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`，ADR-012）。通用 base context 负责状态映射、pending 查询过滤、成功/死亡/重试状态转换；SQL Server base context 使用 `UPDLOCK` / `READPAST` 在数据库内原子获取 lease，避免多实例重复发布。核心 `PalDDD.Transactions` 包只依赖 `IPalOutboxStore` 抽象。
-
-> ⚠️ **方言支持状态**：SQL Server（`SqlServerOutboxDbContext`）当前标 `[Obsolete]`（源码声明 v4.0 移除）、**零测试覆盖、未验证**，属**实验性**支持；生产推荐使用已验证方言 SQLite / PostgreSQL / MySQL。
+生产持久化通过可选 `PalDDD.Transactions.EFCore` 包提供 `OutboxDbContext` 与三方言 base context（`PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`，ADR-012；SQL Server base context 零测试覆盖，已随 v5.0.0 移除）。通用 base context 负责状态映射、pending 查询过滤、成功/死亡/重试状态转换。核心 `PalDDD.Transactions` 包只依赖 `IPalOutboxStore` 抽象。
 
 ### Inbox
 

@@ -264,7 +264,12 @@ dotnet run scripts/verify-conventions.cs
 dotnet run scripts/gate.cs -- --allow-dirty
 
 # 5.5 变更日志结构门禁（§十二 Phase 4——FAIL 阻断发版）
+# C1–C10：[Unreleased] 首位 / tag 对账 / 分类顺序 / 预估措辞 / 术语泄漏 +
+# 顶部版本对账 / 标题格式 / 段日期与 tag 提交日一致 / 日期单调 / 条目非空
+# （2026-10-26 增 C6–C10，对齐 Pal.ORM；release.yml 已在 pack 前接同一门禁，本地为前置自检）
 dotnet run scripts/changelog-check.cs
+# 也可显式传目标版本（与 release.yml 从 tag 剥 v 后的调用形态一致）：
+#   dotnet run scripts/changelog-check.cs -- 5.0.0
 
 # 5.6 沉寂面抽查（2026-09-25 增，Pal 会话审计立法）：差分评审对长期未变更的
 # 文件结构性失明（审计实证：28 处门禁存量假绿全部集中在 MIG-012 后未动的文件，
@@ -318,7 +323,7 @@ git log -1 --format="%h %s"
 # 2. 确认版本号已更新到目标版本 + CHANGELOG 已转正（§十二 Phase 5——未转正禁止打 tag）
 grep -E "VersionPrefix|VersionSuffix" Directory.Build.props
 grep -E "^## \[" CHANGELOG.md | head -2        # 首行 [Unreleased]，次行 [目标版本]
-dotnet run scripts/changelog-check.cs                # 必须 0 FAIL
+dotnet run scripts/changelog-check.cs          # 必须 0 FAIL（C8 在本地 tag 存在时校验段日期 == tag 提交日）
 
 # 3. 打 tag（tag 名格式：v + 版本号，如 v3.3.0）
 git tag v3.3.0
@@ -363,19 +368,24 @@ on:
 | 顺序 | step | 作用 | 失败处理 |
 |------|------|------|---------|
 | 1 | Resolve version | 从 tag/input 解析版本号 | 解析失败 → exit |
-| 2 | Verify version matches props | tag 版本 vs Directory.Build.props | 不一致 → exit（防误发） |
+| 2 | Verify version matches props | tag/input 版本 vs Directory.Build.props 的 VersionPrefix+VersionSuffix **组合全版本**（2026-10-26：preview tag 不再被前缀比对误拒；grep -oP 改 POSIX sed 脱离 PCRE 依赖） | 不一致 → exit（防误发） |
 | 3 | Restore + Build | 全量构建，warnings as errors | 编译失败 → exit |
 | 4 | Unit + Integration tests | 单步骤全 16 测试项目（含 Testcontainers PG/MySQL/RabbitMQ/Kafka，v62 勘正：原拆两步与 workflow 实态不符） | 测试失败 → exit |
 | 5 | AOT publish 验证 | release.yml：PalOrmSample 单入口 `dotnet publish -p:PublishAot=true` + 实跑（ci.yml 的 aot-verify job 另覆盖 AotSample，共双 sample——二者引用图不重叠） | AOT 失败 → exit |
+| 5.5 | Verify CHANGELOG entry | `scripts/changelog-check.cs -- <版本>`（2026-10-26 增，对齐 Pal.ORM M1-3：校验前置到 pack/push 之前，此前 release 路径无任何 CHANGELOG 校验）；C1–C10，含顶部版本对账/段日期 == tag 提交日/条目非空 | FAIL → exit（漏转正/日期失实在推送 NuGet 前拦截） |
 | 6 | Pack | 全部公开发布项目 | pack 失败 → exit |
 | 7 | Verify package count | 断言 nupkg 数 = 发布清单总数 | 数量不对 → exit（防漏发） |
 | 8 | Push to NuGet.org | `--skip-duplicate` + 推送计数断言（v60 加）| push 失败/计数不符 → exit |
 | 8b | NuGet push skipped 警告 | secret 缺失时 `::warning::`（v60 加，v62 修 job 级 env 作用域） | 显式警告不 exit |
-| 9 | Create GitHub Release | 仅 tag 触发时 | 创建失败 → exit |
+| 9 | Extract Release Notes + Create GitHub Release | 仅 tag 触发时：body = CHANGELOG **当前版本段自动提取** + 动态包表（从实际 nupkg 产物生成）+ 上一版本对比链接；标题 `PalDDD <tag>`（2026-10-26 对齐 Pal.ORM，原 body 为整个 CHANGELOG.md 全文） | 创建失败 → exit |
 
 ### 6.3 关键配置
 
 ```yaml
+environment: production    # 发布审批门（2026-10-26 对齐 Pal.ORM M1-2）：Settings →
+                           # Environments 配置 required reviewers 后，推送 NuGet 前
+                           # 需人工批准；未配置时无行为变化（§6.4）
+
 concurrency:
     group: release-${{ github.ref }}
     cancel-in-progress: false    # 发布不可中断，防半成品
@@ -383,6 +393,8 @@ concurrency:
 permissions:
     contents: write              # 创建 GitHub Release 必需
 
+# checkout fetch-depth: 0 ——SourceLink 完整历史 + changelog-check C8 的
+# 「段日期 == tag 提交日」比对需要 tag 在 checkout 内可解析
 # Testcontainers 必须用 ubuntu-latest（Windows runner 不支持）
 runs-on: ubuntu-latest
 ```
@@ -392,6 +404,7 @@ runs-on: ubuntu-latest
 | Secret 名 | 用途 | 获取方式 |
 |-----------|------|---------|
 | `NUGET_API_KEY` | 推送到 nuget.org | https://www.nuget.org/account/apikeys（Push 权限，Glob Pattern=`PalDDD.*`，365 天有效期） |
+| `production` environment | 发布审批门（可选一次性配置，2026-10-26 增） | GitHub Settings → Environments → New environment → `production` → Required reviewers 勾选维护者；配置后 release.yml 的 publish 在推送 NuGet 前等待人工批准，未配置时直接放行 |
 
 ---
 
@@ -419,8 +432,8 @@ gh run list --workflow=release.yml --limit 1
 
 访问 https://github.com/yuebo119/PalDDD/releases：
 
-- ✅ Release 标题 = tag 名（如 `v3.3.0`）
-- ✅ Body 来自 CHANGELOG.md
+- ✅ Release 标题 = `PalDDD <tag 名>`（如 `PalDDD v5.0.0`；2026-10-26 对齐 Pal.ORM，原为裸 tag 名）
+- ✅ Body = CHANGELOG.md **当前版本段自动提取** + 动态包表 + 与上一版本对比链接（非全文；发布说明唯一真源仍是 CHANGELOG.md）
 - ✅ Assets 含全部 nupkg 文件
 
 ### 7.4 实际消费测试
@@ -702,7 +715,7 @@ dotnet run scripts/changelog-check.cs    # FAIL=阻断（回 Phase 3）；WARN=�
 
 ### 12.7 Phase 6/7——发布与事后同步
 
-- **P6**：按 §5.1 打 tag 推送 → release.yml 以转正后的 CHANGELOG 生成 GitHub Release body（零二次编辑）。
+- **P6**：按 §5.1 打 tag 推送 → release.yml 在 pack 前过 `changelog-check`（C1–C10），并以转正后的 CHANGELOG **提取当前版本段**生成 GitHub Release body + 动态包表（零二次编辑，2026-10-26 起）。
 - **P7**：发布后再改 CHANGELOG（勘误/重构），GitHub Release 页 body **不会**自动更新——需手动同步页面并注明"事后勘误"（v2.1.0 实录：发布当晚重构 [2.1.0] 段，Release 页保留旧版 body，靠仓库 CHANGELOG 为正本）。
 
 ### 12.8 流程失效回溯（每次发版后自检）
