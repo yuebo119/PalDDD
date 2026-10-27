@@ -539,6 +539,56 @@ public sealed class BrokerIntegrationTests
         await Assert.That(snapshot.Select(m => m.Name).Distinct().Count()).IsGreaterThanOrEqualTo(5);
     }
 
+    // ── ITM-708（2026-10-27 清零轮）：Kafka 错误路径补齐（对齐 RabbitMQ 的死信/失败覆盖密度）──
+    // 取消传播路径已有（Kafka_HandlerCancellation_DoesNotLogHandlerFailure）；此处补
+    // ①投毒消息（handler 抛异常）不中止消费、失败被日志捕获；②后续消息继续到达。
+
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task Kafka_PoisonMessage_HandlerThrows_LoggedAndSubsequentMessagesConsumed(CancellationToken cancellationToken)
+    {
+        SkipIfKafkaUnavailable();
+        var logger = new CapturingLogger<KafkaBroker>();
+        var created = Fixture.CreateKafkaBroker(logger);
+        await using var broker = created.Item1;
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var consumerReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var followUpReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var poisonSeen = false;
+
+        await using var sub = await broker.SubscribeAsync<TestMessage>((msg, ct) =>
+        {
+            if (msg.Name == $"kafka-ready-{tag}")
+            {
+                consumerReady.TrySetResult();
+                return ValueTask.CompletedTask;
+            }
+            // 投毒消息：handler 抛异常（模拟业务故障）——broker 适配器须记录失败而非崩溃消费循环
+            if (msg.Name == $"kafka-poison-{tag}")
+            {
+                poisonSeen = true;
+                throw new InvalidOperationException("poison handler failure (test)");
+            }
+            if (msg.Name == $"kafka-after-{tag}")
+                followUpReceived.TrySetResult();
+            return ValueTask.CompletedTask;
+        }, cancellationToken);
+
+        await broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), cancellationToken);
+        await WaitForSignalAsync(consumerReady.Task,
+            ct => broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), ct),
+            logger, "Kafka", "consumer join（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
+
+        await broker.PublishAsync(new TestMessage($"kafka-poison-{tag}"), cancellationToken);
+        await broker.PublishAsync(new TestMessage($"kafka-after-{tag}"), cancellationToken);
+
+        // 投毒后消费循环存活：后续消息继续被消费（30s 上限）
+        await followUpReceived.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await Assert.That(poisonSeen).IsTrue();
+        // 失败被日志捕获（错误路径可观测——适配器不得吞异常）
+        await Assert.That(logger.ErrorCount).IsGreaterThanOrEqualTo(1);
+    }
+
     [Test]
     [NotInParallel("broker-integration")]
     public async Task RabbitMq_PublishAndSubscribe_RoundTripsMessage(CancellationToken cancellationToken)

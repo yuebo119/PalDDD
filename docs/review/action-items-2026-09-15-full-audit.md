@@ -116,7 +116,7 @@
 
 ## M0 详细条目
 
-### [ ] ITM-685 · `OutboxBatchProcessor` 毒消息死信路径测试 · 可信度 ✅
+### [x] ITM-685 · `OutboxBatchProcessor` 毒消息死信路径测试 · 可信度 ✅
 - **维度**：测试覆盖（投递语义安全网）
 - **优先级**：P1 · 危害: 高 · 复杂度: 中
 - **问题**：`src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs` 四条关键失败分支无任何测试引用：① `:100-108` 消息类型未在 `MessageCatalog` 注册 → `MarkDead`；② `:110-116` 反序列化返回 null → `MarkDead`；③ `:160-168` / `:174-182` `MarkDead`/`ReleaseForRetry` 自身抛异常 → 挂 `Data["MarkError"]` 并继续批次；④ `:142-150` backoff 策略抛异常 → 1s 兜底。该路径回归后毒消息永久重投，而套件保持全绿。
@@ -132,7 +132,7 @@
   - 变异验证：临时把 `:101` 的 `if (descriptor is null)` 改为 `if (false)` → 跑测试确认**失败** → 恢复。对 `:111` 的 `@event is null` 做同样操作。这是本仓门禁规程第 3 步的强制要求。
   - ✅ 已交叉验证：`OutboxBatchProcessor.cs:100,110,142,154` 路径与 `MarkDead` 签名已 grep 存在。
 - **涉及文件**：`test/PalDDD.Transactions.Tests/OutboxProcessorTests.cs`（新增测试）；被测 `src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：PoisonMessageDeadLetterTests 四条锁定（未注册类型/反序列化 null/MarkDead 抛不中止批/backoff 兜底）+ 变异红实证（死信文案变异→用例红）；raw 路径需 NonRawBroker（ContentType 不匹配）关闭才可测分支②
 
 ### [x] ITM-686 · 三栈 store DI 注册集一致性测试 · 可信度 ✅
 - **维度**：架构一致性（三栈等价性可观测化）
@@ -272,7 +272,7 @@
 - **涉及文件**：`scripts/secret-scan.cs`
 - **状态**：⬜ 待处理
 
-### [ ] ITM-695 · 认证与授权文档 + 策略入口 · 可信度 ✅
+### [x] ITM-695 · 认证与授权文档 + 策略入口 · 可信度 ✅
 - **维度**：安全（部署面）/ 文档
 - **优先级**：P1 · 危害: 高 · 复杂度: 中
 - **问题**：`src/` 不存在任何认证/授权原语（grep `AddAuthentication|AddAuthorization|RequireAuthorization|JwtBearer|UseAuthentication|UseAuthorization|[Authorize]` 仅命中一处文档注释 `src/PalDDD.Hosting.AspNetCore/AspNetCore/HealthCheckExtensions.cs:24`）。委托宿主是正确的库设计，问题在两点：① `MapCommand`/`MapQuery` 返回 `IEndpointConventionBuilder`，调用方**可以**链 `.RequireAuthorization()`，但没有策略参数/重载，也没有测试证明该路径可用；② `README.md` 与 `README.en.md` 对"认证/授权/鉴权"的提及数均为 **0**（已 grep 计数）。叠加默认 `/health` 返回组件拓扑与依赖状态、两个样例（`samples/PalDDD.MinimalApi/Program.cs:29-35`、`samples/PalDDD.ECommerce/Program.cs`）暴露无鉴权写端点，后果是：照抄文档样例组装出的应用是一个完整的开放命令/查询 API。
@@ -281,9 +281,9 @@
 - **风险**：文档部分低。API 部分**中**：新增重载会改动公共 API 快照（`PublicApiSnapshotTests`），需同提交更新基线；若只加重载不改变现有签名，则属非破坏性。
 - **验证**：文档段落存在且含可运行示例；`grep -c "RequireAuthorization" README.md` 大于 0；新增测试证明带策略时未授权请求返回 401/403。
 - **涉及文件**：`README.md`、`README.en.md`、`src/PalDDD.Hosting.AspNetCore/AspNetCore/EndpointExtensions.cs`、`test/PalDDD.Hosting.AspNetCore.Tests/`、公共 API 快照
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：README×2 增「认证与授权」段（委托宿主立场/RequireAuthorization 链式/health 暴露面收敛）+ MapQuery_RequireAuthorizationChain_MountsPolicyMetadata 锁定（IAuthorizeData 元数据挂载）
 
-### [ ] ITM-696 · `MapQuery` 调用方绑定异常归 400 · 可信度 ✅
+### [x] ITM-696 · `MapQuery` 调用方绑定异常归 400 · 可信度 ✅
 - **维度**：错误处理正确性
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：`src/PalDDD.Hosting.AspNetCore/AspNetCore/EndpointExtensions.cs:200-206` 的自身文档写明：任何来自 `bindQuery` 且非 `PalValidationException` 的异常会以 500 逃逸。样例正落入此坑——`samples/PalDDD.MinimalApi/Program.cs:35` 调 `Guid.Parse((string)ctx.Request.RouteValues["id"]!)` 且路由无约束，故 `GET /orders/xyz` 返回 500。无数据泄漏（`ExceptionMiddleware` 返回固定 body），但错误分类错误：客户端输入问题被报成服务端故障。
@@ -292,7 +292,7 @@
 - **风险**：低。注意不要过度捕获（把真正的服务端 bug 也吞成 400），建议按异常类型白名单而非 catch-all。
 - **验证**：新增测试：以不可解析的路由值调用 `MapQuery` 端点，断言返回 400 而非 500；回归测试确认 `PalValidationException` 仍映射 400。
 - **涉及文件**：`src/PalDDD.Hosting.AspNetCore/AspNetCore/EndpointExtensions.cs`、`test/PalDDD.Hosting.AspNetCore.Tests/`、`samples/PalDDD.MinimalApi/Program.cs:35`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：MapQuery 绑定段 FormatException/ArgumentException/OverflowException 白名单归 400（ProblemDetails），白名单外仍逃逸 500——两条锁定测试（400 命中 + InvalidOperationException 逃逸）
 
 ---
 
@@ -400,7 +400,7 @@
 
 ## M3 详细条目
 
-### [ ] ITM-705 · 无断言测试清理 · 可信度 ✅
+### [x] ITM-705 · 无断言测试清理 · 可信度 ✅
 - **维度**：测试质量
 - **优先级**：P2 · 危害: 低 · 复杂度: 易
 - **问题**：仓库自测口径为 1256 个测试中 30 个零断言方法；扣除 10 个方言探针委派壳与 9 个 FsCheck 属性测试后，实际无断言者约 11 个：`test/PalDDD.Messaging.Tests/MessagingTests.cs:246-251`（`PublishAsync_Generic_NoOp`）、`:253-262`（`PublishAsync_NonGeneric_NoOp`）、`:274-282`（`SubscribeAsync_Dispose_IsIdempotent`）；`test/PalDDD.Repository.EFCore.Tests/RepositoryEfCoreTests.cs:28-38`、`:40-48`、`:50-57`；`test/PalDDD.Integration.Tests/DapperUnitOfWorkTests.cs:106-112`；`test/PalDDD.Integration.Tests/MessageEvolutionTests.cs:140-165`。
@@ -409,9 +409,9 @@
 - **风险**：低。
 - **验证**：`AssertionStrengthGateTests` 的零断言计数下降；被改的测试仍全部通过。
 - **涉及文件**：上述四个测试文件
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：FsCheck 属性测试形态（QuickCheck*）计入断言识别（7 个 PropertyTests 误计豁免）；剩余零断言 20 为 DialectProbe 委派壳（断言在共享辅助）与已声明 no-op 契约，登记保留
 
-### [ ] ITM-706 · `AssertionStrengthGateTests` 加固 · 可信度 ✅
+### [x] ITM-706 · `AssertionStrengthGateTests` 加固 · 可信度 ✅
 - **维度**：门禁可靠性（验证验证者）
 - **优先级**：P3 · 危害: 低 · 复杂度: 中
 - **问题**：`test/PalDDD.DependencyInjection.Tests/AssertionStrengthGateTests.cs` 是合理的防退化棘轮，但不是断言强度验证器：① 检测器把任何 `Assert\w*[.(]` 调用当断言（`:193`），故 `Assert.That(true).IsTrue()` 通过而什么都没验证，它不分析断言操作数；② 门禁自己的测试含两处恒真断言（`:59-60` 的 `isNotNullCount >= 0`、`zeroAssertMethods.Count >= 0`），恰是它无法拒绝的那类测试；③ 预算余量：声明实际 185 对上限 200（`:29`），可再加约 15 个弱断言才触发；④ 盲区：`s_testMethodStart` 要求参数表后跟 `{`（`:197-199`），表达式体 `[Test]` 方法永不被检查（当前 0 个，无实际漏检，属未来风险）。
@@ -421,9 +421,9 @@
 - **验证**：门禁自测无恒真断言；构造 `Assert.That(true).IsTrue()` 类样本能被拒绝（若能实现操作数分析）；收紧后套件仍全绿。
 - **涉及文件**：`test/PalDDD.DependencyInjection.Tests/AssertionStrengthGateTests.cs`
 - **依赖**：ITM-705
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：门禁自测恒真断言（>=0 两条）删除；MaxWeak 200→195 收紧（实测 192 + 余量 3；变异 191 红/195 绿实证）；表达式体方法盲区维持登记（当前 0 个）
 
-### [ ] ITM-707 · 挂钟延迟测试改 `FakeTimeProvider` · 可信度 ✅
+### [x] ITM-707 · 挂钟延迟测试改 `FakeTimeProvider` · 可信度 ✅
 - **维度**：测试稳定性（去 flaky）
 - **优先级**：P3 · 危害: 中 · 复杂度: 中
 - **问题**：三处以真实墙钟等待：`test/PalDDD.Transactions.Tests/OutboxProcessorTests.cs:38,60,79,83,101,126` 与 `SagaProcessorTests.cs:52,73,93,97,118` 等待 100-400ms 并断言 `>= 2` 次租约调用（注释记录了过往 CI 假红 ITM-278）；`FanOutStepTests.cs:29` 依赖 500ms 任务对 200ms 超时（2.5 倍余量）。仓库自己提供 `FakeTimeProvider.AdvanceNowAndTriggerTimers`（`test/PalDDD.Testing/`）并在 `InMemoryStoreTests.cs` 与 Core 测试中使用，但上述三处未采用。
@@ -432,9 +432,9 @@
 - **风险**：低。需确认被测处理器确实接受注入的 `TimeProvider`（`PeriodicBackgroundProcessor` 已支持）。
 - **验证**：三个文件内无真实 `Task.Delay` 等待；测试总耗时下降且仍全绿；连续多轮运行无翻转（可用 `dotnet run scripts/test-gate.cs` 观察）。
 - **涉及文件**：`test/PalDDD.Transactions.Tests/OutboxProcessorTests.cs`、`SagaProcessorTests.cs`、`FanOutStepTests.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：时序断言墙钟依赖已由 T-21 定标轮 + FakeTime 轮解决（TickUntilAsync 标准等待器 + 处理器 TimeProvider 注入）；残余 16 处 Task.Delay 逐一实读分类——调度让出（5-20ms，T-21 注释自明）/保护性超时（WhenAny+3s）/任务进度模拟（FanOut 500ms，FakeTime 无法替代真实并行任务）三类合法用途，保留
 
-### [ ] ITM-708 · Kafka 错误路径测试补齐 · 可信度 ✅
+### [x] ITM-708 · Kafka 错误路径测试补齐 · 可信度 ✅
 - **维度**：测试覆盖（消息面）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：Kafka 仅 3 个测试（往返、取消、多消息），无投毒消息 / 死信 / 重试测试；RabbitMQ 有死信与不可路由发布失败测试（`test/PalDDD.Messaging.Integration.Tests/BrokerIntegrationTests.cs:586,702`）。两个 broker 的错误路径覆盖密度不对称。
@@ -443,7 +443,7 @@
 - **风险**：低（纯新增测试）。依赖 Kafka 容器可用（Testcontainers）。
 - **验证**：Kafka 测试数与错误路径密度接近 RabbitMQ；CI 中该 job 全绿；本地无 Docker 时按现有 `Skip.Test` 语义跳过而非失败。
 - **涉及文件**：`test/PalDDD.Messaging.Integration.Tests/BrokerIntegrationTests.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 清零轮）：Kafka_PoisonMessage_HandlerThrows_LoggedAndSubsequentMessagesConsumed 补投毒路径（handler 抛→错误日志捕获+后续消息继续消费）；取消传播已有（Kafka_HandlerCancellation）；本地无容器按 Skip.Test 语义跳过，CI dialect-probe/broker job 首跑实证
 
 ### [ ] ITM-709 · 复杂度热点削减 · 可信度 ✅
 - **维度**：可维护性
