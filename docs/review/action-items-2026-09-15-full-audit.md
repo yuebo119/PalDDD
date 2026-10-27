@@ -134,7 +134,7 @@
 - **涉及文件**：`test/PalDDD.Transactions.Tests/OutboxProcessorTests.cs`（新增测试）；被测 `src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs`
 - **状态**：⬜ 待处理
 
-### [ ] ITM-686 · 三栈 store DI 注册集一致性测试 · 可信度 ✅
+### [x] ITM-686 · 三栈 store DI 注册集一致性测试 · 可信度 ✅
 - **维度**：架构一致性（三栈等价性可观测化）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：Dapper 栈只注册 4 个（`src/PalDDD.Dapper/DapperServiceCollectionExtensions.cs:106` Outbox · `:107` Inbox · `:108` Idempotency · `:112` `ISagaStateStore<>`），而 `DapperEventLog`、`DapperProjectionCheckpointStore`、`DapperUnitOfWork` 三个类**在项目中存在却无任何 DI 注册路径**（全仓 grep 无对应 `AddScoped<IEventLog` / `IProjectionCheckpointStore` / `IUnitOfWork`）。PalORM 三个方言扩展均注册 6 个 store + UoW（`src/PalDDD.PalORM.Sqlite/SqlitePalOrmExtensions.cs:104-116`）。缺口本身已被代码注释承认（`src/PalDDD.Dapper/DapperAmbientTransaction.cs:10-13`「仅 Outbox/Inbox/SagaState 三者有 DI 注册；EventLog/ProjectionCheckpoint 需直连构造」），但无编译期或测试信号，消费者只能靠读注释发现。
@@ -146,7 +146,7 @@
   - 变异验证：临时给 PalORM 扩展注释掉一行 `AddScoped<IEventLog, ...>`，确认测试变红。
   - ✅ 已交叉验证：`AddScoped` 行号与三个未注册类文件名已 grep / ls 验证存在。
 - **涉及文件**：`test/PalDDD.DependencyInjection.Tests/`（新增测试）；参考 `src/PalDDD.Dapper/DapperServiceCollectionExtensions.cs:106-112`、`src/PalDDD.PalORM.Sqlite/SqlitePalOrmExtensions.cs:104-116`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：路线 A 已被后续轮落地——Dapper 栈注册 7 store（DapperServiceCollectionExtensions.cs:115-127 含 EventLog/ProjectionCheckpoint/UnitOfWork），三栈对齐、豁免清单需求消失；防漂移由 ContractCellManifestTests 契约矩阵承担
 
 ### [ ] ITM-687 · 覆盖率降幅基线补 `PalDDD.PalORM.Tests` · 可信度 ✅
 - **维度**：门禁覆盖面
@@ -159,7 +159,7 @@
 - **涉及文件**：`coverage-baseline.json`、`scripts/ci-coverage.cs`
 - **状态**：⬜ 待处理
 
-### [ ] ITM-688 · 持久化基准纳入 CI 归档 · 可信度 ✅
+### [x] ITM-688 · 持久化基准纳入 CI 归档 · 可信度 ✅
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **维度**：性能可观测性（ITM-698 的验证基础）
 - **问题**：`docs/review/bench-baseline-2026-09-13.md` 记录 15 项真库存基准（含 `Outbox_Lease_Batch100` 的 EF/Dapper/PalORM 三方对比），但 `BenchmarkDotNet.Artifacts/results/` 的三个报告**未被 git 跟踪**（`git ls-files BenchmarkDotNet.Artifacts` 为空），CI 不跑基准，`README.md:802` 仍称 BDN 与 .NET 11 不兼容。后果：性能退化只能靠事后 Read 归档文本发现，没有可对比的自动基线。
@@ -168,13 +168,13 @@
 - **风险**：低（新增 job，不影响现有流水线）。注意基准在共享 runner 上噪声大，首轮不要设阈值，否则会制造假红。
 - **验证**：CI 能产出 `Outbox_Lease_Batch100` 等关键指标并归档为 artifact；本地 `dotnet run --project bench/PalDDD.Benchmarks` 可复现同形输出。
 - **涉及文件**：`.github/workflows/ci.yml`、`bench/PalDDD.Benchmarks/Program.cs`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：perf-nightly.yml 每夜跑 eps-run --profile standard 并 upload-artifact 归档 bench/logs/eps-run-*；CI perf-smoke 门禁（2026-10-18 起每提交）；全量走本地 eps-run --full
 
 ---
 
 ## M1 详细条目
 
-### [ ] ITM-689 · Dapper AOT 事实三方统一 · 可信度 ✅
+### [x] ITM-689 · Dapper AOT 事实三方统一 · 可信度 ✅
 - **维度**：文档准确性 / 事实一致性（本仓 #1 红线）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：同一事实（Dapper 栈 AOT 是否启用）在六个位置有两种相反声称：
@@ -198,7 +198,7 @@
   - `DapperAotInitializer.cs` 头注释状态与 `:33` 自洽（人工读一遍）。
   - ✅ 已交叉验证：`DapperAotInitializer.cs`、`PalDDD.Dapper.csproj`、`README.md:770/790`、`docs/persistence-aot-status.md` 均已实读原文。
 - **涉及文件**：`src/PalDDD.Dapper/PalDDD.Dapper.csproj:7`、`src/PalDDD.Dapper/DapperAotInitializer.cs:16-19`、`README.md:790`、`README.en.md:791`、`docs/aot.md`（待查）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：README/csproj 失实声称清零（grep 零命中）；权威源 persistence-aot-status.md；实证由 aot-verify 双样本 + dapper-aot-probe（三方言 33/33）承担；DapperAotInitializer.cs:14 残留一处带引号的 Reflection.Emit 根因历史叙述（非状态声称，保留）
 
 ### [ ] ITM-690 · csproj 包描述纳入事实一致性门禁 · 可信度 ✅
 - **维度**：门禁机械化（把红线从人工纪律变成机械强制）
@@ -215,7 +215,7 @@
 - **涉及文件**：`scripts/doc-consistency.cs` 或 `test/PalDDD.DependencyInjection.Tests/DocConsistencyGateTests.cs`、`scripts/gate-audit.cs`、`.githooks/pre-commit`、`.github/workflows/ci.yml`
 - **状态**：⬜ 待处理
 
-### [ ] ITM-691 · README 快速开始样例不可编译 · 可信度 ✅
+### [x] ITM-691 · README 快速开始样例不可编译 · 可信度 ✅
 - **维度**：文档准确性（代码样例可执行性）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：`README.md:464`（`README.en.md:463` 同）写 `builder.Services.AddSingleton<IMessageBroker>(new MessageBroker()); // InMemory Broker（无参构造）`；`README.md:726` 进一步声称"InMemory MessageBroker 用于测试"。实际 `PalDDD.Messaging` 只有 `public abstract class MessageBrokerBase`（`MessageBrokerBase.cs:21`）与 `public sealed class NullMessageBroker`（`MessageBroker.cs:72`），**无公开 `MessageBroker` 类，也无可用 InMemory broker**。`README.md:109` 的"InMemory 实现覆盖全部抽象接口"对 `IMessageBroker` 不成立。照抄快速开始无法编译，而这是新用户的第一段代码。
@@ -224,9 +224,9 @@
 - **风险**：低。语义替换需准确：`NullMessageBroker` 丢弃消息而非投递，快速开始若声称"能跑通消息流"会变成新的错误。
 - **验证**：把快速开始段的 C# 代码块抽到 `samples/` 下的最小工程真实编译通过（或新增 README 代码块编译探针）；`grep -n "new MessageBroker()" README*.md` → 零命中。
 - **涉及文件**：`README.md:109,464,726`、`README.en.md`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：new MessageBroker() 全仓零命中（README 审计轮 2026-10-08 修复）
 
-### [ ] ITM-692 · Dapper DI 缺口补齐或显式化 · 可信度 ✅
+### [x] ITM-692 · Dapper DI 缺口补齐或显式化 · 可信度 ✅
 - **维度**：架构一致性（三栈 DI 完整度）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：同 ITM-686 的事实基础。`DapperEventLog`、`DapperProjectionCheckpointStore`、`DapperUnitOfWork` 三个类存在但无 DI 注册路径。
@@ -238,9 +238,9 @@
 - **验证**：ITM-686 的测试从"红 + 豁免三项"变为"绿"（路线 A）或"红 + 文档化豁免"（路线 B）；若路线 A，需补一个端到端测试证明从 DI 解析出的 `IEventLog` 可用。
 - **涉及文件**：`src/PalDDD.Dapper/DapperServiceCollectionExtensions.cs:97-114`、`README.md`（Dapper 段）
 - **依赖**：ITM-686（测试先落地）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：路线 A 已落地——三个类均有 DI 注册（DapperServiceCollectionExtensions.cs:125-127），与 ITM-686 同证
 
-### [ ] ITM-693 · outbox 索引补齐 + EF 模型/DDL 对齐 · 可信度 ✅
+### [x] ITM-693 · outbox 索引补齐 + EF 模型/DDL 对齐 · 可信度 ✅
 - **维度**：性能 / schema 一致性
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：两处独立缺陷合并处理。① 租约回读查询 `SELECT * FROM outbox_messages WHERE locked_by=@owner AND locked_until=@until`（`src/PalDDD.Dapper/SqlTemplates.cs:189`，用于 `DapperOutboxStore.cs:183-188`，PalORM 同款 `PalOrmOutboxStore.cs:145-147`）**无可用索引**：DDL 只有 `idx_outbox_status (status, next_attempt_at, locked_until)` 与 `idx_outbox_created (created_at)`。② pending 查询的 `ORDER BY created_at` 不被 `idx_outbox_status` 覆盖，需临时 B-tree 排序。③ EF 模型索引声明与手写 DDL 漂移：EF outbox 声明 `(Status, NextAttemptAt, CreatedAt)`（`src/PalDDD.Transactions.EFCore/OutboxDbContext.cs:370`），DDL 是 `(status, next_attempt_at, locked_until)`；EF Inbox 声明 `ProcessedAt` / `Status` / `(Status, ProcessingStartedAt)`（`InboxDbContext.cs:212-214`），DDL 中不存在。后果：SQLite/MySQL 每次 lease 回读全表扫描，且 Dapper/PalORM 用户与 EF 用户拿到不同索引集；框架不提供行清理，Processed 行留存使代价随运行时长线性增长。
@@ -249,7 +249,7 @@
 - **风险**：低（纯增索引）。注意点：新增索引会略微增加写入成本；`(status, created_at)` 与既有 `idx_outbox_status (status, next_attempt_at, locked_until)` 存在前缀重叠，可评估是否直接调整既有索引列序而非新增（需验证 pending 查询仍走索引）。
 - **验证**：`EXPLAIN QUERY PLAN` 对租约回读查询输出含 `INDEX`、不含 `SCAN outbox_messages`；对 pending 查询不含 `USE TEMP B-TREE FOR ORDER BY`。
 - **涉及文件**：`docs/sql/{sqlite,mysql,postgresql}/000_schema.sql`、`src/PalDDD.Transactions.EFCore/OutboxDbContext.cs:370`、`src/PalDDD.Transactions.EFCore/InboxDbContext.cs:212-214`、迁移文档
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：2026-10-20 数据面轮落地租约索引（docs/sql/migration-2026-10-20-performance-indexes.md + EF 模型同步）+ 2026-10-21 续轮 next_attempt_at 折叠（2d3ad15，PG 20×/MySQL 325×）与 EF 冗余索引删除
 
 ### [ ] ITM-694 · `secret-scan` 检测面扩充 · 可信度 ✅
 - **维度**：安全（凭据防线）
@@ -298,7 +298,7 @@
 
 ## M2 详细条目
 
-### [ ] ITM-697 · 唯一约束分类器下沉（10 份 → 1 份） · 可信度 ✅
+### [x] ITM-697 · 唯一约束分类器下沉（10 份 → 1 份） · 可信度 ✅
 - **维度**：可维护性（跨栈重复收敛）
 - **优先级**：P3 · 危害: 中 · 复杂度: 难
 - **问题**：唯一约束冲突分类器存在 **10 份私有副本**——Dapper 5 份（`src/PalDDD.Dapper/DapperInboxStore.cs:217`、`DapperSagaStateStore.cs:243`、`DapperEventLog.cs:283`、`DapperIdempotencyStore.cs:257`、`DapperProjectionCheckpointStore.cs:227`）+ EFCore 5 份；而 PalORM 栈已抽出单一 `src/PalDDD.PalORM/Stores/SqlErrorClassifier.cs:16`。同源的重复还包括：`leaseDuration must be greater than zero`（9 处）、`ThrowIfNegativeOrZero(batchSize)`（22 处）、`FailureReason.Truncate(...,2040)`（6 处）。仓库自述"姊妹修复在 40+ 轮提交中反复出现"，本项是削掉该税的最大单点。
@@ -309,9 +309,9 @@
 - **涉及文件**：`src/PalDDD.Dapper/*Store.cs`（5 处）、`src/PalDDD.*.EFCore/*.cs`（5 处）、参照 `src/PalDDD.PalORM/Stores/SqlErrorClassifier.cs`
 - **依赖**：ITM-686（先让三栈差异可观测，再动重构）
 - **重组前置**：跨文件重构，须用 Serena `find_referencing_symbols` 确认引用点，禁止仅靠 grep 文本匹配（本仓 AGENTS.md 架构硬约束）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：按栈单点达成——Dapper 栈 DapperSqlErrorClassifier.cs（R8 强类型化 + R14 NoInlining 分发，9 调用点单一来源）、PalORM 栈 SqlErrorClassifier.cs；EF 栈无同款副本（DbUpdateException 包装独立语义）；10 份副本形态已消灭
 
-### [ ] ITM-698 · EF Core outbox 查询与租约批量化 · 可信度 ✅
+### [x] ITM-698 · EF Core outbox 查询与租约批量化 · 可信度 ✅
 - **维度**：性能（已存档基准实测 5 倍差距）
 - **优先级**：P2 · 危害: 高 · 复杂度: 难
 - **问题**：两处合并。① **租约 N+1**：`src/PalDDD.Transactions.EFCore/SqliteOutboxDbContext.cs:108` 读候选页后，`:111-128` **对每一行**发一条 `ExecuteUpdateAsync`。批 100 即 100 次 UPDATE 往返。仓库存档基准实测 `Outbox_Lease_Batch100` = **24,043.8 μs / 3,681 KB**（EF）vs 2,655 μs / 860 KB（Dapper，Ratio 5.04）vs 3,546 μs（PalORM），是其自身 `Outbox_GetPending_Batch100`（499.6 μs）的 48.8 倍。② **整表分页**：`:51-69` 的 `while (result.Count < batchSize)` 配 `Skip(skip).Take(batchSize)`，时间过滤在**内存**中做（EF SQLite 无法翻译 `DateTimeOffset` 有序比较）；当表头是未来重试行或活跃租约行时，每次 tick 发 ceil(表大小/批大小) 条 SELECT 并把整表物化，代码注释 `:32-37` 自承"worst case full-table paged scan"。
@@ -327,9 +327,9 @@
   - 全部并发测试保持绿。
 - **涉及文件**：`src/PalDDD.Transactions.EFCore/SqliteOutboxDbContext.cs:51-128` 及 MySql/PG 姊妹实现
 - **依赖**：ITM-685（死信路径安全网）、ITM-688（基准可对比）
-- **状态**：⬜ 待处理
+- **状态**：✅ 部分落地并按预设条件收口（2026-10-27 对账轮）：步骤 1（整表分页消除/时间过滤下推）已由 2026-10-21 审计轮落地（EF SQLite 到期 NULL/回读 Take）；步骤 2（租约批量化）按本条目预设降级路径收口——需 schema 变更（版本列），推迟至 v6 破坏窗口；比值持续观测由 perf-nightly 车道承担
 
-### [ ] ITM-699 · 事实单点化与计数守卫 · 可信度 ✅
+### [x] ITM-699 · 事实单点化与计数守卫 · 可信度 ✅
 - **维度**：文档内部一致性
 - **优先级**：P3 · 危害: 低 · 复杂度: 中
 - **问题**：同一事实（测试规模）在 5 处出现且不同步：`README.md:835` 写"1202 项实测"、`README.md:907` 写"1379 项实测用例"（同一文件自相矛盾）；`README.en.md:838` vs `:913` 同款；`docs/test-coverage-baseline.md:6`、`docs/performance.md:30`、`docs/tutorial.md:113` 停留 v2.1.0 的 1202。CHANGELOG 2.2.0 的权威口径是 1379。实测当前树 `[Test]` 方法为 1256（1379 应含参数化展开）。
@@ -338,7 +338,7 @@
 - **风险**：低。
 - **验证**：同一事实在仓库中只有一处定义；注入错误计数时门禁变红；`grep -c "1202" README.md README.en.md docs/test-coverage-baseline.md docs/performance.md docs/tutorial.md` 全为 0 或全带时点前缀。
 - **涉及文件**：`README.md:835,907`、`README.en.md:838,913`、`docs/test-coverage-baseline.md:6`、`docs/performance.md:30`、`docs/tutorial.md:113`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：1202/1379 矛盾零残留；计数声明由 count-audit 16 项机械守卫（2026-09-25 上线）持续对账
 
 ### [ ] ITM-700 · 入门路径打通 · 可信度 ✅
 - **维度**：开发体验（贡献者入口）
@@ -351,7 +351,7 @@
 - **涉及文件**：新增 `CONTRIBUTING.md` 或 `README.md:863-879`、`README.en.md` 同款
 - **状态**：⬜ 待处理
 
-### [ ] ITM-701 · 文档 `.sh` 残留 / `.ai` 引用 / CI 状态表修正 · 可信度 ✅
+### [x] ITM-701 · 文档 `.sh` 残留 / `.ai` 引用 / CI 状态表修正 · 可信度 ✅
 - **维度**：文档准确性（失效命令引用）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：三类合并。① **失效命令引用**：`docs/conventions.md:825` 引 `ci-coverage.sh`；`docs/release.md:436` 引 `gate-check.sh`、`:651` 引 `changelog-facts.sh`、`:693` 引 `changelog-check.sh`。实际已全部 C# 化（CHANGELOG 2.2.0 记录"删除全部 8 个 `.sh`/`.py`"），真实文件为 `ci-coverage.cs`、`changelog-facts.cs`、`changelog-check.cs`、`gate.cs`；`docs/release.md:665` 自己写的是正确命令，同一文档内前后矛盾。V9 守卫只查 `bash X.sh` / `dotnet run X.cs` 形态，反引号/表格形态是它自述的已知盲区（`scripts/verify-conventions.cs:161-167`）。② **`.ai` 引用**：`docs/architecture.md:5` 称".ai/ 目录内嵌统一质量体系 v2.1，详见 `.ai/README.md`"，实际 `.ai/.git` 存在（独立嵌套仓库），`git ls-files .ai/` 返回 0，fresh clone 不存在；且本工作树 `.ai/scripts/` 仅 2 个文件，而 `.ai/README.md:139-140` 描述 20 个脚本并给出不存在的入口。③ **CI 状态表两个方向都说反**：`docs/conventions.md:1030` 说覆盖率"脚本就绪，接线待阈值校准"（实际 `ci.yml:202-235` 已接线，阈值 0.70）；`:1035` 说性能契约 `--smoke` 烟测挂在 CI（实际 `.github/workflows/` 零命中）。
@@ -360,7 +360,7 @@
 - **风险**：低（纯文本）。
 - **验证**：`grep -rn "\.sh" docs/` 中命令类引用归零；`dotnet run scripts/verify-conventions.cs --quick` 全绿；`docs/conventions.md:1030,1035` 与 `ci.yml` 实况一致。
 - **涉及文件**：`docs/conventions.md:825,1030,1035`、`docs/release.md:436,651,693`、`docs/architecture.md:5`
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：命令类 .sh 失实引用零残留（V9 门禁持续守护）；test-coverage-baseline.md:31 残留为 2026-09-11 迁移史叙述（合法）；.ai 独立仓库语义与 CI 状态表均已对实况
 
 ### [ ] ITM-702 · 锁文件启用 · 可信度 ✅
 - **维度**：依赖可复现性（供应链）
@@ -470,7 +470,7 @@
 - **工作量**：XL（需拆分提交）
 - **状态**：⬜ 待处理
 
-### [ ] ITM-711 · 依赖与包卫生 · 可信度 ✅
+### [x] ITM-711 · 依赖与包卫生 · 可信度 ✅
 - **维度**：依赖治理
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：四项合并。
@@ -483,7 +483,7 @@
 - **风险**：低到中。**许可证变更需法律判断**，若采用 `only` 会影响下游使用者的合规假设，建议先确认意图（详见 ITM-724 与"需裁决"节）。`Microsoft.Data.SqlClient` 若计划恢复 SQL Server 支持则不应移除。
 - **验证**：`grep -rn "Microsoft.Data.SqlClient" Directory.Packages.props` 零命中；许可证表达式与 PalORM 依赖条款自洽；`ls nupkgs/` 只剩当前版本；随机抽 3 个包检查 nuspec `description` 非占位符。
 - **涉及文件**：`Directory.Packages.props:53`、`Directory.Build.props:63`、`nupkgs/`、各 `src/*/*.csproj`
-- **状态**：⬜ 待处理
+- **状态**：✅ 部分收口（2026-10-27 对账轮）：②许可证已闭环（ADR-036 Apache-2.0，2026-10-26；PalORM 6.8.0 同步转 Apache，分层效应消失）③Platforms 已裁决停更保留（2026-10-19 依赖轮，preview.7 为最后版本）；①SqlClient 零引用与④nupkgs/description 见同轮实施
 
 ### [ ] ITM-712 · 注释变更史考古清理 · 可信度 ⚠
 - **维度**：可读性
@@ -508,7 +508,7 @@
 - **涉及文件**：新增 `scripts/README.md`、`docs/development.md`
 - **状态**：⬜ 待处理
 
-### [ ] ITM-714 · 文档计数与注释状态收尾 · 可信度 ✅
+### [x] ITM-714 · 文档计数与注释状态收尾 · 可信度 ✅
 - **维度**：文档准确性（机械可验证类）
 - **优先级**：P2 · 危害: 低 · 复杂度: 易
 - **问题**：六项机械可验证的小错。
@@ -523,9 +523,9 @@
 - **风险**：低。第 5 项若选择"接到 release.yml"，需确认该脚本能独立运行且退出码语义明确。
 - **验证**：每项与实况一致；`grep -rn "preview.5" docs/performance.md` 零命中或标注为历史时点。
 - **涉及文件**：`docs/aot.md:3-7`、`README.md:837,802`、`Directory.Build.targets:7`、`.github/workflows/ci.yml:84`、`docs/release.md:693`、`docs/performance.md:3,30`
-- **状态**：⬜ 待处理
+- **状态**：✅ 部分收口（2026-10-27 对账轮）：①aot.md 已更新双样本口径 ②README:480 samples 清单已含 DapperAotProbe ④ci.yml 注释已修（.gitignore:68）⑤changelog-check 已接 release.yml pack 前（5bf98d9，2026-10-26）⑥performance.md preview.5 已标注历史口径；③targets 守卫计数见同轮实施
 
-### [ ] ITM-715 · EventLog 批量插入 + Projection checkpoint 批量化 · 可信度 ✅
+### [x] ITM-715 · EventLog 批量插入 + Projection checkpoint 批量化 · 可信度 ✅
 - **维度**：性能（写路径往返）
 - **优先级**：P3 · 危害: 中 · 复杂度: 难
 - **问题**：两处。① **EventLog 逐事件 INSERT**：`src/PalDDD.Dapper/DapperEventLog.cs:111-138` 每事件一条 `QuerySingleAsync<long>`（还有每事件一个 `new DynamicParameters()` 与 `Payload.ToArray()`/`Metadata.ToArray()` 两次拷贝）；`src/PalDDD.PalORM/Stores/PalOrmEventLog.cs:109-136` 每事件一次 `Session.InsertAsync`。EF 姊妹实现已是批量（`src/PalDDD.EventLog.EFCore/EventLogDbContext.cs:223-233` 用 `AddRange` + 一次 `SaveChangesAsync`）。② **Projection 每事件 2 次 checkpoint 操作**：`src/PalDDD.Projections/ProjectionProcessor.cs:73-79`（`TryStartAsync`）与 `:109`（`MarkCompletedAsync`），replay 驱动 `ProjectionRebuilder.cs:103-115`；重建 100 万事件流会发约 200 万条 checkpoint 语句。
@@ -535,7 +535,7 @@
 - **验证**：若实施，需新增语义测试证明"崩溃后回退窗口 ≤ 配置的批量阈值"；基准显示写路径往返次数按批量因子下降。**若风险不可接受，本项应转为"评估不修"并记录理由。**
 - **涉及文件**：`src/PalDDD.Dapper/DapperEventLog.cs:111-138`、`src/PalDDD.PalORM/Stores/PalOrmEventLog.cs:109-136`、`src/PalDDD.Projections/ProjectionProcessor.cs:73-109`、`ProjectionRebuilder.cs:103-115`
 - **依赖**：ITM-698（同为写/读路径批量化，共用验证手段）
-- **状态**：⬜ 待处理
+- **状态**：✅ 已收口（2026-10-27 对账轮）：A11（PG/SQLite 多行 INSERT..RETURNING）+ B11（MySQL 多行 VALUES + 区间回查）落地 EventLog 批量；CheckpointBatchSize 组末水位 + 回放批宽 1000（ADR-034 M2）落地 Projection 批量；崩溃重放窗口语义由 v5.0 非续读+批模式 fail-fast 收口
 
 ### [ ] ITM-716 · 手动转义与原始 SQL 片段加固 · 可信度 ✅
 - **维度**：安全（防御性）

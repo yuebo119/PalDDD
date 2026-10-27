@@ -146,7 +146,7 @@
 - **验证**：探针——为 BuildSnapshot 增补 field 行后重生成快照，应出现 `PalMetrics` 字段行。✅ 已实测快照零 field
 - **涉及文件**：`test/PalDDD.Core.Tests/PublicApiSnapshotTests.cs`、`test/PalDDD.Core.Tests/Snapshots/core-packages-public-api.txt`
 
-### [ ] ITM-626 · `AddGeneratedMessages` 全仓零接线——生成物无端到端测试 · 可信度 ✅
+### [x] ITM-626 · `AddGeneratedMessages` 全仓零接线——生成物无端到端测试 · 可信度 ✅
 - **维度**：生成语义流
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **状态**：✅ 已修（2026-09-10 第二轮）——新增 `test/PalDDD.Core.Tests/MessageCatalogEndToEndTests.cs`：用真实 `[GenerateMessage]` + `[JsonSerializable]` context（测试项目以 Analyzer 形式引用生成器），在测试内直接调用生成物 `PalMessageCatalog.AddGeneratedMessages`，验证"标注 → 生成 → 运行期目录可查（按名/按类型）"全链打通。双向 mutation 验证：移除 `[JsonSerializable]` → 编译失败（证明生成链路活跃）；断言改错名 → 测试红（证明有区分力）。
