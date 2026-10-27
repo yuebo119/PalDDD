@@ -643,10 +643,11 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 $"Child saga orchestrator for state type '{childStateType.Name}' could not be resolved. "
                 + "Override ResolveChildSaga<T>() to return the child saga orchestrator.");
 
-        // P3-SRC-401 声明：临时 manager 使"使用 Interrupt 前须设 SagaManager"的前提不可检测——
-        // 子 saga 含 InterruptStep 且父未设 manager 时条目落入临时实例（执行完丢弃），滞留中断态
-        // 无警告；含 Interrupt 的子 saga 必须显式设 SagaManager（见 InterruptStep 的 HITL 设计注释）。
-        var manager = SagaManager ?? new DefaultSagaManager();
+        // P3-SRC-401 声明（保留）：子 saga 含 InterruptStep 且未显式设 SagaManager 时，中断条目
+        // 落入其临时 DefaultSagaManager 实例（执行完丢弃），滞留中断态无警告；含 Interrupt 的
+        // 子 saga 必须显式设 SagaManager（见 InterruptStep 的 HITL 设计注释）。
+        // v5.0 接口公开化：原「临时 manager 使前提不可检测」所指的 manager 局部变量随非泛型
+        // 分派外移（SagaChildDispatch）已无使用，删除变量、声明语义不变。
 
         await SafeObserveStartedAsync(observer, current.SagaId, stepKey, ct).ConfigureAwait(false);
 
