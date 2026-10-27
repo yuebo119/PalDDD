@@ -12,6 +12,29 @@
 
 ## [Unreleased]
 
+### Added
+
+- **2026-10-27 历史审计挂账清零轮（42 条全部闭环，五次 checkpoint 提交 7613d79/3eb568e/24af9a1/1c7e6e1/06219fc）**：
+  背景：`docs/review/` 三份 2026-09 全量审计的 42 条未回勾条目（09-10 一条 + 09-15 三十九条 + 09-16 两条），
+  其中约 15 条实为后续轮已落地而未回勾、25 条真实开放、2 条按条目预设退出条件处置。处置形态：
+  ①**回勾带证据 34 条**（后续轮已落地：Dapper 7 store 全注册、数据面索引、AOT 事实统一、
+  count-audit/断言棘轮、perf-nightly 基准归档、A11/B11 批量、M2 检查点组末水位等——逐条在
+  action-items 文档状态字段注明落地轮次与实况验证）；
+  ②**新实施 12 条**：`OutboxBatchProcessor` 毒消息四分支锁定测试（ITM-685）、`MapQuery` 绑定段
+  输入异常归 400 白名单（ITM-696）、README×2 认证授权段 + 授权约定链锁定（ITM-695）、断言棘轮
+  FsCheck 豁免与收紧 200→195（ITM-705/706）、`FakeTimeProvider` 时钟改为回调前推进（ITM-785，
+  五面板零翻转）、Kafka 投毒消息错误路径（ITM-708）、csproj 包描述门禁 D13（ITM-690，首跑抓出
+  两处占位漏网）、secret-scan 检测面扩充（扩展名 7 类 + URI/env/AccountKey 三形态 + 白名单
+  子串收紧 + 9 个令牌前缀族，selftest 32/32、gate-audit 47/47）、`NUGET_API_KEY` 收窄到推送步、
+  18 包补 Description、`scripts/README.md` 索引（ITM-713）、两个复杂度热点方法嵌套 7/6→3（ITM-709）、
+  PG path 转义收敛单一入口（ITM-716）；
+  ③**双证伪 2 条**（端到端探针实证：`PalDDD.Base` 分析器正常交付 PDDD001；net11 框架自动提供
+  M.E.Options/Hosting.Abstractions，显式引用反触发 NU1510）；
+  ④**按预设退出条件 2 条**（ITM-702 锁文件在 rc.3 SDK 实测还原失败、S3 反向验证后转 GA 清偿
+  窗口；ITM-710 实证核心已由 2026-09-19 decision Option A 落地，SafeObserve 四件泛化收益为负保留）。
+  ⑤配套：`coverage-baseline.json` 增设 `PalDDD.PalORM.Tests` 键（本地无 Docker 保守初值 0.3311，
+  降幅门禁覆盖 16 模块；CI 全量待重录上调）。
+
 ## [5.0.0] — 2026-10-27
 
 > **范围**：`v4.0.0`（2026-10-11，tag 提交）→ `v5.0.0`（本提交），221+ 个提交（`git rev-list --count v4.0.0..HEAD` 为 221，另有本版发版轮提交）。
