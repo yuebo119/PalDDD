@@ -113,11 +113,12 @@ public static class EndpointExtensions
 
     /// <summary>映射查询到 HTTP GET 端点。查询绑定由调用方显式提供，避免运行时模型绑定反射。</summary>
     /// <remarks>
-    /// v26 P3 契约声明（bindQuery 异常映射）：<paramref name="bindQuery"/> 抛
-    /// <see cref="CQRS.PalValidationException"/> → 400（ValidationProblemResponse 体）；
-    /// 其他异常（如原生 query string 解析的 <c>FormatException</c>/<c>UriFormatException</c>）
-    /// → 500（逃逸至全局 ExceptionMiddleware）——<b>调用方应自行包装输入错误</b>：
-    /// 需要将解析失败映射为 400 时请在 bindQuery 内捕获并抛 PalValidationException。
+    /// bindQuery 异常映射（ITM-696，2026-10-27 收紧）：<see cref="CQRS.PalValidationException"/> →
+    /// 400（ValidationProblemResponse 体）；输入解析族的
+    /// <see cref="FormatException"/>/<see cref="ArgumentException"/>（含
+    /// <see cref="ArgumentNullException"/> 之外的参数形态）/<see cref="OverflowException"/> →
+    /// 400（ProblemDetails，标题 "Invalid query binding"）——客户端输入问题不再报 500；
+    /// 其他异常 → 500（逃逸至全局 ExceptionMiddleware，服务端故障不被吞成 400）。
     /// </remarks>
     public static IEndpointConventionBuilder MapQuery<TQuery, TResult>(
         this IEndpointRouteBuilder endpoints,
@@ -143,6 +144,18 @@ public static class EndpointExtensions
             catch (PalDDD.CQRS.PalValidationException ex)
             {
                 await WriteValidationProblemAsync(context, ex, context.RequestAborted).ConfigureAwait(false);
+                return;
+            }
+            // ITM-696（2026-10-27）：输入解析族异常按类型白名单归 400——按异常类型精确
+            // 收窄（不 catch-all，真正的服务端 bug 仍 500 逃逸）。典型形态：路由值/query
+            // string 的 Guid.Parse、int.Parse 失败（FormatException）、越界（OverflowException）。
+            catch (Exception ex) when (ex is FormatException or ArgumentException or OverflowException)
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateBadRequest(StatusCodes.Status400BadRequest, $"Invalid query binding: {ex.Message}"),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
                 return;
             }
             if (query is null)

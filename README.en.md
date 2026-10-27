@@ -534,6 +534,13 @@ flowchart TB
 
 ## FAQ
 
+### Authentication & Authorization
+
+Pal.DDD is a library, not a host — it ships and enables no authentication/authorization middleware by default (delegating to the host is the intended design). Two things to know (ITM-695):
+
+- **Endpoint authorization**: `MapCommand`/`MapQuery` (including streaming endpoints) return `IEndpointConventionBuilder` — chain `.RequireAuthorization("policy-name")` directly to attach the authorization convention (policy metadata mounting is locked by a test; 401/403 enforcement is performed by the ASP.NET Core authorization middleware per policy). The sample code omits authorization to stay focused — **chain authorization onto every write endpoint in production**, and add `AddAuthentication`/`UseAuthentication`/`UseAuthorization` as needed.
+- **`/health` exposure**: `AddPalHealthChecks` registers `/health` which reports component topology and dependency status. Fine for internal deployments; when exposed to the public internet, bind the health endpoint to a restricted port/network face or replace it with an anonymous minimal probe.
+
 **What is the relationship with MediatR?**
 MediatR is an in-process command dispatcher. Pal.DDD ships an equivalent Dispatcher + PipelineBehavior, and on top of that provides Outbox, Inbox, Saga, EventLog, and Projection. If you only need command dispatch, the CQRS layer can replace MediatR; if you also need reliable message delivery and Saga orchestration, Pal.DDD provides the entire chain. For the relationship with MassTransit, see the [comparison table](#comparison-with-existing-solutions): the framework does not bind a transport — the Outbox adapts to any Broker via the `IMessageBroker` abstraction.
 

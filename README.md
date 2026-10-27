@@ -530,6 +530,13 @@ flowchart TB
 
 ## FAQ
 
+### 认证与授权
+
+Pal.DDD 是库不是宿主——不内置也不默认启用任何认证/授权中间件（委托宿主是库设计的立场）。两点须知（ITM-695）：
+
+- **端点授权**：`MapCommand`/`MapQuery`（含流式端点）返回 `IEndpointConventionBuilder`，直接链 `.RequireAuthorization("策略名")` 即可挂授权约定（策略元数据挂载有测试锁定；401/403 由 ASP.NET Core 授权中间件按策略执行）。样例代码为了聚焦 Pal.DDD 用法未加授权——**生产部署请为所有写端点链授权**，并按需加 `AddAuthentication`/`UseAuthentication`/`UseAuthorization`。
+- **`/health` 暴露面**：`AddPalHealthChecks` 默认注册的 `/health` 会返回组件拓扑与依赖状态。内网部署可直接用；面向公网时建议对健康端点限定端口/网络面，或改为匿名最小探针。
+
 **和 MediatR 什么关系？**
 MediatR 是进程内命令分发器。Pal.DDD 内置与之等价的 Dispatcher + PipelineBehavior，并在此基础上提供 Outbox、Inbox、Saga、EventLog、Projection。只需要命令分发时，CQRS 层可以替代 MediatR；还需要可靠消息投递和 Saga 编排时，Pal.DDD 提供整条链路。与 MassTransit 的关系见[对比表](#与现有方案的差异)：框架不绑定传输，Outbox 经 `IMessageBroker` 抽象适配任意 Broker。
 
