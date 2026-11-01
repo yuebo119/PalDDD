@@ -842,6 +842,7 @@ class PalDDD.Hosting.AspNetCore.DetachedStreamOptions
   property System.TimeSpan MaxRunDuration
   property System.Boolean RejectNewAttach
   property System.TimeSpan RetentionAfterCompletion
+  property System.Func<Microsoft.AspNetCore.Http.HttpContext, System.String> RunOwnerSelector
 static class PalDDD.Hosting.AspNetCore.EndpointExtensions
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapCommand(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> commandJsonTypeInfo)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapCommand(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> commandJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse> responseJsonTypeInfo)
@@ -1851,6 +1852,15 @@ struct PalDDD.Transactions.RetentionResult
   method System.Boolean Equals(System.Object obj)
   method System.Int32 GetHashCode()
   method System.String ToString()
+static class PalDDD.Transactions.RetryExecutor
+  method System.Threading.Tasks.ValueTask<T> ExecuteAsync(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>> operation, PalDDD.Transactions.RetryOptions options, System.TimeProvider timeProvider, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.ValueTask ExecuteAsync(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> operation, PalDDD.Transactions.RetryOptions options, System.TimeProvider timeProvider, System.Threading.CancellationToken cancellationToken)
+class PalDDD.Transactions.RetryOptions
+  ctor()
+  property PalDDD.Transactions.IRetryBackoffPolicy BackoffPolicy
+  property System.Int32 MaxRetries
+  property System.Action<System.Exception, System.Int32> OnRetry
+  property System.Func<System.Exception, System.Boolean> ShouldRetry
 struct PalDDD.Transactions.SagaCompensationStarted
   ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey)
   property ByteAether.Ulid.Ulid SagaId [init]

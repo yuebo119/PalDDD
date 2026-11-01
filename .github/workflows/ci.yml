@@ -157,6 +157,13 @@ jobs:
           # CI 环境：Testcontainers 自动启动 PG/MySQL/Kafka/RabbitMQ
           PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS: '0'
 
+      # AgentSample 回归（2026-11-01）：样本此前只在本地人工运行，代码漂移无机械防线。
+      # 直接跑构建产物与 AotSample 同形态；退出码非零即失败（样本内 Check 累加）。
+      - name: Agent sample assertions (ADR-030/031 reference)
+        run: |
+          set -euo pipefail
+          ./samples/PalDDD.AgentSample/bin/Release/net11.0/PalDDD.AgentSample
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

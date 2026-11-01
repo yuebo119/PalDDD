@@ -57,6 +57,17 @@ public sealed class DetachedStreamOptions
     /// <summary>为 true 时新附着在已有活跃附着存在时返回 409（默认 false = 接管旧连接）。</summary>
     public bool RejectNewAttach { get; set; }
 
+    /// <summary>
+    /// 从请求提取 run 所有者标识（如用户 ID 或租户 ID）；null 表示不启用所有权校验。
+    /// </summary>
+    /// <remarks>
+    /// 启用后，附着与取消都必须来自同一所有者，否则端点答 404（不区分 403，避免泄露 run 是否存在）。
+    /// 提取结果在 run 创建时固化：owner 为 null 的 run 只接受 owner 为 null 的请求。
+    /// 框架不提供身份抽象，selector 通常读 <c>HttpContext.User</c> 的 claim；
+    /// 需与端点上的 <c>RequireAuthorization()</c> 配合，未认证请求不应进入受保护的路由。
+    /// </remarks>
+    public Func<HttpContext, string?>? RunOwnerSelector { get; set; }
+
     internal void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxBufferedItems, 1);
@@ -115,6 +126,9 @@ internal interface IStreamRun : IDisposable
 
     DateTimeOffset TerminalAt { get; }
 
+    /// <summary>run 所有者标识；null 表示创建时未绑定（只接受同为 null 的请求）。</summary>
+    string? Owner { get; }
+
     void Cancel();
 }
 
@@ -133,6 +147,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
     private readonly Action? _onTerminal;
     private readonly CancellationTokenSource _cts;
     private readonly string _runId;
+    private readonly string? _owner;
     // R11 F20：是否使用自定义 idSelector。数字回退把 Last-Event-ID 当“位置索引”，
     // 只对默认位置型 Id 成立；自定义数字 id 与缓冲位置无对应关系，必须走 gap。
     private readonly bool _hasCustomIdSelector;
@@ -163,9 +178,11 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         IServiceScope? scope,
         IPalLogger<StreamRun<TItem>>? logger,
         bool hasCustomIdSelector,
-        Action? onTerminal = null)
+        Action? onTerminal = null,
+        string? owner = null)
     {
         _runId = runId;
+        _owner = owner;
         _options = options;
         _timeProvider = timeProvider;
         _scope = scope;
@@ -194,6 +211,8 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
     {
         get { lock (_gate) return _attachCount; }
     }
+
+    public string? Owner => _owner;
 
     public DateTimeOffset TerminalAt
     {
@@ -847,7 +866,7 @@ internal sealed class StreamRunRegistry : IDisposable
         Func<TItem, string>? idSelector,
         IStreamQueryHandler<TQuery, TItem>? handlerOverride = null)
         where TQuery : IStreamQuery<TItem>
-        => RegisterCore(query, eventSelector, idSelector, handlerOverride, startImmediately: true, out _);
+        => RegisterCore(query, eventSelector, idSelector, handlerOverride, owner: null, startImmediately: true, out _);
 
     /// <summary>
     /// R12 C-11：只创建并登记 run，不启动产出泵。调用方完成附着后再调用
@@ -858,15 +877,17 @@ internal sealed class StreamRunRegistry : IDisposable
         TQuery query,
         Func<TItem, string>? eventSelector,
         Func<TItem, string>? idSelector,
+        string? owner,
         out StreamRun<TItem>? run)
         where TQuery : IStreamQuery<TItem>
-        => RegisterCore(query, eventSelector, idSelector, handlerOverride: null, startImmediately: false, out run);
+        => RegisterCore(query, eventSelector, idSelector, handlerOverride: null, owner, startImmediately: false, out run);
 
     private string RegisterCore<TQuery, TItem>(
         TQuery query,
         Func<TItem, string>? eventSelector,
         Func<TItem, string>? idSelector,
         IStreamQueryHandler<TQuery, TItem>? handlerOverride,
+        string? owner,
         bool startImmediately,
         out StreamRun<TItem>? createdRun)
         where TQuery : IStreamQuery<TItem>
@@ -898,7 +919,7 @@ internal sealed class StreamRunRegistry : IDisposable
         {
             scope = _scopeFactory.CreateScope();
             var logger = scope.ServiceProvider.GetService<IPalLogger<StreamRun<TItem>>>();
-            run = new StreamRun<TItem>(runId, _options, _timeProvider, scope, logger, idSelector is not null, OnRunTerminal);
+            run = new StreamRun<TItem>(runId, _options, _timeProvider, scope, logger, idSelector is not null, OnRunTerminal, owner);
             _runs[runId] = run;
             createdRun = run;
 
@@ -982,6 +1003,46 @@ internal sealed class StreamRunRegistry : IDisposable
         if (_runs.TryGetValue(runId, out var any) && any is StreamRun<TItem> typed)
         {
             run = typed;
+            return true;
+        }
+        run = null;
+        return false;
+    }
+
+    /// <summary>
+    /// 按 runId 与所有者双重匹配取 run（ADR-031 所有权校验）。
+    /// </summary>
+    /// <remarks>
+    /// owner 不等即视为不存在，调用方统一答 404：区分 403 会让攻击者用状态码枚举
+    /// runId 是否存在。未配置 <see cref="DetachedStreamOptions.RunOwnerSelector"/> 时
+    /// run 的 owner 恒为 null，与请求侧 null 相等，行为与旧版一致。
+    /// </remarks>
+    internal bool TryGetOwned<TItem>(
+        string runId,
+        string? owner,
+        [NotNullWhen(true)] out StreamRun<TItem>? run)
+    {
+        if (_runs.TryGetValue(runId, out var any)
+            && any is StreamRun<TItem> typed
+            && string.Equals(typed.Owner, owner, StringComparison.Ordinal))
+        {
+            run = typed;
+            return true;
+        }
+        run = null;
+        return false;
+    }
+
+    /// <summary>非泛型重载（取消端点不关心元素类型）。</summary>
+    internal bool TryGetOwned(
+        string runId,
+        string? owner,
+        [NotNullWhen(true)] out IStreamRun? run)
+    {
+        if (_runs.TryGetValue(runId, out var any)
+            && string.Equals(any.Owner, owner, StringComparison.Ordinal))
+        {
+            run = any;
             return true;
         }
         run = null;

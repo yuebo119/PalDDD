@@ -229,6 +229,37 @@ services.AddPalMemoryPackSerialization(catalog =>
 - 与 `AddPalJsonSerialization()` **互斥**注册——`IMessageSerializer` 是 Singleton，后注册者覆盖前者。Outbox/Inbox/EventLog 全局共用同一序列化器，切换前请确认历史 payload 的兼容性（ContentType 不同则需迁移）。
 - 二进制 payload 不再可读，运维排查时通过 `ContentType: application/x-memorypack` 区分。
 
+## 重试外部调用（进程内）
+
+`RetryExecutor` 把既有退避策略（`IRetryBackoffPolicy`，与 Outbox/Saga 同一套实现）套到任意异步委托上，用于 HTTP、LLM 或第三方服务调用：
+
+```csharp
+using PalDDD.Transactions;
+
+var options = new RetryOptions
+{
+    MaxRetries = 3,                                  // 总尝试 4 次
+    BackoffPolicy = new ExponentialBackoffPolicy(withJitter: true),
+    ShouldRetry = ex => ex is TimeoutException or HttpRequestException,
+    OnRetry = (ex, attempt) => logger.Warning($"retry {attempt}: {ex.GetType().Name}"),
+};
+
+var answer = await RetryExecutor.ExecuteAsync(
+    ct => client.GetStringAsync(url, ct),
+    options,
+    cancellationToken: httpContext.RequestAborted);
+```
+
+语义：
+
+- 总尝试 `MaxRetries + 1`；`MaxRetries = 0` 表示不重试。
+- 调用方 `CancellationToken` 取消后立即传播，不计入重试；委托自身超时抛出的 `OperationCanceledException`（ct 未取消）按普通失败处理，可重试。
+- 重试耗尽原样重抛最后一次异常（保留调用栈），不包装新类型，调用方 catch 形态无需调整。
+- 退避策略自身抛异常时降级固定 1 秒后继续，与 Saga 步骤重试同口径。
+- `TimeProvider` 可注入（测试用 `PalDDD.Testing.FakeTimeProvider`）。
+
+**与 Outbox/Saga 重试的区别**：本执行器在进程内重试，进程退出即丢；Outbox/Saga 把下次尝试时刻落到存储，跨重启继续。需要跨重启保证时用后者，不要用本执行器冒充。
+
 ## 使用 Outbox
 
 > ⚠️ **事务前提（TX1，2026-09-20）**：Outbox 模式的原子性由「业务数据写入与消息行写入在**同一数据库事务**内提交」保证——这是**使用方职责**：调用方必须在业务 DbContext 事务/UnitOfWork 内写入 outbox 消息行（v4.0 ③ 起为 `await AddMessageAsync` + 同事务 `SaveChanges`），框架的后台发布器只负责事务提交后的可靠投递。若消息行与业务数据不同事务，将失去 exactly-once-write 保证（业务回滚但消息已入队 → 幽灵消息）。
@@ -919,7 +950,20 @@ app.MapStreamRunCancel("/agent/runs");
 
 POST 启动的错误形态与 `MapStreamQuery` POST 重载一致：非 JSON Content-Type 415、畸形 JSON 400、空 body 400，均在 SSE 头写出前返回。
 
-**生产部署（授权与限流）**：三个端点返回 `IEndpointConventionBuilder`，可直接链 `RequireAuthorization()` / `RequireRateLimiting()`。框架只按 `runId` 做存在性检查（128 位随机 ID，不可猜测），**不校验 run 所有权**；多租户应用须在端点过滤器或应用层把 run 绑定到当前用户。浏览器跨域读 `X-Run-Id` 需在 CORS 中 `WithExposedHeaders("X-Run-Id")`。
+**生产部署（授权、限流与所有权）**：三个端点返回 `IEndpointConventionBuilder`，可直接链 `RequireAuthorization()` / `RequireRateLimiting()`。框架默认只按 `runId` 做存在性检查（128 位随机 ID，不可猜测）；需要绑定调用方时配置 `RunOwnerSelector`：
+
+```csharp
+builder.Services.AddDetachedStreamRuns(options =>
+{
+    options.DetachGrace = TimeSpan.FromMinutes(5);
+    // 从认证主体提取所有者（与端点上的 RequireAuthorization 配合）
+    options.RunOwnerSelector = ctx => ctx.User.FindFirst("sub")?.Value;
+});
+```
+
+启用后 run 在创建时固化 owner，附着与取消都必须来自同一 owner，否则返回 404（不区分 403，避免用状态码枚举 runId 是否存在）。owner 为 null 的 run 只接受 owner 为 null 的请求。**未配置 selector 时保持原行为**（任何持有 runId 的调用方可附着），多租户应用必须配置或在应用层补绑定。浏览器跨域读 `X-Run-Id` 需在 CORS 中 `WithExposedHeaders("X-Run-Id")`。
+
+**横切（限流、内容过滤、审计）**：流式端点以 `RequestDelegate` 形态注册（`MapGet`/`MapPost`），**不支持 `IEndpointFilter`**（过滤器只作用于 Minimal API 的 `RouteHandlerBuilder`）。横切走宿主中间件（按路径前缀匹配）或端点约定链（`RequireAuthorization` / `RequireRateLimiting` / `WithMetadata`）；逐项内容过滤须在 handler 内完成，框架不提供流级管道（ADR-030 收窄结论）。
 
 客户端流程：
 

@@ -275,6 +275,76 @@ public sealed partial class DetachedStreamTests
     }
 
     [Test]
+    public async Task RunOwnership_SameOwner_CanAttachTerminalRun()
+    {
+        // 所有权（2026-11-01）：配置 RunOwnerSelector 后，同主体可正常附着；
+        // 终态 run 在保留期内回放，链路与无所有权时一致。
+        await using var host = await DetachedHost.StartAsync(run => run
+            .WithHandler(new SequencedHandler(3))
+            .WithOptions(o =>
+            {
+                o.DetachGrace = TimeSpan.FromSeconds(30);
+                o.RunOwnerSelector = static ctx => ctx.Request.Headers["X-Owner"].ToString();
+            }));
+
+        using var first = await SendOwnedAsync(host, HttpMethod.Get, "/detached", "alice");
+        var runId = first.Headers.GetValues("X-Run-Id").First();
+        var initial = await ReadSseAsync(first);
+        await Assert.That(initial.Count(f => f.EventName == "token")).IsEqualTo(3);
+
+        using var reattach = await SendOwnedAsync(host, HttpMethod.Get, $"/runs/{runId}/stream", "alice");
+        await Assert.That(reattach.StatusCode).IsEqualTo(System.Net.HttpStatusCode.OK);
+        var replay = await ReadSseAsync(reattach);
+        await Assert.That(replay.Count(f => f.EventName == "token")).IsEqualTo(3);
+        await Assert.That(replay.Last().EventName).IsEqualTo("done");
+    }
+
+    [Test]
+    public async Task RunOwnership_DifferentOwner_AttachReturns404()
+    {
+        await using var host = await DetachedHost.StartAsync(run => run
+            .WithHandler(new IndefiniteHandler())
+            .WithOptions(o =>
+            {
+                o.DetachGrace = TimeSpan.FromSeconds(30);
+                o.RunOwnerSelector = static ctx => ctx.Request.Headers["X-Owner"].ToString();
+            }));
+
+        using var first = await SendOwnedAsync(host, HttpMethod.Get, "/detached", "alice");
+        var runId = first.Headers.GetValues("X-Run-Id").First();
+        await ReadUntilDataAsync(first);
+
+        using var other = await SendOwnedAsync(host, HttpMethod.Get, $"/runs/{runId}/stream", "bob");
+        await Assert.That(other.StatusCode).IsEqualTo(System.Net.HttpStatusCode.NotFound);
+
+        // 收尾：alice 取消让首连接流结束，避免宿主 Dispose 时挂起
+        using var cleanup = await SendOwnedAsync(host, HttpMethod.Post, $"/runs/{runId}/cancel", "alice");
+        await Assert.That(cleanup.StatusCode).IsEqualTo(System.Net.HttpStatusCode.NoContent);
+    }
+
+    [Test]
+    public async Task RunOwnership_DifferentOwner_CancelReturns404()
+    {
+        await using var host = await DetachedHost.StartAsync(run => run
+            .WithHandler(new IndefiniteHandler())
+            .WithOptions(o =>
+            {
+                o.DetachGrace = TimeSpan.FromSeconds(30);
+                o.RunOwnerSelector = static ctx => ctx.Request.Headers["X-Owner"].ToString();
+            }));
+
+        using var first = await SendOwnedAsync(host, HttpMethod.Get, "/detached", "alice");
+        var runId = first.Headers.GetValues("X-Run-Id").First();
+        await ReadUntilDataAsync(first);
+
+        using var other = await SendOwnedAsync(host, HttpMethod.Post, $"/runs/{runId}/cancel", "bob");
+        await Assert.That(other.StatusCode).IsEqualTo(System.Net.HttpStatusCode.NotFound);
+
+        using var owner = await SendOwnedAsync(host, HttpMethod.Post, $"/runs/{runId}/cancel", "alice");
+        await Assert.That(owner.StatusCode).IsEqualTo(System.Net.HttpStatusCode.NoContent);
+    }
+
+    [Test]
     public async Task RunScope_IsDisposedAfterCompletion()
     {
         // 作用域所有权：run 自有 scope 在终态释放（scoped 探针的 Dispose 计数）
@@ -293,6 +363,16 @@ public sealed partial class DetachedStreamTests
     }
 
     // ─── 夹具 ───
+
+    /// <summary>带所有者头的请求（所有权用例：启动/附着/取消三形态共用）。</summary>
+    private static async Task<HttpResponseMessage> SendOwnedAsync(
+        DetachedHost host, HttpMethod method, string path, string owner)
+    {
+        using var request = new HttpRequestMessage(method, new Uri($"{host.BaseAddress}{path}"));
+        request.Headers.Add("X-Owner", owner);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        return await host.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+    }
 
     private static async Task<HttpResponseMessage> SendReattachAsync(
         DetachedHost host, string runId, string? lastEventId,
