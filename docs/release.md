@@ -211,7 +211,7 @@ feature/xxx ──PR──▶ dev ──PR──▶ main
     └── 开发分支      └── 集成测试   └── 生产发布（含 tag）
 ```
 
-- **main**：仅接受来自 dev 的 PR 合并，禁止直接 push（**发布经 PR/人工合并，无强推脚本**——`scripts/publish-main.sh` 已删除）
+- **main**：只有维护者账号能推送（ruleset `protect-main-push` 的 bypass 列表）；强推与删分支对所有身份拦截（`protect-main-history` 无 bypass）。合并方向仍限 dev → main，**无强推脚本**（`scripts/publish-main.sh` 已删除），机制细节见 docs/branch-flow.md
 - **dev**：接受来自 `feature/*` 的 PR 合并
 - **feature/\*\***：从 dev 创建，PR 到 dev
 
@@ -346,7 +346,7 @@ git push origin v3.3.0
 
 - ❌ PR 合并到 dev（dev 不发布，仅集成测试）
 - ❌ PR 合并到 main 但未打 tag（main 上的代码 ≠ 发布版本）
-- ❌ 直接 push 到 main（违反分支保护）
+- ❌ 直接 push 到 main：不触发发布（无 tag），且非维护者会被 ruleset 拒绝
 
 ---
 

@@ -166,13 +166,17 @@ public static class DetachedStreamEndpoints
         }
 
         var registry = context.RequestServices.GetRequiredService<StreamRunRegistry>();
+        // 所有权（ADR-031 实施附记 2026-11-01）：未配置 selector 时 owner 恒 null，
+        // 与旧版行为一致；配置后 run 在创建时固化 owner，跨主体附着/取消一律 404。
+        var options = context.RequestServices.GetRequiredService<DetachedStreamOptions>();
+        var owner = options.RunOwnerSelector?.Invoke(context);
         string runId;
         StreamRun<TItem> run;
         try
         {
             // R12 C-11：先登记、附着，再启动泵。原 Register 立即启动，快速同步生产者
             // 可在附着完成前填满环形缓冲，使首个响应以 gap 开局并永久丢失前缀。
-            runId = registry.RegisterDeferred(query, eventSelector, idSelector, out var registeredRun);
+            runId = registry.RegisterDeferred(query, eventSelector, idSelector, owner, out var registeredRun);
             run = registeredRun!;
         }
         catch (StreamRunCapacityExceededException)
@@ -230,7 +234,9 @@ public static class DetachedStreamEndpoints
         {
             var registry = context.RequestServices.GetRequiredService<StreamRunRegistry>();
             var runId = context.Request.RouteValues["runId"] as string;
-            if (string.IsNullOrEmpty(runId) || !registry.TryGet<TItem>(runId, out var run))
+            var options = context.RequestServices.GetRequiredService<DetachedStreamOptions>();
+            var owner = options.RunOwnerSelector?.Invoke(context);
+            if (string.IsNullOrEmpty(runId) || !registry.TryGetOwned<TItem>(runId, owner, out var run))
             {
                 await WriteProblemAsync(context, StatusCodes.Status404NotFound,
                     "Stream run not found or expired.").ConfigureAwait(false);
@@ -261,12 +267,15 @@ public static class DetachedStreamEndpoints
         {
             var registry = context.RequestServices.GetRequiredService<StreamRunRegistry>();
             var runId = context.Request.RouteValues["runId"] as string;
-            if (string.IsNullOrEmpty(runId) || !registry.Cancel(runId))
+            var options = context.RequestServices.GetRequiredService<DetachedStreamOptions>();
+            var owner = options.RunOwnerSelector?.Invoke(context);
+            if (string.IsNullOrEmpty(runId) || !registry.TryGetOwned(runId, owner, out var run))
             {
                 await WriteProblemAsync(context, StatusCodes.Status404NotFound,
                     "Stream run not found or expired.").ConfigureAwait(false);
                 return;
             }
+            run.Cancel(); // 终态 run 的 Cancel 为 no-op（幂等语义由 204 答复承载）
             context.Response.StatusCode = StatusCodes.Status204NoContent;
         });
     }

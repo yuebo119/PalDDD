@@ -129,3 +129,4 @@ research/
 BenchmarkDotNet.Artifacts/
 artifacts-medium/
 /data
+/architecture

@@ -143,9 +143,19 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 **作用域所有权（强制）**：run 活过请求作用域，handler 必须从 run 自有 `IServiceScope` 解析（框架已在 `Register` 内完成）；run 终态时释放该 scope。**禁止**把请求作用域的 scoped 实例传进 run。
 
+**调用方所有权（可选，`RunOwnerSelector`）**：默认只按 runId 做存在性检查。多租户或需绑定用户的部署在 `DetachedStreamOptions.RunOwnerSelector`（`Func<HttpContext, string?>`，通常取 `ctx.User` 的 claim）里声明提取方式；run 创建时固化 owner，附着与取消的 owner 不等时答 404（不区分 403，避免用状态码枚举 runId）。未配置时保持原行为（任何持有 runId 的调用方可附着），这是**应用层职责**，框架不引入身份抽象。
+
 **与相邻组件的分工（别混）**：run 注册表 = 传输层会话状态，进程内可丢（重启即丢进行中 run）；完成态审计与回放走 `IEventLog`（`samples/PalDDD.AgentSample` 示范 `Last-Event-ID` 即 `fromVersion`）；run 内部业务编排走 Saga；对外发布走 Outbox；工具副作用去重走 `IdempotencyProcessor`。本机制**不是** EventBus（单写者单附着、无订阅模型、无跨请求投递保证）。
 
 **客户端约束**：断线用取消请求（abort 连接）而非 `HttpResponseMessage.Dispose()`——后者在 SSE 流未读完时会同步等连接关闭，与仍在写的服务端互相等待；重连用新连接（连接池在 abort 后可能进入异常态）；终态收尾帧（`done`/`cancelled`）不带 id，按 id 解析时须过滤。
+
+### 1.12 重试执行器（RetryExecutor，Transactions）
+
+**何时用**：应用层调用 HTTP、LLM、第三方服务需要指数退避重试，且不需要跨进程恢复。复用 `IRetryBackoffPolicy`（与 Outbox/Saga 同一套策略实现），零新依赖，AOT 安全。
+
+**语义**：总尝试 `MaxRetries + 1`；调用方 `CancellationToken` 取消后立即传播且不计入重试；委托自身超时抛出的 OCE（ct 未取消）按普通失败处理可重试；耗尽原样重抛最后一次异常（不包装）；退避策略自身抛异常降级 1 秒后继续。`TimeProvider` 可注入，测试用 `PalDDD.Testing.FakeTimeProvider`。
+
+**与持久化重试的分界（强制）**：`RetryExecutor` 在进程内重试，进程退出即丢。需要跨重启保证的业务消息走 Outbox（`MaxRetryCount` + `RetryBackoffPolicy` 落库）；步骤级编排走 Saga。**禁止**用本执行器替代 Outbox/Saga 的可靠性承诺。
 
 ---
 
@@ -380,7 +390,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-27 发版轮复验）：258 源文件·37 项目·0 违规（2026-10-27 v5.0 发版轮兑现移除承诺：删 `Models/VersionProbeRow.cs` 与 `Transactions.EFCore/SqlServerOutboxDbContext.cs`（259→257），同轮 ISagaManager 公开化新增 `Saga/SagaChildDispatch.cs`（257→258）；2026-10-22 性能轮新增 `OutboxWakeUpSignal` 一个源文件（258→259）；2026-10-22 R14 审计优化轮新增 `IMessageBrokerHealth`、`ProjectionReplayResult` 两个源文件（256→258）；2026-10-21 R7：`PalLogger` 迁入 Core 并新增单一定义点 `PalLoggerRegistration`，净 +1（255→256）；本轮净 +3：新增可选的 `PalDDD.Hosting.AspNetCore.OutboxHealth` 两文件；`VersionProbeRow` 以 `[Obsolete]` 回归一个 Minor 兼容窗口；`GeneratorSymbols` 为此前 `GeneratorSharedHelpers` 的合规改名，不增计数；2026-10-21 双评审修复轮新增 `DomainEventOutboxBridge`、`PostgreSqlDataSourceRegistration` 并删除 0 引用的 `VersionProbeRow`；2026-10-21 批量消费轮新增 `MessageBatchPump`、`InboxBatchConsumer` 两个源文件；同轮此前新增 `EventLogBinaryRow` 一个源文件；2026-10-20 数据面续轮新增 3 个源文件：RetentionSql、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；2026-10-21 契约盘点修复轮新增 `DapperConnectionGuard` 一个源文件（253→254）；2026-10-21 后续项轮新增 `EfCoreDialectGuard` 一个源文件（254→255）；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-11-01 B 级缝隙补齐轮复验）：259 源文件·37 项目·0 违规（2026-10-27 v5.0 发版轮兑现移除承诺：删 `Models/VersionProbeRow.cs` 与 `Transactions.EFCore/SqlServerOutboxDbContext.cs`（259→257），同轮 ISagaManager 公开化新增 `Saga/SagaChildDispatch.cs`（257→258）；2026-10-22 性能轮新增 `OutboxWakeUpSignal` 一个源文件（258→259）；2026-10-22 R14 审计优化轮新增 `IMessageBrokerHealth`、`ProjectionReplayResult` 两个源文件（256→258）；2026-10-21 R7：`PalLogger` 迁入 Core 并新增单一定义点 `PalLoggerRegistration`，净 +1（255→256）；本轮净 +3：新增可选的 `PalDDD.Hosting.AspNetCore.OutboxHealth` 两文件；`VersionProbeRow` 以 `[Obsolete]` 回归一个 Minor 兼容窗口；`GeneratorSymbols` 为此前 `GeneratorSharedHelpers` 的合规改名，不增计数；2026-10-21 双评审修复轮新增 `DomainEventOutboxBridge`、`PostgreSqlDataSourceRegistration` 并删除 0 引用的 `VersionProbeRow`；2026-10-21 批量消费轮新增 `MessageBatchPump`、`InboxBatchConsumer` 两个源文件；同轮此前新增 `EventLogBinaryRow` 一个源文件；2026-10-20 数据面续轮新增 3 个源文件：RetentionSql、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；2026-10-21 契约盘点修复轮新增 `DapperConnectionGuard` 一个源文件（253→254）；2026-10-21 后续项轮新增 `EfCoreDialectGuard` 一个源文件（254→255）；2026-11-01 B 级缝隙补齐新增 `Retry/RetryExecutor.cs` 一个源文件（258→259）；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 

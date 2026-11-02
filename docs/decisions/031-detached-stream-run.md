@@ -160,6 +160,12 @@ Phase 1 = D1-D6 全部（注册表 + 三端点 + 选项 + 测试 + 样本 + 文�
 
 验证：Hosting 面板 88/88（新增遥测 4 件 + POST 3 件）；AotSample 普通运行全过（含 §8 四项断言）；AOT 发布由 CI `aot-verify` 执行。
 
+### 实施附记（2026-11-01 调用方所有权）
+
+1. **run 所有权（增量，不反转 D2/D6）**：`DetachedStreamOptions.RunOwnerSelector`（`Func<HttpContext, string?>`，默认 null 不启用）。run 创建时固化 owner；`MapStreamRunAttach` 与 `MapStreamRunCancel` 改用 `TryGetOwned` 双重匹配，owner 不等答 404（不区分 403，避免用状态码枚举 runId）。owner 为 null 的 run 只接受 owner 为 null 的请求。未配置时行为与旧版逐字一致：单附着、接管代际、`RejectNewAttach` 均不受影响。
+2. **多附着复核**：2026-11-01 复核复活触发器 1，仍无多消费者/扇出消费方，维持未建。
+3. **测试覆盖（当前口径）**：注册表级 18 件（新增 `TryGetOwned_MatchesOwnerOnly`）+ HTTP 级 16 件（新增同 owner 附着回放、异 owner 附着 404、异 owner 取消 404）。
+
 ## 复活触发器（本决策失效条件）
 
 1. 出现多消费者/扇出真实需求 → 多附着与投递语义另立 ADR，不在本 ADR 上扩展；

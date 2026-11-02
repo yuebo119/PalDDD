@@ -10,6 +10,9 @@
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
+> [!IMPORTANT]
+> **Experimental project — not recommended for production.** All code in this project is **generated entirely by AI**, for learning and experimentation only.
+
 ---
 
 Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 36 independent NuGet packages (plus 5 third-party PalORM engine packages; see the [Package List](#package-list)). It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning: business code stays pure C#, and the framework only delivers infrastructure.

@@ -14,6 +14,20 @@
 
 ### Added
 
+- **2026-11-01 B 级缝隙补齐（run 所有权 / 重试执行器 / 样本门禁）**：
+  ①**run 所有权**（Hosting.AspNetCore）：`DetachedStreamOptions.RunOwnerSelector`（`Func<HttpContext, string?>`，默认 null 不启用）
+  在 run 创建时固化 owner，附着与取消按 owner 双重匹配，不等答 404（不区分 403，避免用状态码枚举 runId）；
+  未配置时行为与旧版逐字一致。ADR-031 增实施附记，多附着复活条件 2026-11-01 复核仍未满足。
+  ②**重试执行器**（Transactions）：`RetryExecutor` + `RetryOptions`，复用 `IRetryBackoffPolicy` 重试任意异步委托，
+  总尝试 `MaxRetries + 1`、耗尽原样重抛、调用方取消不计入重试、退避策略缺陷降级 1 秒、`TimeProvider` 可注入；
+  零新依赖，进程内语义（跨重启保证仍走 Outbox/Saga）。
+  ③**AgentSample 进门禁**：CI `build-and-test` 的 Test 之后运行样本构建产物，pre-commit 在
+  `samples/PalDDD.AgentSample/` 变更时触发 `dotnet run`；AGENTS.md 门禁表增第 13 行。
+  样本此前只在本地人工运行（`grep AgentSample scripts/ .github/` 零命中）。
+  ④文档：usage 增「重试外部调用（进程内）」节与流式横切（`RequestDelegate` 形态下不支持 `IEndpointFilter`）说明；
+  conventions 增 §1.12 与调用方所有权段；features 增重试执行器行与所有权说明。
+  验证：Transactions 面板新增 8 件全过；Hosting 面板 DetachedStreamTests 16/16、StreamRunRegistryTests 18/18；
+  AgentSample 本地退出码 0。
 - **2026-10-27 历史审计挂账清零轮（42 条全部闭环，五次 checkpoint 提交 7613d79/3eb568e/24af9a1/1c7e6e1/06219fc）**：
   背景：`docs/review/` 三份 2026-09 全量审计的 42 条未回勾条目（09-10 一条 + 09-15 三十九条 + 09-16 两条），
   其中约 15 条实为后续轮已落地而未回勾、25 条真实开放、2 条按条目预设退出条件处置。处置形态：

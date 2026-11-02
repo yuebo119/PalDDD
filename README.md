@@ -10,6 +10,9 @@
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
+> [!IMPORTANT]
+> **实验性项目，不建议生产使用。** 本项目的代码**全部由 AI 生成**，仅供学习与实验用途。
+
 ---
 
 Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测，标准化为 36 个独立 NuGet 包（另依赖 PalORM 引擎 5 个第三方包，见[包清单](#包清单)）。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描：业务代码保持纯 C#，框架只提供基础设施。

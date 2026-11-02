@@ -108,7 +108,7 @@ public sealed partial class StreamRunRegistryTests
             options, provider.GetRequiredService<IServiceScopeFactory>());
 
         var runId = registry.RegisterDeferred<RegQuery, RegChunk>(
-            new RegQuery("p"), null, null, out var registeredRun);
+            new RegQuery("p"), null, null, owner: null, out var registeredRun);
         var run = registeredRun!;
         await Assert.That(runId).IsNotEmpty();
         await Assert.That(run.BufferedCount).IsEqualTo(0);
@@ -123,6 +123,35 @@ public sealed partial class StreamRunRegistryTests
 
         await Assert.That(run.OldestAvailable).IsEqualTo(8);
         await run.ReleaseAttachmentAsync();
+    }
+
+    [Test]
+    public async Task TryGetOwned_MatchesOwnerOnly()
+    {
+        // 所有权（2026-11-01）：owner 不等即视为不存在（端点据此答 404，不泄露存在性）。
+        var options = new DetachedStreamOptions
+        {
+            MaxBufferedItems = 8,
+            MaxItems = 100_000,
+            MaxConcurrentRuns = 10,
+            DetachGrace = TimeSpan.FromSeconds(30),
+            MaxRunDuration = TimeSpan.FromMinutes(1),
+        };
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IStreamQueryHandler<RegQuery, RegChunk>>(new FixedHandler(1));
+        using var provider = services.BuildServiceProvider();
+        using var registry = new StreamRunRegistry(
+            options, provider.GetRequiredService<IServiceScopeFactory>());
+
+        var runId = registry.RegisterDeferred<RegQuery, RegChunk>(
+            new RegQuery("p"), null, null, owner: "alice", out _);
+
+        await Assert.That(registry.TryGetOwned<RegChunk>(runId, "alice", out var matched)).IsTrue();
+        await Assert.That(matched!.Owner).IsEqualTo("alice");
+        await Assert.That(registry.TryGetOwned<RegChunk>(runId, "bob", out _)).IsFalse();
+        await Assert.That(registry.TryGetOwned<RegChunk>(runId, null, out _)).IsFalse();
+        await Assert.That(registry.TryGet<RegChunk>(runId, out _)).IsTrue(); // 无所有权查询不受影响
     }
 
     [Test]

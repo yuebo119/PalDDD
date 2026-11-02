@@ -134,6 +134,15 @@ if (ACMR.Any(p => p.EndsWith("README.md", StringComparison.Ordinal)
     FAIL += RunGate("scripts/count-audit.cs", [], "⛔ count-audit 拦截——计数声明与推导真值不一致（或推导失败 fail-closed）");
 }
 
+// ─── 11. agent-sample（参考样本断言回归；样本自身变更时触发，~5s。2026-11-01 增：
+//          样本此前只在本地人工运行，ADR-030/031 接线漂移无机械防线）───
+if (ACMR.Any(IsAgentSamplePath))
+{
+    Console.WriteLine("🤖 agent-sample（AgentSample 有改动）…");
+    FAIL += RunSample("samples/PalDDD.AgentSample/PalDDD.AgentSample.csproj",
+        "⛔ agent-sample 失败——参考样本断言红（ADR-030/031 接线回归）");
+}
+
 if (FAIL != 0)
 {
     Console.WriteLine();
@@ -213,6 +222,32 @@ static bool IsXmlPath(string path) =>
     || path.EndsWith(".targets", StringComparison.Ordinal)
     || path.EndsWith(".xml", StringComparison.Ordinal);
 
+// agent 样本触发判定：样本目录内任一文件变更（源文件、csproj、配置）即运行断言
+static bool IsAgentSamplePath(string path) =>
+    path.StartsWith("samples/PalDDD.AgentSample/", StringComparison.Ordinal);
+
+// 样本运行：项目形态与门禁脚本不同（dotnet run --project 而非 dotnet run <script>）
+static int RunSample(string project, string failLine)
+{
+    var psi = new ProcessStartInfo("dotnet", $"run --project {project} -c Release")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        WorkingDirectory = Environment.CurrentDirectory,
+    };
+    using var p = Process.Start(psi)!;
+    Console.Out.Write(p.StandardOutput.ReadToEnd());
+    Console.Error.Write(p.StandardError.ReadToEnd());
+    p.WaitForExit();
+    if (p.ExitCode != 0)
+    {
+        Console.WriteLine(failLine);
+        return 1;
+    }
+    return 0;
+}
+
 // ─── selftest：触发条件判定正负例（纯函数面，不触真实仓库）───
 static int RunSelftest()
 {
@@ -248,6 +283,13 @@ static int RunSelftest()
     Case(testCs.Any(p => p.StartsWith("test/", StringComparison.Ordinal) && p.EndsWith(".cs", StringComparison.Ordinal)), true, "test/**.cs 触发 new-skip-guard");
     var testMd = new[] { "test/A.md" };
     Case(testMd.Any(p => p.StartsWith("test/", StringComparison.Ordinal) && p.EndsWith(".cs", StringComparison.Ordinal)), false, "test/**.md 不触发 new-skip-guard");
+
+    // agent 样本触发判定（2026-11-01）：样本目录内任意文件触发，其他样本与源码不触发
+    Case(IsAgentSamplePath("samples/PalDDD.AgentSample/Program.cs"), true, "agent 样本源文件触发");
+    Case(IsAgentSamplePath("samples/PalDDD.AgentSample/PalDDD.AgentSample.csproj"), true, "agent 样本 csproj 触发");
+    Case(IsAgentSamplePath("samples/PalDDD.AotSample/Program.cs"), false, "AotSample 不触发 agent-sample");
+    Case(IsAgentSamplePath("src/PalDDD.Core/PalDiagnostics.cs"), false, "非样本路径不触发 agent-sample");
+    Case(IsAgentSamplePath("samples/PalDDD.AgentSampleExtra/x.cs"), false, "样本目录前缀不误触");
 
     Console.WriteLine($"═══════ HOOK-PRE-COMMIT SELFTEST：{(failures.Count == 0 ? "全部通过" : $"{failures.Count} 例失败")} ═══════");
     foreach (var f in failures) Console.WriteLine("  FAIL " + f);
