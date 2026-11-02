@@ -226,7 +226,8 @@ static bool HasBareLf(int crlf, int bareLf) => bareLf > 0;
 static IEnumerable<string> EnumerateSourceFiles(string root, string[] extensions)
 {
     var skipDirs = new HashSet<string>(StringComparer.Ordinal)
-        { "obj", "bin", ".git", "TestResults", "node_modules", ".vs", ".serena", ".probe-dump" };
+        { "obj", "bin", ".git", "TestResults", "node_modules", ".vs", ".serena", ".probe-dump",
+          ".ai", ".zcode", "architecture" };
     var stack = new Stack<string>();
     stack.Push(root);
     while (stack.Count > 0)
