@@ -76,6 +76,39 @@ public sealed class ExceptionMiddlewareTests
     }
 
     [Test]
+    public async Task InvokeAsync_TimeoutException_Returns504GatewayTimeout()
+    {
+        // 2026-11-04：TimeoutBehavior（CQRS 管道）抛出的超时在上层是「服务端未能及时完成」，
+        // 必须映射 504——落入通用 500 分支会让客户端无法区分服务端故障与超时。
+        var middleware = new ExceptionMiddleware(
+            next: _ => throw new TimeoutException(
+                "Request CreateOrderCommand exceeded the configured timeout of 00:00:30."),
+            logger: NullPalLogger<ExceptionMiddleware>.Instance);
+
+        var context = CreateContext();
+        await middleware.InvokeAsync(context);
+
+        await Assert.That(context.Response.StatusCode).IsEqualTo(StatusCodes.Status504GatewayTimeout);
+        var body = ReadBody(context);
+        await Assert.That(body).Contains("Gateway Timeout");
+        await Assert.That(body).Contains("504");
+    }
+
+    [Test]
+    public async Task InvokeAsync_TimeoutExceptionAfterResponseStarted_PropagatesWithoutRewrite()
+    {
+        // 超时后原工作可能仍在后台执行——响应已开始时不得改写状态码，只能原样传播。
+        var middleware = new ExceptionMiddleware(
+            next: _ => throw new TimeoutException("late timeout"),
+            logger: NullPalLogger<ExceptionMiddleware>.Instance);
+
+        var context = CreateStartedContext();
+        await Assert.ThrowsAsync<TimeoutException>(() => middleware.InvokeAsync(context));
+
+        await Assert.That(context.Response.StatusCode).IsNotEqualTo(StatusCodes.Status504GatewayTimeout);
+    }
+
+    [Test]
     public async Task InvokeAsync_UnhandledException_Returns500WithGenericProblemDetails()
     {
         var middleware = new ExceptionMiddleware(

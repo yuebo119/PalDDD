@@ -156,6 +156,7 @@
 | **D5** | **场景**：Core 层引入 CQRS/Messaging 引用 → 领域层依赖应用层。**问题**：依赖反向。**后果**：领域层耦合应用逻辑 | `CoreLayer_HasNoProjectReferences` 强制 Core 零项目引用（仅 ByteAether.Ulid 包） + `CoreLayer_Usings_DoNotImportAppOrInfrastructureNamespaces`（PDDD-G4/G5） | ✅ |
 | **D6** | **场景**：进程内事件总线 EventBus → broker 不可达时事件永久丢失（AT-MOST-ONCE 语义）。**问题**：不可靠。**后果**：业务事件丢失 | 🚫 移除 EventBus（架构测试守护 EventFilter.cs 不存在），统一用 Outbox 模式（AT-LEAST-ONCE + Inbox 幂等） | ✅ |
 | **D7** | **场景**：Bounded Context 概念缺失 → 跨上下文直接调用 → 边界模糊。**问题**：BC 治理缺失。**后果**：领域模型耦合 | PDDD001 强制领域模型声明 `[BoundedContext]` + PDDD013/014 校验 Projection/ProcessManager 属于 BC | ✅ |
+| **D8** | **场景**：把验证 / 异常 / 限流 / 重试 / 幂等 / 事务 / 超时全部做成配置驱动的管道行为（appsettings 列行为名，运行时解析类型）。**问题**：管道只掌握请求对象与 `CancellationToken`，拿不到限流主体、幂等键、一致性边界意图与传输语义。**后果**：判断权从业务侧被偷走；且运行时类型解析需反射或 `MakeGenericType`，与 Native AOT 及零反射约束冲突 | 分层归属固定：验证 / 日志 / 超时在 CQRS 管道，异常在 HTTP 中间件，限流在宿主，事务在 handler，重试在调用点或消息层，幂等在 Inbox（表见 `docs/usage.md`「横切能力的归属」） | ✅ |
 
 ---
 
@@ -192,7 +193,7 @@
 
 ## 统计
 
-> 第一至九章共 70 条；第十章 PalORM 适配层另有 16 条（PALORM-SG1-5/RT1-5/MYSQL1-3/CSHARP1-2/SEC1），全文共 86 条（2026-09-04 勘正统计口径，2026-09-25 增补 PD9，2026-10-18 增补 A9/PD10/PD11）。
+> 第一至九章共 71 条；第十章 PalORM 适配层另有 16 条（PALORM-SG1-5/RT1-5/MYSQL1-3/CSHARP1-2/SEC1），全文共 87 条（2026-09-04 勘正统计口径，2026-09-25 增补 PD9，2026-10-18 增补 A9/PD10/PD11，2026-11-04 增补 D8）。
 
 | 章节 | 条数 | 来源 |
 |------|:----:|------|
@@ -202,10 +203,10 @@
 | 消息序列化 & 演化 | 5 | DDD 项目独有 |
 | 并发 & 锁 | 5 | ORM Phase 14/19（DDD 适用） |
 | 安全 & 审计 | 4 | ORM Phase 6/21（DDD 适用） |
-| DDD/Clean Architecture | 7 | DDD 项目独有（architecture.md 分层边界与稳定性约束） |
+| DDD/Clean Architecture | 8 | DDD 项目独有（architecture.md 分层边界与稳定性约束） |
 | 诊断 & 可观测性 | 4 | ORM Phase 16/22（DDD 适用） |
 | DDD 实战新增 | 11 | ITM 历史 + ADR |
-| **合计** | **70** | — |
+| **合计** | **71** | — |
 
 ---
 

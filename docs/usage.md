@@ -23,6 +23,23 @@ services.AddPalCoreStack();
 
 `AddPalPipelineBehaviors()` 只注册验证和日志行为。Pal.DDD 不提供 `[Transaction]` attribute、自动事务管道或通用 Repository 包装；命令需要事务时，在 handler 内显式调用 `IUnitOfWork`，或把一致性边界交给 EF Core transaction、`SaveChangesInterceptor` 和 Outbox。
 
+### 横切能力的归属（该不该做成管道行为）
+
+判断标准只有一条：**行为只掌握「请求对象 + `CancellationToken` + `IServiceProvider`」时能否正确工作**。能判定的才归管道。
+
+| 能力 | 归属层 | 机制 | 不进管道的原因 |
+|------|--------|------|----------------|
+| 验证 | CQRS 管道 | `ValidationBehavior` + `IPalValidator<T>` | 只依赖请求内容，已内置 |
+| 日志 | CQRS 管道 | `LoggingBehavior` + `IPalLogger<T>` | 只依赖请求内容，已内置 |
+| 超时 | CQRS 管道（可选） | `AddPalTimeoutBehavior(TimeSpan)` + `TimeoutBehavior` | 只依赖请求级预算，默认不注册 |
+| 异常 | HTTP 中间件 | `UsePalExceptionHandler()` → ProblemDetails | 管道不掌握传输形态，HTTP / Kafka / 后台任务各需不同映射 |
+| 限流 | 宿主 | ASP.NET Core `RateLimiter` 中间件 | 限流维度是租户 / 用户 / IP，不是请求类型 |
+| 事务（UoW） | handler 内 | `IUnitOfWork.ExecuteInTransactionAsync` | 一致性边界是业务决策，框架不替调用方决定 |
+| 重试 | 调用点 / 消息层 | `RetryExecutor`（进程内）、Outbox / Saga（跨重启） | 管道级自动重试会重放非幂等命令 |
+| 幂等 | 消息消费层 | `AddPalInbox()` / `IIdempotencyStore` | CQRS 请求面没有幂等键，退回「类型 + 参数哈希」就是缓存语义 |
+
+管道行为本身是可插拔的：实现 `IPipelineBehavior<TRequest, TResponse>` 后按注册顺序执行。Pal.DDD **不提供配置驱动的动态管道**（从 appsettings 读行为名再运行时解析类型）——那需要反射或 `MakeGenericType`，与 Native AOT 及零反射约束冲突；需要组合行为时用代码注册，AOT 场景用闭合泛型重载。
+
 ## 定义领域模型
 
 ```csharp
@@ -136,6 +153,17 @@ services.AddPalPipelineBehaviors();
 
 > ⚠️ **AOT 注意**：无类型参数重载 `AddPalPipelineBehaviors()` 是开放泛型注册，Native AOT 下值类型响应（`Unit`/`int`/`Guid`）会触发 `AotCannotCreateGenericValueType`。AOT 应用请改用 `AddPalCommandHandler<T...>()` / `AddPalQueryHandler<T...>()`（内部自动闭合注册管道行为），或显式闭合注册 `AddPalPipelineBehaviors<TRequest, TResponse>()`。两种注册先到先得、互斥——旧代码同时调用两者时解析结果收敛为 2 个 behavior，不会重复执行。详见 [aot.md](aot.md)。
 
+#### 请求级超时（可选）
+
+超时是唯一额外可选的内置行为，默认不注册（超时预算是业务决策，没有通用默认值）：
+
+```csharp
+services.AddPalTimeoutBehavior(TimeSpan.FromSeconds(30));                              // 开放泛型（JIT）
+services.AddPalTimeoutBehavior<CreateOrderCommand, OrderId>(TimeSpan.FromSeconds(30));  // 闭合泛型（Native AOT 安全）
+```
+
+超时只**放弃等待**，不中断 handler——管道 next 委托不接收 `CancellationToken`（状态机用派发时的原始 token 调 handler），超时后原工作可能仍在后台跑完。调用方取消仍按 `OperationCanceledException` 传播，只有超时转 `TimeoutException`，由 `UsePalExceptionHandler()` 映射为 504。超时行为与验证 / 日志正交（互斥检测显式排除），注册顺序不影响解析结果。流式读（`MapStreamQuery`）不经管道，超时由 `DetachedStreamOptions.MaxRunDuration` 独立控制。
+
 ### 与 HTTP 请求验证的分工（两层，别混）
 
 Pal.DDD 的验证在 **CQRS 管线**里（`IPalValidator<T>` + `ValidationBehavior`），因此覆盖**所有分发路径**——HTTP 端点、Kafka / RabbitMQ 消费者、后台任务触发的同一条命令都走同一套验证。
@@ -184,6 +212,24 @@ public sealed class CreateOrderHandler(IUnitOfWork unitOfWork)
 ```
 
 如果使用 `OutboxDomainEventInterceptor`，领域事件会在 `SaveChanges` 事务中写入 Outbox，再由后台 processor 发布。不要把事务策略藏在 request attribute 中，也不要把 EF Core 的查询能力包进通用 `IRepository<T>`；需要封装持久化时，定义面向业务语义的专用仓储或直接使用应用 `DbContext`。
+
+命令需要返回结果时用泛型重载，省掉「先声明结果变量、再在委托内赋值」的样板（`SaveChanges` 与 `Commit` 由本方法统一调用，`work` 内不必再调）：
+
+```csharp
+public sealed class CreateOrderHandler(AppDbContext db, IUnitOfWork unitOfWork)
+    : ICommandHandler<CreateOrderCommand, OrderId>
+{
+    public ValueTask<OrderId> HandleAsync(CreateOrderCommand command, CancellationToken ct)
+        => unitOfWork.ExecuteInTransactionAsync(ct2 =>
+        {
+            var order = Order.Create(command.CustomerName);
+            db.Orders.Add(order);
+            return ValueTask.FromResult(order.Id);
+        }, ct);
+}
+```
+
+两个重载（无返回值 / 泛型返回值）的事务语义、回滚失败聚合规则完全一致；上例的手写 Begin/Commit/Rollback 与它是同一件事的展开形态。
 
 > ⚠️ **不支持嵌套事务（3.0.0 起三栈统一 fail-fast，ADR-023）**：事务已活动时再调 `BeginTransactionAsync` 会抛 `InvalidOperationException`（此前 EF Core 与 PalORM 两栈为静默 no-op——嵌套调用时内层 `CommitAsync` 提交的是外层事务，导致静默原子性破坏）。需要在既有事务内执行工作的调用方，请直接执行工作委托或自行编排提交边界，不要嵌套调用本方法。
 

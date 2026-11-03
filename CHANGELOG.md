@@ -14,6 +14,19 @@
 
 ### Added
 
+- **2026-11-04 管道能力分层定案 + 请求级超时行为（新增公共 API，向后兼容）**：
+  ①**请求级超时**（CQRS / DependencyInjection）：`TimeoutBehavior<TRequest,TResponse>` 与 `AddPalTimeoutBehavior` 两个重载
+  （开放泛型 / 闭合泛型，后者 Native AOT 安全）。超时转 `TimeoutException`，调用方取消仍按 `OperationCanceledException`
+  传播；`ExceptionMiddleware` 增 `TimeoutException` → 504 映射（此前落入通用 500）。只放弃等待、不中断 handler——
+  管道 next 委托不接收 `CancellationToken`，超时后原工作可能仍在后台跑完。默认不注册（超时预算是业务决策）；
+  与验证/日志正交，互斥检测显式排除超时行为，两种注册顺序均解析为 3 个行为。
+  ②**事务返回结果**（Core）：`UnitOfWorkExtensions.ExecuteInTransactionAsync<T>` 泛型重载，返回 `work` 结果，
+  消除「先声明变量、再在委托内赋值」样板；事务语义与回滚失败聚合规则与无返回值重载逐项一致（回滚失败消息提取为单一定义点）。
+  ③**分层归属定案**：验证/日志/超时归 CQRS 管道，异常归 HTTP 中间件，限流归宿主，事务归 handler，重试归调用点与消息层，
+  幂等归 Inbox；明确不做配置驱动的动态管道（运行时类型解析需反射或 `MakeGenericType`，与 Native AOT 及零反射约束冲突）。
+  文档同步：usage 增「横切能力的归属」表与两处用法示例，pitfalls 增 D8，features 增超时行为行，conventions 源文件数 259→260。
+  验证：CQRS 面板 7/7（快路径零等待、超时与取消分流、非泛型桥接）、Core 5/5（回滚聚合、嵌套 fail-fast 不误回滚）、
+  DependencyInjection 33/33（三种注册顺序）、Hosting 15/15（504 映射与响应已开始不改写）。
 - **2026-11-01 B 级缝隙补齐（run 所有权 / 重试执行器 / 样本门禁）**：
   ①**run 所有权**（Hosting.AspNetCore）：`DetachedStreamOptions.RunOwnerSelector`（`Func<HttpContext, string?>`，默认 null 不启用）
   在 run 创建时固化 owner，附着与取消按 owner 双重匹配，不等答 404（不区分 403，避免用状态码枚举 runId）；

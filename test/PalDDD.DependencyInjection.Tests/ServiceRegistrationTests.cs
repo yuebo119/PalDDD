@@ -484,6 +484,94 @@ public sealed class ServiceRegistrationTests
             .Throws<InvalidOperationException>();
     }
 
+    // ── 超时行为注册（2026-11-04）：与验证/日志正交，互斥检测显式排除 ──
+
+    [Test]
+    public async Task AddPalTimeoutBehavior_RegistersSingleDescriptor()
+    {
+        var services = new ServiceCollection();
+        services.AddPalTimeoutBehavior(TimeSpan.FromSeconds(30));
+
+        await Assert.That(CountTimeoutBehaviors(services)).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// 顺序 1（本组关键用例）：超时行为先注册时不得抑制验证/日志。
+    /// 互斥检测若未排除超时行为，AddPalCommandHandler 内部的闭合管道注册会被整体跳过，
+    /// 请求只剩超时行为（输入验证静默失效）。
+    /// </summary>
+    [Test]
+    public async Task AddPalTimeoutBehavior_ThenCommandHandler_ResolvesTimeoutAndBuiltIns()
+    {
+        var services = new ServiceCollection();
+        services.AddPalTimeoutBehavior(TimeSpan.FromSeconds(30));
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var behaviors = scope.ServiceProvider.GetServices<IPipelineBehavior<TestCommand, string>>().ToArray();
+
+        await Assert.That(behaviors.Length).IsEqualTo(3);
+        await Assert.That(behaviors.Count(IsTimeoutBehaviorInstance)).IsEqualTo(1);
+    }
+
+    /// <summary>顺序 2：内置行为先注册、超时行为后注册，结果同样是 3 个。</summary>
+    [Test]
+    public async Task CommandHandler_ThenAddPalTimeoutBehavior_ResolvesThreeBehaviors()
+    {
+        var services = new ServiceCollection();
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+        services.AddPalTimeoutBehavior(TimeSpan.FromSeconds(30));
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var behaviors = scope.ServiceProvider.GetServices<IPipelineBehavior<TestCommand, string>>().ToArray();
+
+        await Assert.That(behaviors.Length).IsEqualTo(3);
+        await Assert.That(behaviors.Count(IsTimeoutBehaviorInstance)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task AddPalTimeoutBehavior_DoubleCall_DoesNotDuplicate()
+    {
+        var services = new ServiceCollection();
+        services.AddPalTimeoutBehavior(TimeSpan.FromSeconds(30));
+        services.AddPalTimeoutBehavior(TimeSpan.FromSeconds(60));
+
+        await Assert.That(CountTimeoutBehaviors(services)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task AddPalTimeoutBehavior_OpenThenClosed_DoesNotDuplicate()
+    {
+        var services = new ServiceCollection();
+        services.AddPalTimeoutBehavior(TimeSpan.FromSeconds(30));
+        services.AddPalTimeoutBehavior<TestCommand, string>(TimeSpan.FromSeconds(30));
+
+        await Assert.That(CountTimeoutBehaviors(services)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task AddPalTimeoutBehavior_NonPositiveTimeout_Throws()
+    {
+        var services = new ServiceCollection();
+
+        _ = await Assert.That(() => services.AddPalTimeoutBehavior(TimeSpan.Zero))
+            .Throws<ArgumentOutOfRangeException>();
+        _ = await Assert.That(() => services.AddPalTimeoutBehavior(TimeSpan.FromSeconds(-1)))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    // TimeoutBehavior 是 internal 且本测试程序集无 CQRS IVT——按类型名判定实现类型，
+    // 数量断言已足以锁定注册语义（类型名漂移会同时让此处与 CQRS.Tests 红）
+    private static bool IsTimeoutBehaviorInstance(IPipelineBehavior behavior)
+        => behavior.GetType().Name.StartsWith("TimeoutBehavior", StringComparison.Ordinal);
+
+    private static int CountTimeoutBehaviors(IServiceCollection services)
+        => services.Count(sd => sd.ImplementationType is { } type
+                                && type.IsGenericType
+                                && type.GetGenericTypeDefinition().Name.StartsWith("TimeoutBehavior", StringComparison.Ordinal));
+
     private sealed class TestCommand : ICommand<string>;
 
 

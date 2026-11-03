@@ -35,6 +35,10 @@ public interface IUnitOfWork : IAsyncDisposable
 /// </summary>
 public static class UnitOfWorkExtensions
 {
+    // 两个重载（无返回值 / 泛型返回值）共用回滚失败消息——单一出处防措辞漂移。
+    private const string RollbackFailureMessage =
+        "Transaction rollback failed after a business exception. See inner exceptions for both.";
+
     /// <summary>
     /// 在数据库事务内执行 <paramref name="work"/>。<br/>
     /// 事务在 <paramref name="work"/> 执行前开启，在 <paramref name="work"/> 完成并调用
@@ -67,9 +71,47 @@ public static class UnitOfWorkExtensions
             try { await uow.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
             catch (Exception rollbackEx)
             {
-                throw new AggregateException(
-                    "Transaction rollback failed after a business exception. See inner exceptions for both.",
-                    original, rollbackEx);
+                throw new AggregateException(RollbackFailureMessage, original, rollbackEx);
+            }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// 在数据库事务内执行 <paramref name="work"/> 并返回其结果。<br/>
+    /// 事务在 <paramref name="work"/> 执行前开启，在 <paramref name="work"/> 完成并调用
+    /// <see cref="IUnitOfWork.SaveChangesAsync(CancellationToken)"/> 后提交；异常则回滚。
+    /// </summary>
+    /// <typeparam name="T"><paramref name="work"/> 的返回值类型（命令结果、新建聚合 ID 等）。</typeparam>
+    /// <remarks>
+    /// 本重载只消除「先声明结果变量、再在委托内赋值」的样板，事务语义、回滚失败聚合规则与
+    /// 无返回值重载完全相同，两者改动须双侧同步。
+    /// <para>⚠️ <b>不支持嵌套（ADR-023）</b>：与无返回值重载一致——已活动事务内调用会经
+    /// <see cref="IUnitOfWork.BeginTransactionAsync(CancellationToken)"/> 抛出
+    /// <see cref="InvalidOperationException"/>（三栈一致）。</para>
+    /// </remarks>
+    public static async ValueTask<T> ExecuteInTransactionAsync<T>(
+        this IUnitOfWork uow,
+        Func<CancellationToken, ValueTask<T>> work,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(uow);
+        ArgumentNullException.ThrowIfNull(work);
+
+        await uow.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var result = await work(ct).ConfigureAwait(false);
+            await uow.SaveChangesAsync(ct).ConfigureAwait(false);
+            await uow.CommitAsync(ct).ConfigureAwait(false);
+            return result;
+        }
+        catch (Exception original)
+        {
+            try { await uow.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
+            catch (Exception rollbackEx)
+            {
+                throw new AggregateException(RollbackFailureMessage, original, rollbackEx);
             }
             throw;
         }

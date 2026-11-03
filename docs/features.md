@@ -57,6 +57,7 @@
 | 管道行为链 | `IPipelineBehavior` 扩展缝；可重用状态机替代 lambda 链省状态机分配；零行为快路径直呼 handler | `PipelineStateMachine`（PipelineStateMachine.cs） |
 | 内置验证行为 | 调用全部 `IPalValidator`，失败抛携带错误集的 `PalValidationException` | ValidationBehavior（PipelineBehaviors.cs） |
 | 内置日志行为 | 派发耗时与失败记录，TimeProvider 可注入测试时钟 | LoggingBehavior（PipelineBehaviors.cs） |
+| 内置超时行为（可选） | 请求级超时预算，超时转 `TimeoutException`（HTTP 层映射 504）；只放弃等待、不中断 handler；与验证/日志正交且默认不注册 | TimeoutBehavior（TimeoutBehavior.cs） |
 | 实例注册形态 | 免 scope 的实例注册（根容器解析，单请求省一次 scope 分配，ADR-026） | `Dispatcher.Register` 三重载 |
 | DTO 异常 | HandlerNotFoundException（供 HTTP 404 映射）、PalValidationException | 各自文件 |
 

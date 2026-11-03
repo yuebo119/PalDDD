@@ -103,6 +103,29 @@ public sealed class ExceptionMiddleware
                 contentType: null,
                 cancellationToken: context.RequestAborted).ConfigureAwait(false);
         }
+        catch (TimeoutException ex)
+        {
+            // 请求级超时（CQRS TimeoutBehavior 或 handler 内 WaitAsync）映射为 504——
+            // 属于服务端未能及时完成，不是客户端错误，也不应计为 500 内部错误。
+            // 超时后原工作可能仍在后台执行（TimeoutBehavior 只放弃等待），故响应已开始
+            // 时不能改写状态码，只能落 Warning 后原样传播。
+            if (context.Response.HasStarted)
+            {
+                _logger.Warning($"Timeout exception after response started: {ex.Message}");
+                throw;
+            }
+
+            context.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
+            var response = new GatewayTimeoutProblemResponse(
+                "https://www.rfc-editor.org/rfc/rfc9110#section-15.6.5",
+                "Gateway Timeout",
+                StatusCodes.Status504GatewayTimeout);
+            await context.Response.WriteAsJsonAsync(
+                response,
+                PalAspNetCoreJsonContext.Default.GatewayTimeoutProblemResponse,
+                contentType: null,
+                cancellationToken: context.RequestAborted).ConfigureAwait(false);
+        }
         catch (OperationCanceledException)
         {
             // 请求取消不映射为 500，正常传播以触发 ASP.NET Core 的标准取消处理。
