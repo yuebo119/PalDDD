@@ -15,9 +15,15 @@ namespace PalDDD.Transactions;
 /// </summary>
 /// <remarks>
 /// 批内 handler 失败由 <see cref="InboxProcessor"/> 逐条标记 Failed 并聚合抛出；broker 的
-/// 批量泵记录异常后继续后续批次。Kafka 自动提交与 RabbitMQ <c>requeue:false</c> 仍是
-/// at-most-once：失败消息不会由 broker 重投，需要重试的场景应在业务 handler 内处理，
-/// 或改用带手动提交的实现。
+/// 批量泵记录异常后继续后续批次。**默认投递语义仍是 at-most-once**（Kafka 自动提交 /
+/// RabbitMQ <c>requeue:false</c>）：失败消息不会由 broker 重投，需要重试的场景应在业务
+/// handler 内处理。
+/// <para>
+/// 2026-11-04（批次 A）：broker 侧已补 <see cref="Messaging.IMessageAck"/>，
+/// 逐条与批量订阅都有携带确认器的重载；需要 broker 级 at-least-once 时改用该重载
+/// （Kafka 还须关闭 <c>EnableAutoOffsetStore</c>）。本消费者走的是默认重载，
+/// 语义不变——此段只是把「改用带手动提交的实现」这句指路补成具体 API。
+/// </para>
 /// </remarks>
 public sealed class InboxBatchConsumer<TMessage>
 {
