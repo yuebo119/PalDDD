@@ -146,12 +146,18 @@ public sealed class KafkaAckTests
     /// 在算术上不相容。本测试锁定可证伪的真实性质：退避确实存在、逐次增长、且有 5s 上限
     /// （没有上限的指数退避会让偶发失败的消息永久卡死消费）。
     /// </para>
+    /// <para>
+    /// 2026-11-05 扩到 6 次拒绝：4 次只走到 1600ms，5s 上限从未被触及——第 6 次拒绝的间隔
+    /// 必须落在 5s（200&lt;&lt;5=6400 被 5000 截住），上限「存在且被尊重」自此有锁定。
+    /// 长程（100 次）行为由 <c>RequeueBackoff_100ConsecutiveRejects_BoundedAndRateLimited</c>
+    /// 的全量档（PALDDD_TEST_BACKOFF_FULL=1）承载。
+    /// </para>
     /// </summary>
     [Test]
     [NotInParallel("broker-integration")]
     public async Task RequeueBackoff_GrowsAndIsCapped(CancellationToken cancellationToken)
     {
-        const int rejects = 4;
+        const int rejects = 6;
         var logger = new CapturingLogger<KafkaBroker>();
         var topic = NewTopic("kafka-backoff");
         var payload = $"backoff-payload-{Guid.NewGuid():N}";
@@ -202,10 +208,17 @@ public sealed class KafkaAckTests
 
         // 每次重投的等待都不得短于首次退避（200ms）——紧循环的可证伪否证。
         await Assert.That(gaps.All(static g => g > TimeSpan.FromMilliseconds(150))).IsTrue();
-        // 上限：任一次等待不得超过 5s 上限加合理余量。
+        // 上限：任一次等待不得超过 5s 上限加合理余量（余量含取回往返，本机约 0.5s）。
         await Assert.That(gaps.All(static g => g < TimeSpan.FromSeconds(15))).IsTrue();
         // 增长：第三次间隔明显大于第一次（200ms → ≥800ms）。
         await Assert.That(gaps[2]).IsGreaterThan(gaps[0]);
+        // 上限被触及且被尊重（2026-11-05 扩 6 次拒绝）：第 6 个间隔（第 6 次连续拒绝后）
+        // 是 200<<5=6400 被 5000 截住的结果——低于 4.5s 说明指数没有走到，高于 9s 说明
+        // 上限失效（RTT 余量给到 4s）。
+        await Assert.That(gaps.Count).IsGreaterThanOrEqualTo(6);
+        await Assert.That(gaps[4]).IsGreaterThan(gaps[3]);
+        await Assert.That(gaps[5]).IsGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(4500));
+        await Assert.That(gaps[5]).IsLessThanOrEqualTo(TimeSpan.FromSeconds(9));
     }
 
     [Test]
@@ -331,22 +344,32 @@ public sealed class KafkaAckTests
     /// 即便用测试缝把退避缩短到 20ms→50ms，本机真容器实测每次迭代约 530ms——<b>主导成本是 Seek 后的
     /// broker 取回往返，不是退避</b>，100 次 ≈ 53 秒。10 秒口径在真实 broker 上不可达。故本测试锁定
     /// 该口径背后的可证伪性质：<b>有界</b>（100 次完成、不悬挂）、<b>每次迭代都付了退避</b>（交付间隔
-    /// 不低于退避下限——在快 broker 上这条是硬约束）、<b>无忙等自旋</b>（进程 CPU 增量远小于墙钟——
-    /// 自旋会把一个核烧满，CPU ≈ 墙钟）。生产行为由 <see cref="RequeueBackoff_GrowsAndIsCapped"/>
-    /// （默认退避的增长与上限）另行锁定。
+    /// 不低于退避下限——在快 broker 上这条是硬约束）、<b>无忙等自旋</b>（进程 CPU 增量远小于实际耗时——
+    /// 自旋会把一个核烧满，CPU ≈ 实际耗时）。
+    /// </para>
+    /// <para>
+    /// <b>双档运行（2026-11-05）</b>：设 <c>PALDDD_TEST_BACKOFF_FULL=1</c> 时使用<b>默认退避</b>
+    /// （200ms→5s，不触碰测试缝）按原方案口径跑 100 次，并额外锁定上限在长程下成立
+    ///（第 6 次拒绝起间隔被截在 5s，此后 94 次不再增长）；未设置时用测试缝（20ms→50ms）
+    /// 保持套件预算。全量档实测约 9 分钟（退避和 481s + 取回往返），随 <c>RequeueBackoff_GrowsAndIsCapped</c>
+    /// 的上限锁定互补。
     /// </para>
     /// </summary>
     [Test]
     [NotInParallel("broker-integration")]
-    public async Task RequeueBackoff_100ConsecutiveRejects_CompletesWithinTenSeconds(CancellationToken cancellationToken)
+    public async Task RequeueBackoff_100ConsecutiveRejects_BoundedAndRateLimited(CancellationToken cancellationToken)
     {
+        var fullScale = Environment.GetEnvironmentVariable("PALDDD_TEST_BACKOFF_FULL") == "1";
         var logger = new CapturingLogger<KafkaBroker>();
         var topic = NewTopic("kafka-backoff-100");
         var payload = $"backoff100-{Guid.NewGuid():N}";
         var created = CreateBroker(topic, $"paldd-backoff100-{Guid.NewGuid():N}", logger);
-        // 测试缝：20ms 起、50ms 封顶（订阅前设置）。
-        created.Broker.SeekBackoffInitialMs = 20;
-        created.Broker.SeekBackoffMaxMs = 50;
+        if (!fullScale)
+        {
+            // 快档测试缝：20ms 起、50ms 封顶（订阅前设置）。全量档保持默认 200ms→5s。
+            created.Broker.SeekBackoffInitialMs = 20;
+            created.Broker.SeekBackoffMaxMs = 50;
+        }
 
         const int rejects = 100;
         var arrivals = new List<DateTime>();
@@ -381,7 +404,8 @@ public sealed class KafkaAckTests
         await broker.PublishAsync(new TestMessage(payload), cancellationToken);
         var started = DateTime.UtcNow;
         var cpuBefore = System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime;
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        // 全量档退避和 481s + 取回往返，等待上限 1000s；快档维持 120s。
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(fullScale ? 1000 : 120), cancellationToken);
         var elapsed = DateTime.UtcNow - started;
         var cpuDelta = System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime - cpuBefore;
 
@@ -392,15 +416,27 @@ public sealed class KafkaAckTests
         // 1 次首发 + 100 次重投（第 101 次到达时确认收尾）
         await Assert.That(snapshot.Count).IsGreaterThanOrEqualTo(rejects + 1);
         // 有界：完成且不悬挂（10 秒口径在真 broker 上不可达，见方法注释的口径修正）。
-        await Assert.That(elapsed).IsLessThanOrEqualTo(TimeSpan.FromSeconds(90));
-        // 无忙等自旋：CPU 增量远小于墙钟（自旋会把一个核烧满，CPU ≈ 墙钟）。
-        await Assert.That(cpuDelta).IsLessThanOrEqualTo(TimeSpan.FromSeconds(15))
-            .Because($"墙钟 {elapsed.TotalSeconds:0.0}s vs CPU {cpuDelta.TotalSeconds:0.0}s——若接近则消费循环在空转");
-        // 每次重投的等待不低于退避下限（20ms 减时钟误差）：快 broker 上退避是真实限速器。
+        await Assert.That(elapsed).IsLessThanOrEqualTo(TimeSpan.FromSeconds(fullScale ? 900 : 90));
+        // 无忙等自旋：CPU 增量远小于实际耗时（自旋会把一个核烧满，CPU ≈ 实际耗时）。
+        // 全量档自旋会烧掉退避和（约 481s），120s 上限可分辨；快档自旋烧约 5s，15s 上限
+        // 只能靠 poll 归零的热循环变异兜住（已实测转红）。
+        await Assert.That(cpuDelta).IsLessThanOrEqualTo(TimeSpan.FromSeconds(fullScale ? 120 : 15))
+            .Because($"实际耗时 {elapsed.TotalSeconds:0.0}s vs CPU {cpuDelta.TotalSeconds:0.0}s，若接近则消费循环在空转");
+        // 每次重投的等待不低于退避下限（减时钟误差）：退避是真实限速器。
         var gaps = new List<TimeSpan>();
         for (var i = 1; i < snapshot.Count; i++)
             gaps.Add(snapshot[i] - snapshot[i - 1]);
         await Assert.That(gaps.All(static g => g >= TimeSpan.FromMilliseconds(15))).IsTrue();
+        if (fullScale)
+        {
+            // 上限在长程下成立：第 6 次拒绝起间隔被截在 5s（200<<5=6400 被 5000 截住），
+            // 此后 94 次不得再增长、也不得跌破上限（上限失效或复位逻辑漂移在此现形）。
+            // 上界含取回往返余量（本机往返约 0.5s，给到 10s）。
+            var capped = gaps.Skip(5).ToList();
+            await Assert.That(capped.Count).IsGreaterThanOrEqualTo(rejects - 5);
+            await Assert.That(capped.All(static g => g >= TimeSpan.FromMilliseconds(4500))).IsTrue();
+            await Assert.That(capped.All(static g => g <= TimeSpan.FromSeconds(10))).IsTrue();
+        }
     }
 
     private static string NewTopic(string prefix)
