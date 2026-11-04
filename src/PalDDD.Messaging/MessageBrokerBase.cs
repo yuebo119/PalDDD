@@ -112,4 +112,26 @@ public abstract class MessageBrokerBase : IMessageBroker
     /// </summary>
     public abstract ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default);
+
+    /// <summary>
+    /// 异步订阅消息（含消费上下文与消费确认器）。<br/>
+    /// 默认实现把 <see cref="NoOpMessageAck"/> 交给调用方后转发到三参重载——<b>不覆写即为
+    /// at-most-once</b>，与旧行为一致。内置两栈覆写以提供真实确认能力。
+    /// </summary>
+    public virtual ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+        Func<TMessage, MessageConsumeContext?, IMessageAck, CancellationToken, ValueTask> handler,
+        CancellationToken ct = default)
+        => SubscribeAsync<TMessage>(
+            (message, context, token) => handler(message, context, NoOpMessageAck.Instance, token), ct);
+
+    /// <summary>
+    /// 批量订阅（含批次级确认器）。默认实现把 <see cref="NoOpMessageAck"/> 交给调用方后
+    /// 转发到无 ack 的批量重载；兜底规则见 <see cref="IMessageBroker"/> 同名成员。
+    /// </summary>
+    public virtual ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, IMessageAck, CancellationToken, ValueTask> handler,
+        int maxBatchSize = 64,
+        TimeSpan? maxDelay = null,
+        CancellationToken ct = default)
+        => MessageBatchPump.StartAsync(this, handler, maxBatchSize, maxDelay, OnBatchHandlerFailed, ct);
 }

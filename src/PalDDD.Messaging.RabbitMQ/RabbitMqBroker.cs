@@ -370,8 +370,26 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     /// 调用方使用 <c>await using var sub = await broker.SubscribeAsync&lt;T&gt;(handler);</c><br/>
     /// 消息未携带任何追踪头时 context 为 null。
     /// </remarks>
-    public override async ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+    public override ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)
+        // 批次 A（2026-11-04）：本重载不再承载传输核心——核心下沉到携带 IMessageAck 的四参
+        // 重载，本重载把 broker 提供的确认器丢弃。丢弃是安全的：handler 不持有确认器时
+        // 其 IsSettled 恒 false，兜底规则（成功 BasicAck / 异常 Nack(false)）与 v5.0.0-preview.1
+        // 逐字一致，旧调用方零行为变化。
+        => SubscribeAsync<TMessage>((message, context, _, token) => handler(message, context, token), ct);
+
+    /// <summary>
+    /// 异步订阅消息（含消费上下文与消费确认器）— 传输核心。
+    /// </summary>
+    /// <remarks>
+    /// 本 Broker 的队列本就是 manual-ack（成功 <c>BasicAck</c>、失败 <c>Nack(false)</c>），
+    /// 确认器只是把已有的确认动作交给 handler 决策：<c>AcknowledgeAsync</c> → <c>BasicAck</c>、
+    /// <c>RejectAsync(true)</c> → <c>Nack(requeue:true)</c>、<c>RejectAsync(false)</c> →
+    /// <c>Nack(requeue:false)</c>。每次交付一个确认器，重复结算被原子标志拦下并留 Warning
+    /// （重复 <c>BasicAck</c> 会以 channel 关闭的形式波及同 channel 的其它订阅与发布）。
+    /// </remarks>
+    public override async ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+        Func<TMessage, MessageConsumeContext?, IMessageAck, CancellationToken, ValueTask> handler, CancellationToken ct = default)
     {
         // v25 P3 守卫族：订阅侧 _disposed 守卫（descriptor 解析前，对齐 KafkaBroker 订阅侧
         // P3-SRC-402 守卫）——Broker 释放后订阅会在已 DisposeAsync 的 channel 上声明
@@ -456,6 +474,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         }
         consumer.ReceivedAsync += async (_, ea) =>
         {
+            // 批次 A（2026-11-04）：每次交付一个确认器——handler 显式结算时由它调 broker API，
+            // 未结算时下方兜底分支按既有规则收尾（成功 BasicAck / 异常 Nack(false)）。
+            var ack = new RabbitMqMessageAck(this, consumerChannel, ea.DeliveryTag, queueName);
             try
             {
                 // 2026-10-19 性能实施轮：泛型反序列化，免运行时 Type 查找与值类型装箱。
@@ -495,10 +516,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                     }
                     using (deliveryCts)
                     {
-                        await handler(message, consumeContext, deliveryCts.Token).ConfigureAwait(false);
-                        // 手动确认 — 仅在处理成功后 ACK
+                        await handler(message, consumeContext, ack, deliveryCts.Token).ConfigureAwait(false);
+                        // 兜底确认 — handler 未显式结算时按处理成功 ACK（旧行为）
                         // P3 修复：ACK 与 Nack 同样加保护——channel 已关时异常逃逸进消费者回调
-                        await TryAckSafeAsync(consumerChannel, ea.DeliveryTag, queueName).ConfigureAwait(false);
+                        if (!ack.IsSettled)
+                            await TryAckSafeAsync(consumerChannel, ea.DeliveryTag, queueName).ConfigureAwait(false);
                     }
                 }
                 else
@@ -538,7 +560,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // P2 定案：exclusive 队列的消费者只有本连接——requeue:true 会立即重投给自己，
                 // 持续失败时形成无退避热循环。与 Kafka 路径 ITM-008 对齐：记录后弃置（at-most-once）。
                 // 需要失败重试语义的应用应使用持久队列 + DLX，由自身的 Broker 配置承载。
-                await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                // 批次 A：handler 已显式结算（含 RejectAsync(true)）时不覆盖其决定。
+                if (!ack.IsSettled)
+                    await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
         };
 
@@ -652,6 +676,66 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicAck failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 单次投递的消费确认器（批次 A，2026-11-04）——把既有 manual-ack 动作交给 handler 决策。
+    /// </summary>
+    /// <remarks>
+    /// 嵌套在 Broker 内以复用 <see cref="TryAckSafeAsync"/>/<see cref="TryNackSafeAsync"/> 的
+    /// 安全包装（channel 已关时抛异常会中断消费者），因此不作为公共 API 暴露——调用方只能
+    /// 通过订阅重载拿到实例。
+    /// <para>
+    /// <b>重复结算防护</b>：<see cref="TryClaim"/> 是原子占位，只有胜者真正调用 broker API；
+    /// 败者留 Warning 后静默返回。需要这层防护的原因是 RabbitMQ 对同一 deliveryTag 二次
+    /// <c>BasicAck</c> 会以 <c>PRECONDITION_FAILED</c> 关闭整个 channel——共用该 channel 的
+    /// 其它订阅与发布一起瘫痪。异常不外抛同样是刻意的：确认器在 handler 内被调用，
+    /// 抛出会打断业务逻辑，而结算失败本身已由安全包装记 Warning。
+    /// </para>
+    /// <para>
+    /// <c>ct</c> 不参与结算：AMQP 的 ack/nack 是通道级单帧写，无法在中途取消，且结算
+    /// 必须尽可能完成（取消语义交由调用方在调用前判断）。
+    /// </para>
+    /// </remarks>
+    private sealed class RabbitMqMessageAck(
+        RabbitMqBroker broker,
+        IChannel channel,
+        ulong deliveryTag,
+        string queueName) : IMessageAck
+    {
+        private int _settled;
+
+        /// <summary>本次投递是否已结算（兜底分支据此避免二次 ack/nack）。</summary>
+        public bool IsSettled => Volatile.Read(ref _settled) != 0;
+
+        /// <summary>原子占位：首次返回 <c>true</c>。</summary>
+        public bool TryClaim() => Interlocked.Exchange(ref _settled, 1) == 0;
+
+        /// <inheritdoc />
+        public async ValueTask AcknowledgeAsync(CancellationToken ct = default)
+        {
+            if (!TryClaim())
+            {
+                broker._logger.Warning(
+                    $"Duplicate acknowledge ignored (already settled): {queueName}, deliveryTag={deliveryTag}");
+                return;
+            }
+
+            await broker.TryAckSafeAsync(channel, deliveryTag, queueName).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc />
+        public async ValueTask RejectAsync(bool requeue, CancellationToken ct = default)
+        {
+            if (!TryClaim())
+            {
+                broker._logger.Warning(
+                    $"Duplicate reject ignored (already settled): {queueName}, deliveryTag={deliveryTag}, requeue={requeue}");
+                return;
+            }
+
+            await broker.TryNackSafeAsync(channel, deliveryTag, requeue, queueName).ConfigureAwait(false);
         }
     }
 

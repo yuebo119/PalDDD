@@ -18,12 +18,24 @@ public readonly record struct ConsumedMessage<TMessage>(TMessage Message, Messag
 
 /// <summary>跨进程消息代理抽象 — AOT 安全的消息发布与订阅。</summary>
 /// <remarks>
-/// ⚠️ <b>投递语义声明（ITM-234；三十八轮 P2 修正 RabbitMQ 描述与实现对齐）</b>：<br/>
-/// — <b>RabbitMQ</b>：at-most-once（非持久 exclusive 自删队列 + handler 失败 nack 弃置；
-///   订阅者离线窗口内发布的消息不可达）。需持久化/at-least-once 请自行实现 IMessageBroker
-///   （durable 队列 + DLX + requeue 策略）。<br/>
-/// — <b>Kafka</b>：at-most-once（handler 失败的 offset 照常自动提交，消息不重投）。
-///   若需 at-least-once，请关闭 EnableAutoOffsetStore 并在 handler 成功后 StoreOffset。<br/>
+/// ⚠️ <b>投递语义声明（ITM-234；三十八轮 P2 修正 RabbitMQ 描述与实现对齐；
+/// 2026-11-04 批次 A 补齐 at-least-once 通路）</b>：<br/>
+/// — <b>默认（不携带 <see cref="IMessageAck"/> 的重载）</b>：at-most-once。RabbitMQ 为
+///   非持久 exclusive 自删队列 + handler 失败 <c>Nack(requeue:false)</c> 弃置；Kafka 为
+///   handler 失败后 offset 照常自动提交、消息不重投。订阅者离线窗口内发布的消息不可达。<br/>
+/// — <b>需要 at-least-once</b>：使用携带 <see cref="IMessageAck"/> 的
+///   <see cref="SubscribeAsync{TMessage}(Func{TMessage, MessageConsumeContext?, IMessageAck, CancellationToken, ValueTask}, CancellationToken)"/>
+///   重载，由 handler 显式 <see cref="IMessageAck.AcknowledgeAsync"/> /
+///   <see cref="IMessageAck.RejectAsync"/>。Kafka 侧还须把
+///   <c>ConsumerConfig.EnableAutoOffsetStore</c> 设为 <c>false</c>——否则
+///   <c>AcknowledgeAsync</c> 为无操作（自动存储语义保持不变）。
+///   <para>
+///   ⚠️ 2026-11-04 勘正：本段的旧表述建议「关闭 EnableAutoOffsetStore 并在 handler 成功后
+///   StoreOffset」——但旧订阅契约不向 handler 暴露 <c>IConsumer</c>，<c>StoreOffset</c>
+///   无调用点，照做会让 offset 永不前进：重启后 <c>AutoOffsetReset</c> 决定结果
+///   （<c>earliest</c> 全量重放 / <c>latest</c> 静默跳过全部未提交消息）。
+///   现由 <see cref="IMessageAck"/> 提供唯一正确入口。
+///   </para><br/>
 /// — <b>Null</b>：不发送任何消息（单节点测试用）。<br/>
 /// ⚠️ <b>顺序性声明（三十八轮 P2）</b>：本抽象不保证消息顺序——Kafka 分区键为每消息唯一
 /// Ulid（均匀散列到随机分区），RabbitMQ fanout 同样无序。需要分区内有序的场景须自行实现
@@ -91,10 +103,40 @@ public interface IMessageBroker
     /// 默认实现（DIM）适配到无 context 的重载，context 恒为 null；KafkaBroker/RabbitMqBroker
     /// 覆写此成员以提供从消息头提取的真实 <see cref="MessageConsumeContext"/>（八轮评审：补追踪头消费端断链）。
     /// <paramref name="ct"/> 契约同无 context 重载（参与初始化与消费生命周期——取消即终止消费）。
+    /// <para>
+    /// ⚠️ <b>2026-11-04 修复（批次 A 的测试暴露的既有缺陷）</b>：转发 lambda 原为三参
+    /// <c>(message, _, token) =&gt; ...</c>，重载决议把这次调用重新绑定到<b>本重载自身</b>
+    ///（三参 lambda 不能匹配两参委托，只匹配三参），形成无限递归 → 栈溢出。它长期不可见是
+    /// 因为两个内置 broker 都覆写了本成员，DIM 从未被执行；第三方只实现两参重载的 broker
+    /// 一旦走 context 重载即崩。现改为两参 lambda，正确转发到两参重载。
+    /// </para>
     /// </remarks>
     ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)
-        => SubscribeAsync<TMessage>((message, _, token) => handler(message, null, token), ct);
+        => SubscribeAsync<TMessage>((message, token) => handler(message, null, token), ct);
+
+    /// <summary>
+    /// 异步订阅消息（含消费上下文与<b>消费确认器</b>）—— 批次 A（2026-11-04）：at-least-once 的唯一入口。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 默认实现（DIM）把 <see cref="NoOpMessageAck"/> 传给调用方后转发到三参重载，
+    /// 因此<b>不覆写本成员的自定义 broker 仍是 at-most-once</b>（与旧行为一致，不静默升级语义）。
+    /// 内置两栈（Kafka/RabbitMQ）均覆写：RabbitMQ 本来已走 manual ack；Kafka 覆写后由 handler
+    /// 决定是否存储 offset。
+    /// </para>
+    /// <para>
+    /// <b>不结算时的兜底</b>：handler 正常返回且未调用 <see cref="IMessageAck"/> 的任何方法时，
+    /// 实现按各自既有规则收尾（RabbitMQ 自动 ack，Kafka 不存储）。handler 抛异常时沿用既有
+    /// 失败语义（记录并继续消费，消息弃置）。需要重投必须在 handler 内显式
+    /// <c>RejectAsync(requeue: true)</c>——异常不会自动重投，这一点与 at-most-once 默认一致。
+    /// </para>
+    /// <para><paramref name="ct"/> 契约同无 ack 重载（参与初始化与消费生命周期——取消即终止消费）。</para>
+    /// </remarks>
+    ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+        Func<TMessage, MessageConsumeContext?, IMessageAck, CancellationToken, ValueTask> handler,
+        CancellationToken ct = default)
+        => SubscribeAsync<TMessage>((message, context, token) => handler(message, context, NoOpMessageAck.Instance, token), ct);
 
     /// <summary>
     /// 批量订阅（2026-10-21）：复用逐条订阅，按 <paramref name="maxBatchSize"/> 或
@@ -105,6 +147,31 @@ public interface IMessageBroker
     /// </summary>
     ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(
         Func<IReadOnlyList<ConsumedMessage<TMessage>>, CancellationToken, ValueTask> handler,
+        int maxBatchSize = 64,
+        TimeSpan? maxDelay = null,
+        CancellationToken ct = default)
+        => MessageBatchPump.StartAsync(this, handler, maxBatchSize, maxDelay, static _ => { }, ct);
+
+    /// <summary>
+    /// 批量订阅（含<b>批次级</b>消费确认器）—— 批次 A（2026-11-04）：一个
+    /// <see cref="IMessageAck"/> 对应整批交付，不支持批内部分确认。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 默认实现（DIM）把 <see cref="NoOpMessageAck"/> 传给调用方后转发到无 ack 的批量重载，
+    /// 不覆写的自定义 broker 保持旧行为。
+    /// </para>
+    /// <para>
+    /// <b>兜底规则</b>：批量 handler 正常返回且未结算时整批 <c>AcknowledgeAsync</c>；抛异常时
+    /// 由实现的错误回调记录（<see cref="MessageBrokerBase"/> 覆写为记 Error）后整批
+    /// <c>RejectAsync(requeue: false)</c> 弃置，与逐条路径的 at-most-once 默认一致。需要整批
+    /// 重投请在 handler 内显式 <c>RejectAsync(requeue: true)</c>（Kafka 逆序 seek 使重投从批内
+    /// 最早一条开始，见 <c>MessageBatchAck</c> 说明）。
+    /// </para>
+    /// <para>其余参数语义同无 ack 的批量重载。</para>
+    /// </remarks>
+    ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, IMessageAck, CancellationToken, ValueTask> handler,
         int maxBatchSize = 64,
         TimeSpan? maxDelay = null,
         CancellationToken ct = default)

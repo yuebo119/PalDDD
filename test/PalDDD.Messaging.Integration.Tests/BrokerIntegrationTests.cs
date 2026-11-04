@@ -177,6 +177,12 @@ public sealed class BrokerFixture : IAsyncDisposable
     private bool _triedTestcontainers;
     private readonly SemaphoreSlim _initializeLock = new(1, 1);
 
+    /// <summary>
+    /// Kafka BootstrapServers（批次 A 消费确认测试自建 catalog/producer 时需要）。
+    /// Testcontainers 路径取已启动容器地址，远程路径取配置值。
+    /// </summary>
+    public string KafkaBootstrap => _remoteKafkaBootstrap ?? _kafka!.GetBootstrapAddress();
+
     public (KafkaBroker, JsonMessageSerializer) CreateKafkaBroker()
         => CreateKafkaBroker(NullPalLogger<KafkaBroker>.Instance);
 
@@ -190,14 +196,21 @@ public sealed class BrokerFixture : IAsyncDisposable
             // 二十八轮修复：broker 不可达时 ProduceAsync 默认 5 分钟才抛
             // ProduceException（MessageTimeoutMs 默认 300000）——3 条测试各白等
             // 5 分钟，套件无谓耗时 15 分钟。5s 快速失败让环境故障立即可见。
-            MessageTimeoutMs = 5000
+            MessageTimeoutMs = 5000,
+            // 2026-11-04 批次 A：容器把 broker 通告为 "localhost:9092"，rdkafka 先解析到
+            // IPv6 ::1（本机 ::1:9092 不可达）再回落到 127.0.0.1；回落期间 producer 会进入
+            // 「1/1 brokers are down」，与上面的 5s 快速失败叠加成随机
+            // 「Local: Message timed out」——同一二进制连跑两次，一次 5/5 一次 2 失败，
+            // 属既有环境随机性（与消费侧改动无关）。显式限定 IPv4 消除解析分支。
+            BrokerAddressFamily = Confluent.Kafka.BrokerAddressFamily.V4
         };
         var consumerConfig = new Confluent.Kafka.ConsumerConfig
         {
             BootstrapServers = bootstrap,
             GroupId = $"paldd-test-{Guid.NewGuid():N}",
             AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest,  // Earliest 确保 consumer join 后能读到已发消息
-            AllowAutoCreateTopics = true
+            AllowAutoCreateTopics = true,
+            BrokerAddressFamily = Confluent.Kafka.BrokerAddressFamily.V4
         };
         var broker = new KafkaBroker(producerConfig, consumerConfig,
             logger,

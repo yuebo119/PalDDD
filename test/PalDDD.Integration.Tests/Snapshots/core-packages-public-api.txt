@@ -985,6 +985,9 @@ interface PalDDD.Messaging.IEventHandler
   method System.Threading.Tasks.ValueTask HandleAsync(PalDDD.Core.DomainEvent event, System.Threading.CancellationToken ct)
 interface PalDDD.Messaging.IEventHandler<TEvent>
   method System.Threading.Tasks.ValueTask HandleAsync(TEvent event, System.Threading.CancellationToken ct)
+interface PalDDD.Messaging.IMessageAck
+  method System.Threading.Tasks.ValueTask AcknowledgeAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask RejectAsync(System.Boolean requeue, System.Threading.CancellationToken ct)
 interface PalDDD.Messaging.IMessageBroker
   property System.Boolean SupportsConcurrentPublish
   property System.Boolean SupportsRawPublish
@@ -992,8 +995,10 @@ interface PalDDD.Messaging.IMessageBroker
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishAsync(TMessage message, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishRawAsync(System.ReadOnlyMemory<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, PalDDD.Messaging.IMessageAck, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeBatchAsync(System.Func<System.Collections.Generic.IReadOnlyList<PalDDD.Messaging.ConsumedMessage<TMessage>>, PalDDD.Messaging.IMessageAck, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Int32 maxBatchSize, System.Nullable<System.TimeSpan> maxDelay, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeBatchAsync(System.Func<System.Collections.Generic.IReadOnlyList<PalDDD.Messaging.ConsumedMessage<TMessage>>, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Int32 maxBatchSize, System.Nullable<System.TimeSpan> maxDelay, System.Threading.CancellationToken ct)
 interface PalDDD.Messaging.IMessageBrokerHealth
   property System.Boolean IsConsumingHealthy
@@ -1005,8 +1010,10 @@ class PalDDD.Messaging.MessageBrokerBase
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishAsync(TMessage message, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishRawAsync(System.ReadOnlyMemory<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, PalDDD.Messaging.IMessageAck, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeBatchAsync(System.Func<System.Collections.Generic.IReadOnlyList<PalDDD.Messaging.ConsumedMessage<TMessage>>, PalDDD.Messaging.IMessageAck, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Int32 maxBatchSize, System.Nullable<System.TimeSpan> maxDelay, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeBatchAsync(System.Func<System.Collections.Generic.IReadOnlyList<PalDDD.Messaging.ConsumedMessage<TMessage>>, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Int32 maxBatchSize, System.Nullable<System.TimeSpan> maxDelay, System.Threading.CancellationToken ct)
 class PalDDD.Messaging.MessageConsumeContext
   ctor(System.String correlationId, System.String causationId, System.String traceParent, System.String traceState, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> headers)
@@ -1035,6 +1042,11 @@ struct PalDDD.Messaging.MessagePublishContext
   method System.Boolean Equals(System.Object obj)
   method System.Int32 GetHashCode()
   method System.String ToString()
+class PalDDD.Messaging.NoOpMessageAck
+  ctor()
+  field static readonly PalDDD.Messaging.NoOpMessageAck Instance
+  method System.Threading.Tasks.ValueTask AcknowledgeAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask RejectAsync(System.Boolean requeue, System.Threading.CancellationToken ct)
 class PalDDD.Messaging.NullMessageBroker
   ctor(PalDDD.Core.Logging.IPalLogger<PalDDD.Messaging.NullMessageBroker> logger)
 
@@ -1049,6 +1061,7 @@ class PalDDD.Messaging.Kafka.KafkaBroker
   method System.Threading.Tasks.ValueTask DisposeAsync()
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishRawAsync(System.ReadOnlyMemory<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, PalDDD.Messaging.IMessageAck, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
 
@@ -1063,6 +1076,7 @@ class PalDDD.Messaging.RabbitMQ.RabbitMqBroker
   method System.Threading.Tasks.ValueTask DisposeAsync()
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishRawAsync(System.ReadOnlyMemory<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, PalDDD.Messaging.IMessageAck, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
 

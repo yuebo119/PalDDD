@@ -14,6 +14,32 @@
 
 ### Added
 
+- **2026-11-04 公共 API 缺口 A 批：消费确认契约（新增公共 API，向后兼容；含一处既有缺陷修复）**：
+  ①**`IMessageAck`**（Messaging）：`AcknowledgeAsync` / `RejectAsync(bool requeue)` 把「消费确认」补成订阅契约的一个维度。
+  配套 `NoOpMessageAck` 与两条新重载——`SubscribeAsync<T>(Func<TMessage, MessageConsumeContext?, IMessageAck, CancellationToken, ValueTask>)`
+  与 `SubscribeBatchAsync<T>(Func<IReadOnlyList<ConsumedMessage<TMessage>>, IMessageAck, CancellationToken, ValueTask>)`（批次级确认器）
+  ——两者的默认接口实现（DIM）都转发到旧重载并传 `NoOpMessageAck`，**不覆写的自定义 broker 仍是 at-most-once**（语义不静默升级）。
+  ②**Kafka 手动提交**（新增能力）：`EnableAutoOffsetStore=false` 时 `AcknowledgeAsync` 才真正 `StoreOffset`；
+  `RejectAsync(true)` 走 `Seek` + 指数退避（200ms 起、5s 上限，有进展即复位），`RejectAsync(false)` 存储 offset 跳过该条。
+  `IConsumer` 非线程安全，确认动作经线程内命令队列回送消费线程执行（消费线程改带超时 poll，消息到达延迟不变）；
+  并发消费（`ConsumerDispatchConcurrency>1`）下用 offset 水印只推进连续前缀——逐条乱序存储会让崩溃后的重启跳过仍在处理中的消息；
+  `EnableAutoCommit=false` 时补显式 `Commit`（否则「确认了却仍在重投」是静默失败）。
+  ③**RabbitMQ 确认器**：本栈原本就是 manual-ack，确认器把既有 `BasicAck`/`Nack` 交给 handler 决策；原子占位防重复结算
+  （重复 `BasicAck` 会以 `PRECONDITION_FAILED` 关闭 channel，波及同 channel 的其它订阅与发布）。handler 不结算时兜底规则不变。
+  ④**批量确认**：一个批次级确认器对应整批；handler 未结算时成功自动确认、异常整批 `Reject(false)`（与逐条 at-most-once 默认一致）。
+  `RejectAsync(true)` 逆序委派，使 Kafka 的 `Seek` 落在批内最早一条，整批重放。
+  ⑤**修复既有缺陷（含 context 的 `SubscribeAsync` DIM 无限递归）**：`IMessageBroker` 该默认实现的转发 lambda 原为三参，
+  重载决议把它重新绑定到成员自身 → 栈溢出；因两个内置 broker 都覆写了该成员，缺陷长期不可见，第三方只实现两参重载的 broker
+  一走 context 重载即崩。新增的四参重载测试首次触发并暴露它，现改为两参 lambda 正确转发。
+  ⑥**文档**：`IMessageBroker` 投递语义声明改写——旧文「关闭 EnableAutoOffsetStore 并在 handler 成功后 StoreOffset」在旧契约下
+  没有调用点（handler 拿不到 `IConsumer`），照做会让 offset 永不前进（重启后 `earliest` 全量重放 / `latest` 静默跳过未提交消息）。
+  验证：Messaging 单元 13/13（NoOp 不抛含已取消 token、DIM 传 NoOp、批次确认聚合/逆序/单次结算、泵兜底三分支）；
+  Messaging 集成 32/32 连跑三轮全绿（Kafka 确认前进/重投/跳过/退避四点 + RabbitMQ 三态，本机 wslc 真容器实跑）；
+  变异验证：注释 `StoreOffset` → `AckAdvancesOffset` 与 `RejectSkips` 转红，`RequeueRedelivers`/`RequeueBackoff` 保持绿。
+  测试基建顺带修掉既有随机失败根因（容器把 broker 通告为 `localhost`，rdkafka 先试 IPv6 `::1`，回落窗口叠加 5s 快速失败超时
+  → 同一二进制两次运行结果不同；现限定 `BrokerAddressFamily.V4`，三次连跑 32/32）。
+  公共 API 快照 +14 行（纯新增）；`docs/conventions.md` 源文件数 260→261。
+
 - **2026-11-04 管道能力分层定案 + 请求级超时行为（新增公共 API，向后兼容）**：
   ①**请求级超时**（CQRS / DependencyInjection）：`TimeoutBehavior<TRequest,TResponse>` 与 `AddPalTimeoutBehavior` 两个重载
   （开放泛型 / 闭合泛型，后者 Native AOT 安全）。超时转 `TimeoutException`，调用方取消仍按 `OperationCanceledException`
