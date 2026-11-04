@@ -123,7 +123,14 @@
 
 **配置面**：`OutboxOptions`（BatchSize=100、LeaseDuration=2min、PollInterval=500ms、MaxRetryCount=10、DeliveryMode=Auto、BatchMarkFlushInterval=1s 等）、`InboxOptions`、`SagaProcessorOptions`，全部 ValidateOnStart 校验。DI 入口：`AddPalOutbox` / `AddPalInbox` / `AddPalSaga<TState,TOrchestrator>`（Transactions/ServiceCollectionExtensions.cs）。
 
-## 8. 事件溯源与投影
+## 8. 事件日志与投影
+
+> **范围边界（2026-11-04 收窄）**：本节的能力只到**日志层**——追加、乐观并发、游标读、
+> 导入导出。**聚合重放器与快照不在范围内**（需要「聚合重放 + 快照」最小 API 形状与实际消费方
+> 才能立项，见 [ADR-037](decisions/037-event-log-append-only.md) 与
+> [架构文档](architecture.md) 中列为未来可选外圈的 Event Sourcing Adapter）。
+> 事件日志**只追加不删除**：框架刻意不提供删除/归档/截断 API，合规删除权用加密擦除实现，
+> 详见 [ADR-037](decisions/037-event-log-append-only.md)。
 
 | 特性 | 说明 | 锚点 |
 |---|---|---|

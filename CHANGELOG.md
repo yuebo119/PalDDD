@@ -140,6 +140,27 @@
   `GetByStatusAsync` / `GetByIdAsync` / 两条 `Lease*`）加复核。未定义值抛 `InvalidOperationException`，
   文案含 sagaId、原始值与上述升级 SQL（此前强转会把 4 读成「不是任何已知状态」的实例，终态判定与 switch 全部落空且不报错）。
 
+### Changed
+
+- **2026-11-04 公共 API 缺口 A 批：`IMessageBroker` 投递语义描述改写（纯文档，无行为变更）**：
+  原文写「Kafka 若需 at-least-once，请关闭 EnableAutoOffsetStore 并在 handler 成功后 StoreOffset」——
+  但旧订阅契约不向 handler 暴露 `IConsumer`，`StoreOffset` 没有任何调用点；照做只会让 offset 永不前进，
+  重启行为由 `AutoOffsetReset` 决定（`earliest` 全量重放 / `latest` 静默跳过全部未提交消息）。
+  现改为如实描述：默认 at-most-once；at-least-once 用携带 `IMessageAck` 的重载，
+  Kafka 侧还须关闭 `EnableAutoOffsetStore`。同步改写 `docs/features.md` 的「边界与刻意取舍」两条
+  （Broker 语义、`SagaStatus` 数值契约）。
+
+### Documentation
+
+- **2026-11-04 ADR-037：事件日志只追加不删除**（`docs/decisions/037-event-log-append-only.md`，37 份 ADR）：
+  把「框架不提供事件删除/归档/截断 API」从隐式事实升格为显式契约。四条理由：事件日志是事实记录非状态缓存、
+  框架不掌握保留期限的业务判据、删除入口会破坏读侧版本/位置序契约、真要收缩存储应导出冷存后自行处置。
+  合规删除权用加密擦除实现；归档用既有 `EventStreamJsonLines` 导出。**后果显式声明**：存储随业务量单调上升、
+  无自动收敛，payload 保留策略须在接入前决定。无代码变更、无 API 变更。
+  同步：`docs/features.md` 第 8 节改名「事件日志与投影」并加范围边界（聚合重放器与快照不在范围内，
+  与 `architecture.md:243` 的 Event Sourcing Adapter 外圈定位一致）；ADR 计数 36→37 四处
+  （README / README.en / AGENTS.md / pitfalls.md）。
+
 ## [5.0.0-preview.1] — 2026-10-27
 
 > **预发布说明（2026-10-27 用户裁决）**：本段内容为 5.0.0 正式版的预览发布（`5.0.0-preview.1`，workflow_dispatch 预览通道）。.NET 11 GA（2026-11）轮把 `VersionSuffix` 清空后，**同内容**以 5.0.0 正式版转正发布；预览期收集的消费者反馈并入 GA 轮修订。SemVer 判据与兼容性承诺与 5.0.0 一致（预发布标签已明示破坏窗口）。上方 `[Unreleased]` 的 2026-10-27 清零轮条目为预览之后的变更，随 GA 后的下一版本发布。
