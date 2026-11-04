@@ -315,7 +315,6 @@ public sealed class InMemoryStoreTests
         store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Done", Status = SagaStatus.Completed });
         store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Compensated", Status = SagaStatus.Compensated });
         store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "CompensationFailed", Status = SagaStatus.CompensationFailed });
-        store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Dead", Status = SagaStatus.DeadLettered });
 
         var active = await store.GetActiveSagasAsync(10, cancellationToken);
         // 返回 Active + AwaitingHumanDecision（三十四轮中断态超时兜底：观测查询同步纳入

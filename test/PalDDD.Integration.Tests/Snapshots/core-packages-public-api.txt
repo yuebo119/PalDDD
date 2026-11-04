@@ -382,6 +382,7 @@ class PalDDD.Dapper.DapperSagaStateStore<TState>
   method System.Threading.Tasks.ValueTask<System.Int32> AdvanceNextCheckAtAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetByStatusAsync(PalDDD.Transactions.SagaStatus status, System.Int32 maxCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseDueSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.DateTimeOffset checkedAt, System.Threading.CancellationToken ct)
@@ -427,6 +428,7 @@ static class PalDDD.Dapper.SqlTemplates
   field const System.String SagaActive = SELECT * FROM saga_states WHERE status IN (0, 5) ORDER BY created_at LIMIT @n
   field const System.String SagaAdvanceNextCheckAt = UPDATE saga_states SET next_check_at=@nextCheckAt, version=version+1 WHERE saga_id=@id AND version=@v AND leased_by=@owner
   field const System.String SagaById = SELECT * FROM saga_states WHERE saga_id=@id
+  field const System.String SagaByStatus = SELECT * FROM saga_states WHERE status = @status ORDER BY saga_id LIMIT @n
   field const System.String SagaExists = SELECT COUNT(1) FROM saga_states WHERE saga_id=@id
   field const System.String SagaInsert = INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,@data,@nextCheckAt,@leasedBy,@leasedUntil)
   field const System.String SagaInsertPG = INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@nextCheckAt,@leasedBy,@leasedUntil) ON CONFLICT (saga_id) DO NOTHING RETURNING saga_id
@@ -1199,6 +1201,7 @@ class PalDDD.PalORM.Stores.PalOrmSagaStateStore<TProvider, TState>
   method System.Threading.Tasks.ValueTask<System.Int32> AdvanceNextCheckAtAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetByStatusAsync(PalDDD.Transactions.SagaStatus status, System.Int32 maxCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseDueSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.DateTimeOffset checkedAt, System.Threading.CancellationToken ct)
@@ -1637,7 +1640,6 @@ class PalDDD.Transactions.DefaultSagaManager
   property System.Int32 InvalidatedCount
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> AcquireInvalidationFenceAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TChildState> ExecuteChildSagaAsync(PalDDD.Transactions.Saga<TChildState> childSaga, TChildState childState, System.Object triggerEvent, System.Threading.CancellationToken ct)
-  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.SagaState>> GetInterruptedSagasAsync(System.Threading.CancellationToken ct)
   method System.Void InvalidateInterrupted(ByteAether.Ulid.Ulid sagaId)
   method System.Threading.Tasks.ValueTask ResumeAsync(ByteAether.Ulid.Ulid sagaId, TDecision decision, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.DomainEventOutboxBridge
@@ -1713,7 +1715,6 @@ interface PalDDD.Transactions.ISagaLeaseBatchStore<TState>
 interface PalDDD.Transactions.ISagaManager
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> AcquireInvalidationFenceAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TChildState> ExecuteChildSagaAsync(PalDDD.Transactions.Saga<TChildState> childSaga, TChildState childState, System.Object triggerEvent, System.Threading.CancellationToken ct)
-  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.SagaState>> GetInterruptedSagasAsync(System.Threading.CancellationToken ct)
   method System.Void InvalidateInterrupted(ByteAether.Ulid.Ulid sagaId)
   method System.Threading.Tasks.ValueTask ResumeAsync(ByteAether.Ulid.Ulid sagaId, TDecision decision, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.ISagaScanCursorStore<TState>
@@ -1721,6 +1722,7 @@ interface PalDDD.Transactions.ISagaScanCursorStore<TState>
 interface PalDDD.Transactions.ISagaStateStore<TState>
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetByStatusAsync(PalDDD.Transactions.SagaStatus status, System.Int32 maxCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(TState state, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.InMemoryInboxStore
@@ -1749,6 +1751,7 @@ class PalDDD.Transactions.InMemorySagaStateStore<TState>
   method System.Threading.Tasks.ValueTask<System.Int32> AdvanceNextCheckAtAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetByStatusAsync(PalDDD.Transactions.SagaStatus status, System.Int32 maxCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseDueSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.DateTimeOffset checkedAt, System.Threading.CancellationToken ct)
@@ -1939,7 +1942,6 @@ enum PalDDD.Transactions.SagaStatus
   field const PalDDD.Transactions.SagaStatus Compensated = 2
   field const PalDDD.Transactions.SagaStatus CompensationFailed = 3
   field const PalDDD.Transactions.SagaStatus Completed = 1
-  field const PalDDD.Transactions.SagaStatus DeadLettered = 4
   field System.Int32 value__
 struct PalDDD.Transactions.SagaStatusChanged
   ctor(ByteAether.Ulid.Ulid SagaId, PalDDD.Transactions.SagaStatus OldStatus, PalDDD.Transactions.SagaStatus NewStatus)
@@ -2047,6 +2049,7 @@ class PalDDD.Transactions.SagaStateDbContext<TState>
   method System.Threading.Tasks.ValueTask<System.Int32> AdvanceNextCheckAtAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetByStatusAsync(PalDDD.Transactions.SagaStatus status, System.Int32 maxCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseDueSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.DateTimeOffset checkedAt, System.Threading.CancellationToken ct)

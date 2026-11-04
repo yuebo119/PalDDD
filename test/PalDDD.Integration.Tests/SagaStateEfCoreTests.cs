@@ -36,6 +36,62 @@ public sealed class SagaStateEfCoreTests
         await Assert.That(keys[0]).IsEqualTo("ReservePayment");
     }
 
+    /// <summary>
+    /// 批次 B（2026-11-04）读侧补齐：按状态列举——状态隔离、maxCount 生效、saga_id 排序。
+    /// </summary>
+    [Test]
+    public async Task GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndOrdersBySagaId(CancellationToken cancellationToken)
+    {
+        await using var db = new TestSagaStateDbContext(CreateOptions());
+        db.SagaStates.Add(CreateState("Active1", FixedNow));
+        db.SagaStates.Add(CreateState("Active2", FixedNow.AddMinutes(1)));
+        db.SagaStates.Add(CreateState("Active3", FixedNow.AddMinutes(2)));
+        db.SagaStates.Add(CreateState("Failed", FixedNow.AddMinutes(3), status: SagaStatus.CompensationFailed));
+        db.SagaStates.Add(CreateState("Awaiting", FixedNow.AddMinutes(4), status: SagaStatus.AwaitingHumanDecision));
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        // 状态隔离：只取 CompensationFailed 的那一条
+        var failed = await db.GetByStatusAsync(SagaStatus.CompensationFailed, 10, cancellationToken);
+        await Assert.That(failed).Count().IsEqualTo(1);
+        await Assert.That(failed[0].CurrentState).IsEqualTo("Failed");
+
+        // 未命中状态返回空（不是异常）
+        var none = await db.GetByStatusAsync(SagaStatus.Compensated, 10, cancellationToken);
+        await Assert.That(none).Count().IsEqualTo(0);
+
+        // maxCount 生效
+        var capped = await db.GetByStatusAsync(SagaStatus.Active, 2, cancellationToken);
+        await Assert.That(capped).Count().IsEqualTo(2);
+
+        // 排序键 = saga_id（ULID 字典序）
+        var all = await db.GetByStatusAsync(SagaStatus.Active, 100, cancellationToken);
+        await Assert.That(all).Count().IsEqualTo(3);
+        var ids = all.Select(static s => s.SagaId).ToList();
+        await Assert.That(ids.SequenceEqual(ids.OrderBy(static id => id))).IsTrue();
+    }
+
+    /// <summary>
+    /// 批次 B：EF 的 int→enum 物化不做定义域校验——本测试锁定「读边界复核」生效
+    /// （模拟存量 DeadLettered 行：枚举值已移除，只能经强转构造）。
+    /// </summary>
+    [Test]
+    public async Task GetByIdAsync_UndefinedPersistedStatus_ThrowsActively(CancellationToken cancellationToken)
+    {
+        await using var db = new TestSagaStateDbContext(CreateOptions());
+        var corrupt = CreateState("Legacy", FixedNow);
+        corrupt.Status = (SagaStatus)4;
+        db.SagaStates.Add(corrupt);
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => db.GetByIdAsync(corrupt.SagaId, cancellationToken).AsTask());
+
+        await Assert.That(ex!.Message.Contains('4')).IsTrue();
+        await Assert.That(ex.Message.Contains(corrupt.SagaId.ToString(), StringComparison.Ordinal)).IsTrue();
+    }
+
     [Test]
     public async Task GetActiveSagasAsync_ReturnsOnlyActiveStatesInCreatedOrder(CancellationToken cancellationToken)
     {
@@ -45,7 +101,6 @@ public sealed class SagaStateEfCoreTests
         db.SagaStates.Add(CreateState("FirstActive", FixedNow));
         db.SagaStates.Add(CreateState("Compensated", FixedNow.AddMinutes(3), status: SagaStatus.Compensated));
         db.SagaStates.Add(CreateState("CompensationFailed", FixedNow.AddMinutes(4), status: SagaStatus.CompensationFailed));
-        db.SagaStates.Add(CreateState("DeadLettered", FixedNow.AddMinutes(5), status: SagaStatus.DeadLettered));
         await db.SaveChangesAsync(cancellationToken);
         db.ChangeTracker.Clear();
 

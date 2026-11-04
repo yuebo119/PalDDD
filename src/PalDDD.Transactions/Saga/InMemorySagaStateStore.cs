@@ -72,6 +72,41 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// 批次 B（2026-11-04）：读侧补齐。全量扫 <c>_states.Values</c> 而非走活跃索引——本方法是
+    /// 运维查询（列某状态的 Saga），不在每 tick 路径上；活跃索引只覆盖 Active/AWD 两态，
+    /// 复用它反而要为其余四态各建一份索引。返回<b>活引用</b>，语义与
+    /// <see cref="GetActiveSagasAsync"/> 一致（调用方不得变异）。
+    /// </remarks>
+    public ValueTask<IReadOnlyList<TState>> GetByStatusAsync(
+        SagaStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        // 过滤值本身也校验：传未定义状态（如已移除的 4）时应可见失败，而不是返回空列表
+        // 让调用方误以为「该状态没有数据」。
+        SagaStatusGuard.EnsureDefined(status, sagaId: null);
+        ct.ThrowIfCancellationRequested();
+
+        lock (_lock)
+        {
+            var matches = new List<TState>(Math.Min(maxCount, _states.Count));
+            foreach (var state in _states.Values)
+            {
+                if (state.Status == status)
+                    matches.Add(state);
+            }
+
+            matches.Sort(static (a, b) => a.SagaId.CompareTo(b.SagaId));
+            if (matches.Count > maxCount)
+                matches.RemoveRange(maxCount, matches.Count - maxCount);
+
+            return ValueTask.FromResult<IReadOnlyList<TState>>(matches);
+        }
+    }
+
+    /// <inheritdoc/>
     public ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(  // PERF-008:负值由Options校验(ITM-166)
         string owner,
         TimeSpan leaseDuration,

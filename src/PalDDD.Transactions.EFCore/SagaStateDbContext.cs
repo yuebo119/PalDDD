@@ -52,31 +52,60 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         // 优化（二十五轮 API 扫描 EF-6）：AsNoTracking——只读契约（SagaProcessor 走
         // LeaseActiveSagasAsync 独立租约路径，本查询仅观测，保证不进 Mark*+SaveChanges）；
         // 违反契约的突变将静默丢失（非跟踪实体不经 SaveChangesAsync 持久化）。
-        return await SagaStates
+        return EnsureHydrated(await SagaStates
             .AsNoTracking()
             // 三十四轮（中断态超时兜底）：观测查询与 Lease 同步纳入 AwaitingHumanDecision
             .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
             .OrderBy(s => s.SagaId) // v23 C1：EF SQLite 不支持 DateTimeOffset ORDER BY（ITM-261 姊妹）——改按 Id（ULID 字典序=创建序）
             .Take(batchSize)
-            .ToListAsync(ct).ConfigureAwait(false);
+            .ToListAsync(ct).ConfigureAwait(false));
     }
 
     /// <inheritdoc/>
-    public ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
+    public async ValueTask<IReadOnlyList<TState>> GetByStatusAsync(
+        SagaStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        SagaStatusGuard.EnsureDefined(status, sagaId: null);
+
+        return EnsureHydrated(await SagaStates
+            .AsNoTracking()
+            .Where(s => s.Status == status)
+            .OrderBy(s => s.SagaId)
+            .Take(maxCount)
+            .ToListAsync(ct).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// 水合后复核状态值（批次 B）。EF 的 int→enum 物化不做定义域校验——库里存 4 会得到
+    /// 一个「不是任何已知状态」的实例，终态判定与 switch 全部落空且不报错。抽查放在
+    /// 读边界（本类所有返回状态的公开读方法），与三栈的 <c>SagaStatusGuard</c> 同一文案。
+    /// </summary>
+    private static IReadOnlyList<TState> EnsureHydrated(IReadOnlyList<TState> states)
+    {
+        foreach (var state in states)
+            SagaStatusGuard.EnsureDefined(state.Status, state.SagaId);
+        return states;
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
         string owner,
         TimeSpan leaseDuration,
         int batchSize,
         CancellationToken ct)
-        => LeaseSagasAsync(owner, leaseDuration, batchSize, dueBefore: null, GetUtcNow(), ct);
+        => EnsureHydrated(await LeaseSagasAsync(owner, leaseDuration, batchSize, dueBefore: null, GetUtcNow(), ct).ConfigureAwait(false));
 
     /// <inheritdoc/>
-    public ValueTask<IReadOnlyList<TState>> LeaseDueSagasAsync(
+    public async ValueTask<IReadOnlyList<TState>> LeaseDueSagasAsync(
         string owner,
         TimeSpan leaseDuration,
         int batchSize,
         DateTimeOffset now,
         CancellationToken ct)
-        => LeaseSagasAsync(owner, leaseDuration, batchSize, dueBefore: now, now, ct);
+        => EnsureHydrated(await LeaseSagasAsync(owner, leaseDuration, batchSize, dueBefore: now, now, ct).ConfigureAwait(false));
 
     private async ValueTask<IReadOnlyList<TState>> LeaseSagasAsync(
         string owner,
@@ -519,7 +548,12 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
 
     /// <inheritdoc/>
     public async ValueTask<TState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
-        => await SagaStates.SingleOrDefaultAsync(s => s.SagaId == sagaId, ct).ConfigureAwait(false);
+    {
+        var state = await SagaStates.SingleOrDefaultAsync(s => s.SagaId == sagaId, ct).ConfigureAwait(false);
+        if (state is not null)
+            SagaStatusGuard.EnsureDefined(state.Status, state.SagaId);
+        return state;
+    }
 
     /// <inheritdoc/>
     /// <remarks>

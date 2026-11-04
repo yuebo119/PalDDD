@@ -31,6 +31,62 @@ public class PalOrmSagaStateStoreTests
     private static readonly System.Text.Json.Serialization.Metadata.JsonTypeInfo<StoreTestSagaState> Json =
         StoreTestJsonContext.Default.StoreTestSagaState;
 
+    /// <summary>
+    /// 批次 B（2026-11-04）读侧补齐：按状态列举——状态隔离、maxCount 生效、saga_id 排序，
+    /// 以及未定义状态值的水合 fail-fast（存量 DeadLettered 行只能经裸 SQL 构造）。
+    /// </summary>
+    [Test]
+    public async Task GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndRejectsUnknownPersistedStatus()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteSagaStateStore<StoreTestSagaState>(session, Json);
+
+        var activeIds = new List<ByteAether.Ulid.Ulid>();
+        for (var i = 0; i < 3; i++)
+        {
+            var state = new StoreTestSagaState
+            {
+                CustomerId = $"cust-{i}",
+                CurrentState = "Active",
+                Status = SagaStatus.Active,
+            };
+            activeIds.Add(state.SagaId);
+            await store.SaveChangesAsync(state, default);
+        }
+
+        var failed = new StoreTestSagaState
+        {
+            CustomerId = "cust-failed",
+            CurrentState = "CompensationFailed",
+            Status = SagaStatus.CompensationFailed,
+        };
+        await store.SaveChangesAsync(failed, default);
+
+        // 状态隔离 + 未命中返回空
+        var failedRows = await store.GetByStatusAsync(SagaStatus.CompensationFailed, 10, default);
+        await Assert.That(failedRows.Count).IsEqualTo(1);
+        await Assert.That(failedRows[0].SagaId).IsEqualTo(failed.SagaId);
+        await Assert.That((await store.GetByStatusAsync(SagaStatus.Compensated, 10, default)).Count).IsEqualTo(0);
+
+        // maxCount 生效
+        await Assert.That((await store.GetByStatusAsync(SagaStatus.Active, 2, default)).Count).IsEqualTo(2);
+
+        // 排序键 = saga_id
+        var all = await store.GetByStatusAsync(SagaStatus.Active, 100, default);
+        await Assert.That(all.Count).IsEqualTo(3);
+        var ids = all.Select(static s => s.SagaId).ToList();
+        await Assert.That(ids.SequenceEqual(ids.OrderBy(static id => id))).IsTrue();
+
+        // 存量 DeadLettered 行（status=4）：用 store 自身写入 4（枚举成员已移除，只能强转），
+        // 再读回——水合必须可见失败，不得静默读成非法枚举实例。
+        failed.Status = (SagaStatus)4;
+        await store.SaveChangesAsync(failed, default);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.GetByIdAsync(failed.SagaId, default).AsTask());
+        await Assert.That(ex!.Message.Contains('4')).IsTrue();
+        await Assert.That(ex.Message.Contains(failed.SagaId.ToString(), StringComparison.Ordinal)).IsTrue();
+    }
+
     [Test]
     public async Task LeaseActiveSagasAsync_LeasedUntilRoundTripsWithZeroOffset()
     {

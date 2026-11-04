@@ -2235,6 +2235,11 @@ public sealed class SagaTimeoutProcessorTests
         public ValueTask<OrderSagaState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
             => ValueTask.FromResult<OrderSagaState?>(null);
 
+        // 批次 B：读侧方法，本组用例不消费——按状态过滤返回空。
+        public ValueTask<IReadOnlyList<OrderSagaState>> GetByStatusAsync(
+            SagaStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OrderSagaState>>([]);
+
         public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
         {
             SavedTerminals.Add((state.SagaId, state.Status));
@@ -2287,6 +2292,11 @@ public sealed class SagaTimeoutProcessorTests
 
         public ValueTask<OrderSagaState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
             => ValueTask.FromResult<OrderSagaState?>(null);
+
+        // 批次 B：读侧方法，本组用例不消费——按状态过滤返回空。
+        public ValueTask<IReadOnlyList<OrderSagaState>> GetByStatusAsync(
+            SagaStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OrderSagaState>>([]);
 
         public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
         {

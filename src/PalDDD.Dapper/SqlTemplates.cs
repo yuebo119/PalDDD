@@ -310,12 +310,21 @@ public static class SqlTemplates
     /// 查询活跃的 Saga 状态。<br/>
     /// 💡 返回 Active=0 与 AwaitingHumanDecision=5 的 Saga（三十四轮：中断态超时兜底——
     /// 中断态 Saga 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor 补偿，未配置则显式无限等待）；
-    /// Completed、Compensated、CompensationFailed、DeadLettered 为终态仍过滤。<br/>
+    /// Completed、Compensated、CompensationFailed 为终态仍过滤
+    ///（v5.0.0 批次 B：DeadLettered(4) 已从枚举移除，4 成为永久空洞——存量 status=4 的行
+    /// 会在水合时 fail-fast 而非被静默当作终态跳过，见 SagaStatusGuard）。<br/>
     /// 注：五表状态列均为 INT（v9 勘正：原"与 Outbox 的字符串状态不同"为 int 化前残留——三十八轮已统一）。
     /// Saga 侧另有版本号乐观并发控制（version 列），与状态列编码正交。
     /// </summary>
     public const string SagaActive =
         "SELECT * FROM saga_states WHERE status IN (0, 5) ORDER BY created_at LIMIT @n";
+
+    /// <summary>
+    /// 按生命周期状态列举 Saga（批次 B，2026-11-04）——读侧补齐，四栈同一语义
+    ///（按 <c>saga_id</c> 排序，ULID 字典序 = 创建序，使跨栈结果可比）。
+    /// </summary>
+    public const string SagaByStatus =
+        "SELECT * FROM saga_states WHERE status = @status ORDER BY saga_id LIMIT @n";
 
     /// <summary>
     /// 租约获取活跃 Saga，避免多 worker 重复处理。<br/>

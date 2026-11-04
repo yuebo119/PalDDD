@@ -66,6 +66,10 @@ public sealed class SagaLeaseBatchReleaseTests
         public ValueTask<LifecycleSagaState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
             => _inner.GetByIdAsync(sagaId, ct);
 
+        public ValueTask<IReadOnlyList<LifecycleSagaState>> GetByStatusAsync(
+            SagaStatus status, int maxCount, CancellationToken ct = default)
+            => _inner.GetByStatusAsync(status, maxCount, ct);
+
         public ValueTask<int> SaveChangesAsync(LifecycleSagaState state, CancellationToken ct)
         {
             PerSagaSaveCalls++;
@@ -132,6 +136,10 @@ public sealed class SagaLeaseBatchReleaseTests
 
         public ValueTask<LifecycleSagaState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
             => _inner.GetByIdAsync(sagaId, ct);
+
+        public ValueTask<IReadOnlyList<LifecycleSagaState>> GetByStatusAsync(
+            SagaStatus status, int maxCount, CancellationToken ct = default)
+            => _inner.GetByStatusAsync(status, maxCount, ct);
 
         public ValueTask<int> SaveChangesAsync(LifecycleSagaState state, CancellationToken ct)
         {

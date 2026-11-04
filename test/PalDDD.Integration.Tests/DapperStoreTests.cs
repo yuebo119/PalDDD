@@ -1134,6 +1134,62 @@ public sealed class DapperStoreTests
         await Assert.That(loaded.Status).IsEqualTo(SagaStatus.Completed);
     }
 
+    /// <summary>
+    /// 批次 B（2026-11-04）读侧补齐：按状态列举——状态隔离、maxCount 生效、saga_id 排序，
+    /// 以及未定义状态值的水合 fail-fast（存量 DeadLettered 行只能经裸 SQL 构造）。
+    /// </summary>
+    [Test]
+    public async Task Saga_GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndRejectsUnknownPersistedStatus(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var now = TimeProvider.System.GetUtcNow();
+
+        var active = new List<PalUlid>();
+        for (var i = 0; i < 3; i++)
+        {
+            var id = PalUlid.New();
+            active.Add(id);
+            await store.SaveChangesAsync(new TestSagaState
+            {
+                SagaId = id,
+                CurrentState = "Active",
+                Status = SagaStatus.Active,
+                CreatedAt = now.AddMinutes(i)
+            }, cancellationToken);
+        }
+
+        var failedId = PalUlid.New();
+        await store.SaveChangesAsync(new TestSagaState
+        {
+            SagaId = failedId,
+            CurrentState = "CompensationFailed",
+            Status = SagaStatus.CompensationFailed,
+            CreatedAt = now.AddMinutes(10)
+        }, cancellationToken);
+
+        // 状态隔离 + 未命中返回空
+        var failed = await store.GetByStatusAsync(SagaStatus.CompensationFailed, 10, cancellationToken);
+        await Assert.That(failed.Count).IsEqualTo(1);
+        await Assert.That(failed[0].SagaId).IsEqualTo(failedId);
+        await Assert.That((await store.GetByStatusAsync(SagaStatus.Compensated, 10, cancellationToken)).Count).IsEqualTo(0);
+
+        // maxCount 生效
+        await Assert.That((await store.GetByStatusAsync(SagaStatus.Active, 2, cancellationToken)).Count).IsEqualTo(2);
+
+        // 排序键 = saga_id
+        var all = await store.GetByStatusAsync(SagaStatus.Active, 100, cancellationToken);
+        await Assert.That(all.Count).IsEqualTo(3);
+        var ids = all.Select(static s => s.SagaId).ToList();
+        await Assert.That(ids.SequenceEqual(ids.OrderBy(static id => id))).IsTrue();
+
+        // 存量 DeadLettered 行（status=4）水合必须可见失败，不得静默读成非法枚举实例
+        await _conn.ExecuteAsync("UPDATE saga_states SET status = 4 WHERE saga_id = @id", new { id = failedId });
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.GetByIdAsync(failedId, cancellationToken).AsTask());
+        await Assert.That(ex!.Message.Contains('4')).IsTrue();
+        await Assert.That(ex.Message.Contains(failedId.ToString(), StringComparison.Ordinal)).IsTrue();
+    }
+
     [Test]
     public async Task Saga_GetActiveSagas_ReturnsOnlyActiveStates(CancellationToken cancellationToken)
     {
@@ -1166,13 +1222,6 @@ public sealed class DapperStoreTests
             CurrentState = "CompensationFailed",
             Status = SagaStatus.CompensationFailed,
             CreatedAt = now.AddMinutes(3)
-        }, cancellationToken);
-        await store.SaveChangesAsync(new TestSagaState
-        {
-            SagaId = PalUlid.New(),
-            CurrentState = "DeadLettered",
-            Status = SagaStatus.DeadLettered,
-            CreatedAt = now.AddMinutes(4)
         }, cancellationToken);
 
         var active = await store.GetActiveSagasAsync(10, cancellationToken);

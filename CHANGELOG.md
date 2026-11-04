@@ -14,6 +14,15 @@
 
 ### Added
 
+- **2026-11-04 公共 API 缺口 B 批：Saga 读侧补齐 `GetByStatusAsync`（新增公共 API）**：
+  `ISagaStateStore<TState>` 增 `GetByStatusAsync(SagaStatus status, int maxCount, CancellationToken ct = default)`，
+  四栈实现（InMemory / EFCore `SagaStateDbContext` / Dapper / PalORM）语义统一为
+  `WHERE status = @status ORDER BY saga_id LIMIT @maxCount`（ULID 字典序=创建序，跨栈结果可比），走既有 `(status)` 索引。
+  补齐的背景：原有读方法只覆盖「活跃 + 等待人工决策」两态，其余四态无法从抽象层列举，运维只能连库写裸 SQL——
+  这打穿了「三栈语义对齐」承诺。**HITL 运营待办查询的正确入口即本方法 + `SagaStatus.AwaitingHumanDecision`。**
+  未定义为默认接口实现（DIM）：DIM 返回空列表会让未更新的自定义存储静默给出「查无此状态」，正是本轮要消灭的假 API 形态。
+  过滤值本身也校验——传已移除的 `(SagaStatus)4` 抛可行动异常，而非返回空列表让调用方误判「该状态没有数据」。
+
 - **2026-11-04 公共 API 缺口 A 批：消费确认契约（新增公共 API，向后兼容；含一处既有缺陷修复）**：
   ①**`IMessageAck`**（Messaging）：`AcknowledgeAsync` / `RejectAsync(bool requeue)` 把「消费确认」补成订阅契约的一个维度。
   配套 `NoOpMessageAck` 与两条新重载——`SubscribeAsync<T>(Func<TMessage, MessageConsumeContext?, IMessageAck, CancellationToken, ValueTask>)`
@@ -87,6 +96,27 @@
   窗口；ITM-710 实证核心已由 2026-09-19 decision Option A 落地，SafeObserve 四件泛化收益为负保留）。
   ⑤配套：`coverage-baseline.json` 增设 `PalDDD.PalORM.Tests` 键（本地无 Docker 保守初值 0.3311，
   降幅门禁覆盖 16 模块；CI 全量待重录上调）。
+
+### Removed
+
+- **2026-11-04 公共 API 缺口 B 批：删除两处假 API / 死枚举（破坏性，5.0.0 窗口内）**：
+  ①**`ISagaManager.GetInterruptedSagasAsync` 删除**（含 `DefaultSagaManager` 实现、`ISagaManager` 过期 remarks）。
+  三条理由任一成立即够：(a) 类型上无法正确实现——`DefaultSagaManager` 是非泛型类，`ISagaStateStore<TState>` 是泛型接口，
+  非泛型 manager 拿不到 `TState`，只能靠反射（违反零反射约束）；(b) 原保留理由（接口含 internal 成员、外部无法替代实现）
+  已随 v5.0.0 `ISagaManager` 公开化失效；(c) 同需求已有更好的入口。
+  **迁移**：`manager.GetInterruptedSagasAsync(ct)` → `store.GetByStatusAsync(SagaStatus.AwaitingHumanDecision, n, ct)`
+  （`store` 为该 Saga 的具体 `ISagaStateStore<TState>`；原方法恒返空列表，照旧调用等于误判「无人工待办」）。
+  ②**`SagaStatus.DeadLettered` 删除**。语义位置已被 `CompensationFailed` 占据——DeadLetter 是消息中间件术语，
+  Saga 域的对应概念是补偿失败；留着只让每个使用者的 `switch` 多一个必须处理但永不进入的分支。
+  **升级前置检查（必做）**：`SELECT COUNT(*) FROM saga_states WHERE status = 4`——非 0 须先手工修正
+  （补偿失败用 `CompensationFailed=3`）再启动，否则该行水合时 fail-fast。
+  ⚠️ **数值契约**：`SagaStatus` 各成员改为显式编号，`AwaitingHumanDecision` 恒为 `5`、`4` 成为永久空洞（不得复用）。
+  若按「直接删中间成员、隐式重排」处理，`AwaitingHumanDecision` 会变成 4——库里 `status=4` 的存量行会被读成
+  「等待人工决策」、`status=5` 的行变成未定义，且 Dapper SQL 模板里三处硬编码的 `status IN (0, 5)` 同时失配。
+  ③**三栈水合点改用带定义域校验的映射**：Dapper / PalORM 的 `Materialize` 由 `(SagaStatus)row.Status` 改为
+  `SagaStatusGuard.FromPersisted(...)`；EF Core 的 int→enum 物化不做校验，故在四个读边界（`GetActiveSagasAsync` /
+  `GetByStatusAsync` / `GetByIdAsync` / 两条 `Lease*`）加复核。未定义值抛 `InvalidOperationException`，
+  文案含 sagaId、原始值与上述升级 SQL（此前强转会把 4 读成「不是任何已知状态」的实例，终态判定与 switch 全部落空且不报错）。
 
 ## [5.0.0-preview.1] — 2026-10-27
 

@@ -83,6 +83,23 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
     }
 
     /// <inheritdoc />
+    public async ValueTask<IReadOnlyList<TState>> GetByStatusAsync(
+        SagaStatus status, int maxCount, CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        // 过滤值本身也校验：传未定义状态（如已移除的 4）应可见失败，而非返回空列表
+        // 让调用方误以为「该状态没有数据」（批次 B）。
+        SagaStatusGuard.EnsureDefined(status, sagaId: null);
+
+        // 排序键取 saga_id（ULID 字典序=创建序）——四栈统一，跨栈结果可比。
+        await using var cmd = CreateRawCommand();
+        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until, next_check_at FROM saga_states WHERE status = @p0 ORDER BY saga_id LIMIT @p1";
+        AddParam(cmd, "@p0", (int)status);
+        AddParam(cmd, "@p1", maxCount);
+        return await ReadSagasAsync(cmd, ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
         string owner, TimeSpan leaseDuration, int batchSize, CancellationToken ct)
         => LeaseCoreAsync(owner, leaseDuration, batchSize, dueOnly: false, dueNow: null, ct);
@@ -688,7 +705,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         }
 
         state.CurrentState = row.CurrentState;
-        state.Status = (SagaStatus)row.Status;
+        state.Status = SagaStatusGuard.FromPersisted(row.Status, row.SagaId);
         state.Version = row.Version;
         state.CompletedAt = row.CompletedAt;
         state.Error = row.Error;

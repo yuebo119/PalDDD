@@ -197,6 +197,11 @@ public sealed class SagaProcessorTests
         public ValueTask<LifecycleSagaState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
             => ValueTask.FromResult<LifecycleSagaState?>(null);
 
+        // 批次 B：读侧方法，本组用例不消费——空返回即为「该状态无数据」的真实语义。
+        public ValueTask<IReadOnlyList<LifecycleSagaState>> GetByStatusAsync(
+            SagaStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<LifecycleSagaState>>([]);
+
         public ValueTask<int> SaveChangesAsync(LifecycleSagaState state, CancellationToken ct) => new(0);
     }
 
@@ -363,14 +368,14 @@ public sealed class SagaProcessorTests
     /// v5.0 接口公开化编译锁定：外部程序集（测试程序集）可实现 ISagaManager——
     /// 修复前接口含 internal 成员（ExecuteChildSagaNonGenericAsync），程序集外实现
     /// 编译失败（CS0535）。本实现不覆写任何 DIM 默认成员。
+    /// v5.0.0 批次 B：<c>GetInterruptedSagasAsync</c> 已从接口删除（默认实现恒返回空列表，
+    /// 类型上又无法正确实现——非泛型 manager 拿不到 TState），HITL 待办改走
+    /// <c>ISagaStateStore&lt;T&gt;.GetByStatusAsync</c>。
     /// </summary>
     private sealed class ExternalSagaManager : ISagaManager
     {
         public ValueTask ResumeAsync<TDecision>(PalUlid sagaId, TDecision decision, CancellationToken ct)
             where TDecision : notnull => ValueTask.CompletedTask;
-
-        public ValueTask<IReadOnlyList<SagaState>> GetInterruptedSagasAsync(CancellationToken ct)
-            => ValueTask.FromResult<IReadOnlyList<SagaState>>([]);
 
         public ValueTask<TChildState> ExecuteChildSagaAsync<TChildState>(
             Saga<TChildState> childSaga, TChildState childState, object triggerEvent, CancellationToken ct)
@@ -384,10 +389,31 @@ public sealed class SagaProcessorTests
         // 变量声明为接口类型：DIM 默认成员只能经接口引用调用（类形态调用是 CS1061）。
         ISagaManager external = new ExternalSagaManager();
         external.InvalidateInterrupted(PalUlid.New());
-        await using var fence = await external.AcquireInvalidationFenceAsync(PalUlid.New(), CancellationToken.None);
+
+        // 空栅栏 = 直接持得（不阻塞补偿），可立即释放；形态锁定为 IAsyncDisposable。
+        var fence = await external.AcquireInvalidationFenceAsync(PalUlid.New(), CancellationToken.None);
+        await Assert.That(fence).IsAssignableTo<IAsyncDisposable>();
         await fence.DisposeAsync();
-        var interrupted = await external.GetInterruptedSagasAsync(CancellationToken.None);
-        await Assert.That(interrupted.Count).IsEqualTo(0);
+
+        // 批次 B 的迁移路径实证：运营待办查询改由读侧 API 承担（原 GetInterruptedSagasAsync
+        // 恒空 → 误信即误判「无人工待办」）。
+        var store = new InMemorySagaStateStore<LifecycleSagaState>();
+        store.Add(new LifecycleSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "WaitingForHuman",
+            Status = SagaStatus.AwaitingHumanDecision,
+        });
+        store.Add(new LifecycleSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Done",
+            Status = SagaStatus.Completed,
+        });
+
+        var awaiting = await store.GetByStatusAsync(SagaStatus.AwaitingHumanDecision, 10, CancellationToken.None);
+        await Assert.That(awaiting).Count().IsEqualTo(1);
+        await Assert.That(awaiting[0].CurrentState).IsEqualTo("WaitingForHuman");
     }
 }
 
