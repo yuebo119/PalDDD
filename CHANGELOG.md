@@ -161,6 +161,35 @@
   与 `architecture.md:243` 的 Event Sourcing Adapter 外圈定位一致）；ADR 计数 36→37 四处
   （README / README.en / AGENTS.md / pitfalls.md）。
 
+### Tests
+
+- **2026-11-05 批次 A 收尾：消费确认边界补齐与 A6 口径修正**：
+  ①**显式 Commit 路径集成用例**（此前 Not-Tested）：`EnableAutoOffsetStore=false` 且
+  `EnableAutoCommit=false` 时，`AcknowledgeAsync` 与 `RejectAsync(false)` 必须补发显式 `Commit`。
+  用例发两条（Ack 一条、Reject(false) 一条）、重启后断言均不重投——Confluent 在 auto.commit=false 下
+  `Close()` 不提交，重启不重投的唯一解释就是确认动作补发的 Commit。配套 `CreateBroker` 增
+  `enableAutoCommit` 参数；排障期给测试夹具 `CapturingLogger` 补 Warning 文本环形。
+  ②**A6 口径修正（实测）**：方案原文「连续 100 次 Reject 不超 10 秒」与 200ms→5s 退避算术冲突
+  （100 次最小 20 秒）；即便用内部测试缝把退避缩到 20ms→50ms，真容器实测每次迭代约 530-590ms——
+  **主导成本是 Seek 后的 broker 取回往返，不是退避**，10 秒口径在真实 broker 上不可达。改锁三个
+  可证伪性质：100 次有界完成（≤90s）、交付间隔不低于退避下限（快 broker 上退避是真实限速器）、
+  **进程 CPU 增量远小于墙钟**（忙等自旋会把一个核烧满）。测试缝为
+  `KafkaBroker.SeekBackoffInitialMs`/`SeekBackoffMaxMs`（internal + IVT，须订阅前设置，生产行为不变）。
+  变异验证：把退避等待与 poll 超时同时变异成热循环后，CPU 断言精确转红（CPU 48.9s ≈ 墙钟 55.1s），
+  恢复后 Messaging 集成 34/34 绿。
+- **2026-11-05 测试基建勘正**：批次 C 的 saga 水合测试曾用
+  `session.ExecuteAsync($"... saga_id = '{id}'")` 改写存量行，语句无报错但 0 行生效——根因见下方
+  Documentation 的 PALORM-RT6，测试改用 store 自身写入并留注释防复发。
+
+### Documentation
+
+- **2026-11-05 pitfalls 增 PALORM-RT6（第十章 17 条，全文 88 条）**：
+  `ExecuteAsync($"... id = '{value}'")` 无报错但 0 行生效——`FormattableSqlFormatter.Format`
+  只参数化**引号字面量之外**的格式项，引号内的 `{0}` 逐字保留，SQL 实际匹配 `'{0}'`；
+  反编译 PalORM.Core 6.8.0 实证。规避：值洞不包引号（即参数化为 `@pN`），或走
+  `GetRawConnection()` + 手动 `DbCommand`；同族陷阱：整句 SQL 写进单个洞会整句退化为参数值
+  （DDL 静默不执行）。`MultiDialectFixture.ApplySchemaAsync` 注释同步勘正。
+
 ## [5.0.0-preview.1] — 2026-10-27
 
 > **预发布说明（2026-10-27 用户裁决）**：本段内容为 5.0.0 正式版的预览发布（`5.0.0-preview.1`，workflow_dispatch 预览通道）。.NET 11 GA（2026-11）轮把 `VersionSuffix` 清空后，**同内容**以 5.0.0 正式版转正发布；预览期收集的消费者反馈并入 GA 轮修订。SemVer 判据与兼容性承诺与 5.0.0 一致（预发布标签已明示破坏窗口）。上方 `[Unreleased]` 的 2026-10-27 清零轮条目为预览之后的变更，随 GA 后的下一版本发布。

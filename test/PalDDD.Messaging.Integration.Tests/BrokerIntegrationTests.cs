@@ -284,7 +284,10 @@ internal sealed class CapturingLogger<T> : IPalLogger<T>
     // 三十轮重设计：诊断黑盒修复——原实现只计数不记文本，Kafka 消费循环失败时
     // 测试只能报裸 TimeoutException，无法区分"broker 断连/join 卡死/业务异常"。
     // 环形保留最近 5 条错误全文，失败时随断言输出。
+    // 2026-11-05 增 Warning 文本环形（批次 A 显式 Commit 路径排障）：Commit 失败走
+    // broker 的 Warning 安全包装，只有计数无文本时无法定位根因。
     private readonly Queue<string> _recentErrors = new();
+    private readonly Queue<string> _recentWarnings = new();
     private readonly Lock _lock = new();
 
     public string RecentErrorsSummary
@@ -295,9 +298,25 @@ internal sealed class CapturingLogger<T> : IPalLogger<T>
         }
     }
 
+    public string RecentWarningsSummary
+    {
+        get
+        {
+            lock (_lock) return _recentWarnings.Count == 0 ? "（无）" : string.Join(" | ", _recentWarnings);
+        }
+    }
+
     public void Debug(string message) { }
     public void Information(string message) { }
-    public void Warning(string message) => Interlocked.Increment(ref WarningCount);
+    public void Warning(string message)
+    {
+        Interlocked.Increment(ref WarningCount);
+        lock (_lock)
+        {
+            _recentWarnings.Enqueue(message);
+            while (_recentWarnings.Count > 5) _recentWarnings.Dequeue();
+        }
+    }
     public void Error(Exception ex, string message)
     {
         Interlocked.Increment(ref ErrorCount);

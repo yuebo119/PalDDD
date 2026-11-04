@@ -597,9 +597,11 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                                 offsetTracker.Reset(command.Offset.TopicPartition);
                                 consumer.Seek(command.Offset);
                                 consecutiveSeeks = Math.Min(consecutiveSeeks + 1, MaxSeekBackoffShift);
+                                // 测试缝取值（SeekBackoffInitialMs/MaxMs）须在 SubscribeAsync 之前设置；
+                                // 此处做下限钳制防 0/负值把退避变紧循环。
                                 var backoffMs = Math.Min(
-                                    InitialSeekBackoffMilliseconds << (consecutiveSeeks - 1),
-                                    MaxSeekBackoffMilliseconds);
+                                    Math.Max(SeekBackoffInitialMs, 1) << (consecutiveSeeks - 1),
+                                    Math.Max(SeekBackoffMaxMs, 1));
                                 backoffUntilTimestamp = Stopwatch.GetTimestamp()
                                     + (backoffMs * Stopwatch.Frequency / 1000);
                                 _logger.Warning(
@@ -822,14 +824,28 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
     /// <summary>消费线程的 poll 超时（毫秒）——决定确认命令的最坏生效延迟，不决定消息到达延迟。</summary>
     private const int PollIntervalMilliseconds = 100;
 
-    /// <summary>首次 Seek 重投的退避下限（毫秒）。</summary>
+    /// <summary>首次 Seek 重投的退避下限（毫秒）——默认值，可被 <see cref="SeekBackoffInitialMs"/> 覆写。</summary>
     private const int InitialSeekBackoffMilliseconds = 200;
 
-    /// <summary>Seek 重投退避上限（毫秒）——有进展即复位，避免毒消息把消费打满。</summary>
+    /// <summary>Seek 重投退避上限（毫秒）——有进展即复位，避免毒消息把消费打满；默认值，可被 <see cref="SeekBackoffMaxMs"/> 覆写。</summary>
     private const int MaxSeekBackoffMilliseconds = 5000;
 
     /// <summary>退避指数的位移上限（200ms&lt;&lt;5 = 6400ms 被上限截到 5000ms）。</summary>
     private const int MaxSeekBackoffShift = 6;
+
+    /// <summary>
+    /// Seek 退避初始毫秒（内部测试缝，对齐 internal ctor / <c>ApplyIdempotenceDefault</c> 先例）。
+    /// </summary>
+    /// <remarks>
+    /// 仅 <c>PalDDD.Messaging.Integration.Tests</c>（IVT）可触达；<b>必须在 <c>SubscribeAsync</c> 之前设置</b>
+    /// （消费线程在循环内读取，订阅后改写不生效）。存在的唯一理由：方案 A6 的验收口径
+    /// 「连续 100 次 Reject 不超 10 秒」在默认退避（200ms 起、5s 上限）下算术不可达
+    /// （100 次最小 20 秒）——测试用缩短的退避验证有界性与无紧循环，生产行为不变。
+    /// </remarks>
+    internal int SeekBackoffInitialMs { get; set; } = InitialSeekBackoffMilliseconds;
+
+    /// <summary>Seek 退避上限毫秒（内部测试缝，语义同 <see cref="SeekBackoffInitialMs"/>）。</summary>
+    internal int SeekBackoffMaxMs { get; set; } = MaxSeekBackoffMilliseconds;
 
     /// <summary>确认命令种类——决定消费线程上执行的 broker 调用。</summary>
     private enum AckKind

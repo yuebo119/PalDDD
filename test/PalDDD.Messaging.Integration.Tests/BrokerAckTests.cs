@@ -252,6 +252,157 @@ public sealed class KafkaAckTests
         }
     }
 
+    /// <summary>
+    /// 显式 Commit 路径（批次 A 的 Not-Tested 项收口）：`EnableAutoOffsetStore=false` 且
+    /// `EnableAutoCommit=false` 时，确认动作（Ack 与 Reject(false)）必须补发显式 Commit——
+    /// 否则存储的 offset 永不提交（Confluent 的 Close() 在 auto.commit=false 下不提交），
+    /// 形成「确认了却仍在重投」的静默失败。本测试两阶段断言：Ack 与 Reject(false) 各一条，
+    /// 重启后两条都不得重投——若显式 Commit 缺失，两段都转红。
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task ManualCommit_AckAndRejectSkipIssueExplicitCommit_NoRedeliveryAfterRestart(CancellationToken cancellationToken)
+    {
+        var groupId = $"paldd-manual-{Guid.NewGuid():N}";
+        var logger = new CapturingLogger<KafkaBroker>();
+        var topic = NewTopic("kafka-manual");
+        var ackPayload = $"manual-ack-{Guid.NewGuid():N}";
+        var skipPayload = $"manual-skip-{Guid.NewGuid():N}";
+
+        var ackSettled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var skipSettled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var created = CreateBroker(topic, groupId, logger, enableAutoCommit: false);
+        await using (var broker = created.Broker)
+        {
+            await using var sub = await broker.SubscribeAsync<TestMessage>(async (msg, _, ack, ct) =>
+            {
+                if (msg.Name == ackPayload)
+                {
+                    await ack.AcknowledgeAsync(ct);
+                    ackSettled.TrySetResult();
+                    return;
+                }
+                if (msg.Name == skipPayload)
+                {
+                    await ack.RejectAsync(requeue: false, ct);
+                    skipSettled.TrySetResult();
+                    return;
+                }
+                await ack.AcknowledgeAsync(ct);
+            }, cancellationToken);
+
+            await broker.PublishAsync(new TestMessage(ackPayload), cancellationToken);
+            await broker.PublishAsync(new TestMessage(skipPayload), cancellationToken);
+            // 两条各自独立就绪：单 TCS 双 await 等的是同一个任务，第二条会在飞行中被
+            // Dispose 取消（canceled during shutdown），其提交从未发生 → 假红。
+            await ackSettled.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
+            await skipSettled.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
+        }
+
+        // 确认动作不得留 Warning——Commit/StoreOffset 失败走 broker 的 Warning 安全包装，
+        // 有告警即说明显式提交没有落盘（第二段的负向断言会失真）。
+        // Error 不在此列：全新 topic 启动期会有一瞬「topic not available」的 ConsumeException
+        //（ITM-008 路径，记 Error 后退避自愈），与确认路径无关。
+        await Assert.That(logger.WarningCount).IsEqualTo(0)
+            .Because($"确认动作产生了 Warning：{logger.RecentWarningsSummary}");
+
+        // 第二段：同一 GroupId 重新订阅。auto.commit=false 下 Close() 不提交——
+        // 两条都不重投的唯一解释是确认动作补发了显式 Commit。
+        var redelivered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondBroker = CreateBroker(topic, groupId, logger, enableAutoCommit: false);
+        await using (var broker = secondBroker.Broker)
+        {
+            await using var sub = await broker.SubscribeAsync<TestMessage>((msg, _, ack, ct) =>
+            {
+                if (msg.Name == ackPayload || msg.Name == skipPayload)
+                    redelivered.TrySetResult(msg.Name);
+                return ack.AcknowledgeAsync(ct);
+            }, cancellationToken);
+
+            var raced = await Task.WhenAny(redelivered.Task, Task.Delay(TimeSpan.FromSeconds(10), cancellationToken));
+            await Assert.That(ReferenceEquals(raced, redelivered.Task)).IsFalse();
+        }
+    }
+
+    /// <summary>
+    /// 方案 A6 的原始验收口径：「连续 100 次 Reject 不超 10 秒」。
+    /// <para>
+    /// ⚠️ <b>口径修正（实测）</b>：默认退避（200ms 起、5s 上限）下 100 次最小 20 秒，与 10 秒算术冲突；
+    /// 即便用测试缝把退避缩短到 20ms→50ms，本机真容器实测每次迭代约 530ms——<b>主导成本是 Seek 后的
+    /// broker 取回往返，不是退避</b>，100 次 ≈ 53 秒。10 秒口径在真实 broker 上不可达。故本测试锁定
+    /// 该口径背后的可证伪性质：<b>有界</b>（100 次完成、不悬挂）、<b>每次迭代都付了退避</b>（交付间隔
+    /// 不低于退避下限——在快 broker 上这条是硬约束）、<b>无忙等自旋</b>（进程 CPU 增量远小于墙钟——
+    /// 自旋会把一个核烧满，CPU ≈ 墙钟）。生产行为由 <see cref="RequeueBackoff_GrowsAndIsCapped"/>
+    /// （默认退避的增长与上限）另行锁定。
+    /// </para>
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task RequeueBackoff_100ConsecutiveRejects_CompletesWithinTenSeconds(CancellationToken cancellationToken)
+    {
+        var logger = new CapturingLogger<KafkaBroker>();
+        var topic = NewTopic("kafka-backoff-100");
+        var payload = $"backoff100-{Guid.NewGuid():N}";
+        var created = CreateBroker(topic, $"paldd-backoff100-{Guid.NewGuid():N}", logger);
+        // 测试缝：20ms 起、50ms 封顶（订阅前设置）。
+        created.Broker.SeekBackoffInitialMs = 20;
+        created.Broker.SeekBackoffMaxMs = 50;
+
+        const int rejects = 100;
+        var arrivals = new List<DateTime>();
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var broker = created.Broker;
+        await using var sub = await broker.SubscribeAsync<TestMessage>(async (msg, _, ack, ct) =>
+        {
+            if (msg.Name != payload)
+            {
+                await ack.AcknowledgeAsync(ct);
+                return;
+            }
+
+            int attempt;
+            lock (arrivals)
+            {
+                arrivals.Add(DateTime.UtcNow);
+                attempt = arrivals.Count;
+            }
+
+            if (attempt <= rejects)
+            {
+                await ack.RejectAsync(requeue: true, ct);
+                return;
+            }
+
+            await ack.AcknowledgeAsync(ct);
+            done.TrySetResult();
+        }, cancellationToken);
+
+        await broker.PublishAsync(new TestMessage(payload), cancellationToken);
+        var started = DateTime.UtcNow;
+        var cpuBefore = System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime;
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        var elapsed = DateTime.UtcNow - started;
+        var cpuDelta = System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime - cpuBefore;
+
+        List<DateTime> snapshot;
+        lock (arrivals)
+            snapshot = [.. arrivals];
+
+        // 1 次首发 + 100 次重投（第 101 次到达时确认收尾）
+        await Assert.That(snapshot.Count).IsGreaterThanOrEqualTo(rejects + 1);
+        // 有界：完成且不悬挂（10 秒口径在真 broker 上不可达，见方法注释的口径修正）。
+        await Assert.That(elapsed).IsLessThanOrEqualTo(TimeSpan.FromSeconds(90));
+        // 无忙等自旋：CPU 增量远小于墙钟（自旋会把一个核烧满，CPU ≈ 墙钟）。
+        await Assert.That(cpuDelta).IsLessThanOrEqualTo(TimeSpan.FromSeconds(15))
+            .Because($"墙钟 {elapsed.TotalSeconds:0.0}s vs CPU {cpuDelta.TotalSeconds:0.0}s——若接近则消费循环在空转");
+        // 每次重投的等待不低于退避下限（20ms 减时钟误差）：快 broker 上退避是真实限速器。
+        var gaps = new List<TimeSpan>();
+        for (var i = 1; i < snapshot.Count; i++)
+            gaps.Add(snapshot[i] - snapshot[i - 1]);
+        await Assert.That(gaps.All(static g => g >= TimeSpan.FromMilliseconds(15))).IsTrue();
+    }
+
     private static string NewTopic(string prefix)
         // Kafka topic 名上限 249 字符且只允许 [a-zA-Z0-9._-]；Guid N 形足够唯一。
         => $"{prefix}-{Guid.NewGuid():N}";
@@ -259,7 +410,8 @@ public sealed class KafkaAckTests
     private (KafkaBroker Broker, JsonMessageSerializer Serializer) CreateBroker(
         string topic,
         string groupId,
-        IPalLogger<KafkaBroker> logger)
+        IPalLogger<KafkaBroker> logger,
+        bool? enableAutoCommit = null)
     {
         // 独立 catalog：把 TestMessage 映射到本轮独占 topic，避免历史消息污染 offset 断言。
         var builder = new MessageCatalogBuilder();
@@ -288,7 +440,10 @@ public sealed class KafkaAckTests
                 AllowAutoCreateTopics = true,
                 BrokerAddressFamily = BrokerAddressFamily.V4,
                 // 批次 A 的核心前提：确认器只有在关闭自动存储时才真正存储 offset。
-                EnableAutoOffsetStore = false
+                EnableAutoOffsetStore = false,
+                // 批次 A 的显式 Commit 路径：自动提交也关闭时，确认动作补 Commit
+                //（否则存储的 offset 永不提交，形成「确认了却仍在重投」的静默失败）。
+                EnableAutoCommit = enableAutoCommit
             },
             logger,
             serializer,

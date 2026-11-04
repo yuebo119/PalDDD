@@ -210,7 +210,9 @@ public static class MultiDialectFixture
 
     /// <summary>
     /// 逐条执行建表 DDL。internal 供 PalOrmStoreFixture 复用（ITM-259 单一真源收敛）——
-    /// 不能走 ExecuteAsync($"...")：PalORM 会把插值参数化为 @pN，整句 DDL 会退化为单参数。
+    /// 不能走 <c>ExecuteAsync</c>：插值洞只有写在引号字面量**之外**才会参数化为 @pN；
+    /// 整句 DDL 写进单个洞（<c>ExecuteAsync($"{ddl}")</c>）会整句退化为参数值、静默不执行。
+    /// 机制与规避见 pitfalls PALORM-RT6（反编译 PalORM.Core 6.8.0 FormattableSqlFormatter 实证）。
     /// </summary>
     internal static async Task ApplySchemaAsync<TProvider>(DataSession<TProvider> session, string[] ddls, CancellationToken ct)
         where TProvider : IDbProvider

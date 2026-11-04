@@ -33,7 +33,7 @@ public class PalOrmSagaStateStoreTests
 
     /// <summary>
     /// 批次 B（2026-11-04）读侧补齐：按状态列举——状态隔离、maxCount 生效、saga_id 排序，
-    /// 以及未定义状态值的水合 fail-fast（存量 DeadLettered 行只能经裸 SQL 构造）。
+    /// 以及未定义状态值的水合 fail-fast（存量 DeadLettered 行只能经 store 写入构造）。
     /// </summary>
     [Test]
     public async Task GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndRejectsUnknownPersistedStatus()
@@ -79,6 +79,9 @@ public class PalOrmSagaStateStoreTests
 
         // 存量 DeadLettered 行（status=4）：用 store 自身写入 4（枚举成员已移除，只能强转），
         // 再读回——水合必须可见失败，不得静默读成非法枚举实例。
+        // ⚠️ 不用 session.ExecuteAsync($"UPDATE ... saga_id = '{id}'")：引号字面量内的插值洞
+        // 不参数化（FormattableSqlFormatter 逐字保留 {0}），UPDATE 匹配 0 行且无报错——
+        // 静默 no-op 曾让本测试假红（找不到根因时误判为"语句未生效"）。见 pitfalls PALORM-RT6。
         failed.Status = (SagaStatus)4;
         await store.SaveChangesAsync(failed, default);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
