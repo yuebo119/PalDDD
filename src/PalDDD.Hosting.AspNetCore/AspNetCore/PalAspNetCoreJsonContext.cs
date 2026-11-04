@@ -7,6 +7,7 @@ namespace PalDDD.Hosting.AspNetCore;
 [JsonSerializable(typeof(ValidationProblemResponse))]
 [JsonSerializable(typeof(HandlerNotFoundProblemResponse))]
 [JsonSerializable(typeof(InternalServerErrorProblemResponse))]
+[JsonSerializable(typeof(GatewayTimeoutProblemResponse))]
 internal sealed partial class PalAspNetCoreJsonContext : JsonSerializerContext;
 
 internal sealed record PalHealthResponse(
@@ -37,6 +38,11 @@ internal sealed record HandlerNotFoundProblemResponse(
     string Detail);
 
 internal sealed record InternalServerErrorProblemResponse(
+    string Type,
+    string Title,
+    int Status);
+
+internal sealed record GatewayTimeoutProblemResponse(
     string Type,
     string Title,
     int Status);

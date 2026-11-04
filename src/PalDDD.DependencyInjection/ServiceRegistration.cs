@@ -91,6 +91,7 @@ public static class ServiceRegistration
     /// <para><b>互斥语义</b>：与闭合注册版先到先得——服务集合已存在开放泛型 <c>IPipelineBehavior&lt;,&gt;</c>
     /// 注册（本方法重复调用）或闭合注册（AddPalCommandHandler/AddPalQueryHandler 自动注册）时本方法跳过，
     /// 避免两种注册叠加导致 behavior 重复执行（验证/日志各跑两次）。
+    /// 超时行为（<see cref="AddPalTimeoutBehavior(IServiceCollection, TimeSpan)"/>）不计入此互斥判定。
     /// v25 P3 勘正族 C10：闭合注册的匹配范围是<b>任意</b> <c>IPipelineBehavior&lt;,&gt;</c> 闭合注册——
     /// 含用户自定义 behavior，不仅限内置 Validation/Logging；用户先注册任意闭合 behavior 即抑制
     /// 内置 Validation/Logging 开放注册（先到先得）。匹配行为保持不变，仅显式声明。</para>
@@ -140,7 +141,8 @@ public static class ServiceRegistration
     /// <see cref="AddPalQueryHandler{TQuery, TResponse, THandler}"/>（内部自动调用本方法闭合注册），
     /// 或为每个命令/查询显式调用本方法。</para>
     /// <para><b>互斥语义</b>：与开放版先到先得——服务集合已存在开放泛型 <c>IPipelineBehavior&lt;,&gt;</c>
-    /// 注册（旧代码显式调用开放版）时本方法跳过，避免两种注册叠加导致 behavior 重复执行。</para>
+    /// 注册（旧代码显式调用开放版）时本方法跳过，避免两种注册叠加导致 behavior 重复执行。
+    /// 超时行为注册不计入此互斥判定。</para>
     /// </remarks>
     /// <typeparam name="TRequest">请求类型</typeparam>
     /// <typeparam name="TResponse">响应类型（值类型如 Unit 也可，AOT 安全）</typeparam>
@@ -159,6 +161,66 @@ public static class ServiceRegistration
         return services;
     }
 
+    /// <summary>添加请求级超时行为 — 开放泛型注册（仅 JIT / 非 Native AOT 场景）</summary>
+    /// <remarks>
+    /// 超时只放弃等待，不中断 handler（管道 next 委托不接收 CancellationToken）；
+    /// 调用方取消仍按 <see cref="OperationCanceledException"/> 原样透传，只有超时转
+    /// <see cref="TimeoutException"/>。默认不注册——超时预算是业务决策，框架不选默认值。
+    /// <para><b>与验证/日志正交</b>：本方法不注册也不抑制 <see cref="AddPalPipelineBehaviors(IServiceCollection)"/>；
+    /// 互斥检测显式排除本行为（<see cref="IsTimeoutBehavior"/>），两种注册可任意顺序组合。</para>
+    /// <para><b>重复调用</b>：超时值后注册覆盖先注册（单例 options 取最后一个）；行为本体按
+    /// 「开放/闭合任一形态已存在」去重，不会叠加执行两次。</para>
+    /// <para>⚠️ <b>Native AOT 限制</b>：开放泛型注册在 AOT 下对值类型响应抛
+    /// <c>AotCannotCreateGenericValueType</c>。AOT 场景请用闭合版
+    /// <c>AddPalTimeoutBehavior&lt;TRequest, TResponse&gt;(...)</c>。</para>
+    /// </remarks>
+    /// <param name="services">服务集合</param>
+    /// <param name="timeout">请求级超时预算，必须大于 <see cref="TimeSpan.Zero"/></param>
+    public static IServiceCollection AddPalTimeoutBehavior(this IServiceCollection services, TimeSpan timeout)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout), timeout, "Timeout must be greater than zero.");
+
+        ThrowIfAotNotSupported();
+
+        if (!services.Any(IsTimeoutBehavior))
+            services.AddScoped(typeof(CQRS.IPipelineBehavior<,>), typeof(CQRS.TimeoutBehavior<,>));
+
+        // options 每次调用都写入（后注册覆盖），与行为去重分离：改超时值不必先移除行为注册
+        services.AddSingleton(new CQRS.PalTimeoutBehaviorOptions(timeout));
+        return services;
+    }
+
+    /// <summary>添加请求级超时行为 — 闭合泛型注册（Native AOT 安全，值类型响应可用）</summary>
+    /// <remarks>
+    /// 与开放版的区别仅限注册形态；超时语义、取消分流、去重规则完全相同。
+    /// <para><b>先到先得</b>：服务集合已有开放泛型超时注册时本方法跳过行为注册（options 仍更新），
+    /// 避免开放 + 闭合叠加导致超时行为执行两次。</para>
+    /// </remarks>
+    /// <typeparam name="TRequest">请求类型</typeparam>
+    /// <typeparam name="TResponse">响应类型（值类型如 Unit 也可，AOT 安全）</typeparam>
+    /// <param name="services">服务集合</param>
+    /// <param name="timeout">请求级超时预算，必须大于 <see cref="TimeSpan.Zero"/></param>
+    public static IServiceCollection AddPalTimeoutBehavior<TRequest, TResponse>(
+        this IServiceCollection services, TimeSpan timeout)
+        where TRequest : CQRS.IRequest<TResponse>
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout), timeout, "Timeout must be greater than zero.");
+
+        services.AddSingleton(new CQRS.PalTimeoutBehaviorOptions(timeout));
+
+        // 已存在开放泛型超时注册时跳过闭合注册（开放解析已覆盖本请求类型）
+        if (services.Any(sd => sd.ServiceType == typeof(CQRS.IPipelineBehavior<,>) && IsTimeoutBehavior(sd)))
+            return services;
+
+        services.TryAddEnumerable(
+            ServiceDescriptor.Scoped<CQRS.IPipelineBehavior<TRequest, TResponse>, CQRS.TimeoutBehavior<TRequest, TResponse>>());
+        return services;
+    }
+
     /// <summary>
     /// 管道行为的最小日志依赖：<c>AddLogging</c>（提供 <c>ILogger&lt;T&gt;</c>，无 Provider 时零输出）
     /// + <see cref="IPalLogger{T}"/> 门面。与 <see cref="AddPalLogging(IServiceCollection)"/> 的 Provider 配置正交；
@@ -173,14 +235,25 @@ public static class ServiceRegistration
     }
 
     /// <summary>是否已注册开放泛型管道行为（<c>IPipelineBehavior&lt;,&gt;</c> 开放定义）</summary>
+    /// <remarks>
+    /// 超时行为被排除：它是可选的独立横切件，既不应抑制验证/日志，也不应被它们抑制
+    /// （与「用户自定义行为先到先得」不同——那类行为与内置验证/日志存在职责重叠，
+    /// 超时与二者正交）。
+    /// </remarks>
     private static bool HasOpenGenericPipelineBehaviors(IServiceCollection services)
-        => services.Any(sd => sd.ServiceType == typeof(CQRS.IPipelineBehavior<,>));
+        => services.Any(sd => sd.ServiceType == typeof(CQRS.IPipelineBehavior<,>) && !IsTimeoutBehavior(sd));
 
     /// <summary>是否已注册任何闭合管道行为（<c>IPipelineBehavior&lt;,&gt;</c> 闭合实例，排除开放泛型定义）</summary>
     private static bool HasClosedGenericPipelineBehaviors(IServiceCollection services)
         => services.Any(sd => sd.ServiceType.IsGenericType
                               && !sd.ServiceType.IsGenericTypeDefinition
-                              && sd.ServiceType.GetGenericTypeDefinition() == typeof(CQRS.IPipelineBehavior<,>));
+                              && sd.ServiceType.GetGenericTypeDefinition() == typeof(CQRS.IPipelineBehavior<,>)
+                              && !IsTimeoutBehavior(sd));
+
+    /// <summary>是否为超时行为注册（开放定义或任一闭合实例）</summary>
+    private static bool IsTimeoutBehavior(ServiceDescriptor sd)
+        => sd.ImplementationType is { IsGenericType: true } type
+           && type.GetGenericTypeDefinition() == typeof(CQRS.TimeoutBehavior<,>);
 
     /// <summary>Native AOT 检测 — 开放泛型注册在 AOT 下对值类型响应不可用，提前给出清晰错误。</summary>
     /// <exception cref="NotSupportedException">Native AOT 发布时抛出，提示使用闭合注册。</exception>

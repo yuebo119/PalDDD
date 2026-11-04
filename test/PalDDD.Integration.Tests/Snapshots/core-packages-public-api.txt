@@ -271,6 +271,7 @@ interface PalDDD.Core.Repository.IUnitOfWork
   method System.Threading.Tasks.ValueTask RollbackAsync(System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
 static class PalDDD.Core.Repository.UnitOfWorkExtensions
+  method System.Threading.Tasks.ValueTask<T> ExecuteInTransactionAsync(PalDDD.Core.Repository.IUnitOfWork uow, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<T>> work, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ExecuteInTransactionAsync(PalDDD.Core.Repository.IUnitOfWork uow, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> work, System.Threading.CancellationToken ct)
 struct PalDDD.Core.RowVersion
   ctor(System.Int32 Value)
@@ -703,6 +704,8 @@ static class PalDDD.DependencyInjection.ServiceRegistration
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalPipelineBehaviors(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalQueryHandler(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalStreamQueryHandler(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalTimeoutBehavior(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.TimeSpan timeout)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalTimeoutBehavior(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.TimeSpan timeout)
 
 # PalDDD.EventLog
 struct PalDDD.EventLog.AppendEventsResult
