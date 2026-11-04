@@ -21,6 +21,30 @@ public sealed class InMemoryInboxStore : IInboxStore, IBatchInboxStore
     private readonly Lock _lock = new();
     private readonly Dictionary<(string ConsumerName, string MessageId), InboxMessage> _records = [];
 
+    /// <summary>
+    /// 按状态列举（批次 C，2026-11-04）——读侧补齐，供运维查询失败/滞留列表。
+    /// </summary>
+    /// <remarks>
+    /// 全量扫 <c>_records</c> 后按 id 排序截断（字典值无序，故显式排序）。本方法是
+    /// 纯观测入口，不参与认领/标记路径。
+    /// </remarks>
+    public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+        InboxStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        StatusFilterGuard.EnsureDefined(status, nameof(InboxStatus));
+        ct.ThrowIfCancellationRequested();
+
+        lock (_lock)
+            return ValueTask.FromResult<IReadOnlyList<InboxMessage>>(
+                _records.Values.Where(m => m.Status == status)
+                    .OrderBy(static m => m.Id)
+                    .Take(maxCount)
+                    .ToList());
+    }
+
     /// <inheritdoc/>
     public ValueTask<InboxMessage?> TryStartProcessingAsync(
         string consumerName,

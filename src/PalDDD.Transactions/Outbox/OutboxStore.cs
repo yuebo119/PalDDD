@@ -33,6 +33,30 @@ public interface IPalOutboxStore
         int maxRetryCount,
         CancellationToken ct);
 
+    /// <summary>
+    /// 按状态列举发件箱消息（批次 C，2026-11-04）——读侧补齐，供运维查询（死信清单、
+    /// 投递积压）与诊断。此前框架写入的状态只能靠连库写裸 SQL 查，Dapper/PalORM 栈
+    /// 尤其没有入口（三栈语义对齐承诺在此处断裂）。
+    /// </summary>
+    /// <param name="status">目标状态（<see cref="OutboxStatus.Pending"/> /
+    /// <see cref="OutboxStatus.Processed"/> / <see cref="OutboxStatus.Dead"/>）。
+    /// 必须是已定义值——传未定义值抛 <see cref="ArgumentOutOfRangeException"/>。</param>
+    /// <param name="maxCount">最多返回条数（正数）。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <remarks>
+    /// <para>
+    /// 四栈语义统一为 <c>WHERE status = @status ORDER BY id LIMIT @maxCount</c>，
+    /// 返回该状态下 id 最小的前 <paramref name="maxCount"/> 条（Outbox 主键 id 为 ULID，
+    /// 字典序即创建序）。走既有 <c>(status)</c> 索引。
+    /// </para>
+    /// <para><b>为什么不给默认实现</b>：DIM 返回空列表会让未更新的自定义存储静默给出
+    /// 「查无此状态」，与本轮要消灭的假 API 形态相同。自定义实现必须显式提供。</para>
+    /// </remarks>
+    ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+        OutboxStatus status,
+        int maxCount,
+        CancellationToken ct = default);
+
     /// <summary>原子租约获取待处理消息，避免多实例重复发布。</summary>
     ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
         int batchSize,

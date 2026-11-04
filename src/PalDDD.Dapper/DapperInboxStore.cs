@@ -63,6 +63,26 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         _transaction = transaction;
     }
 
+    /// <summary>
+    /// 按状态列举（批次 C，2026-11-04）——读侧补齐，供运维查询失败/滞留列表。
+    /// </summary>
+    /// <remarks>观测语义：不认领、不改状态、不加租约。</remarks>
+    public async ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+        InboxStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        StatusFilterGuard.EnsureDefined(status, nameof(InboxStatus));
+
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var rows = await conn.QueryAsync<InboxMessage>(
+                SqlTemplates.InboxSelectByStatus,
+                new { status = (int)status, n = maxCount },
+                _transaction).ConfigureAwait(false);
+        return rows.AsList();
+    }
+
     public async ValueTask<InboxMessage?> TryStartProcessingAsync(
         string consumerName, string messageId, DateTimeOffset now,
         TimeSpan processingTimeout, CancellationToken ct)

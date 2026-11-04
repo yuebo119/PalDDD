@@ -535,6 +535,45 @@ public sealed class InboxEfCoreTests
         }
     }
 
+    /// <summary>
+    /// 批次 C（2026-11-04）读侧补齐：按状态列举——状态隔离、maxCount 生效、自增 id 排序。
+    /// </summary>
+    [Test]
+    public async Task GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndOrdersById(CancellationToken cancellationToken)
+    {
+        await using var db = new TestInboxDbContext(CreateOptions());
+        var store = (IInboxStore)db;
+        var now = DateTimeOffset.UtcNow;
+
+        // 认领构造：TryStartProcessingAsync 创建的行即为 Processing
+        var first = await store.TryStartProcessingAsync("orders", "message-1", now, TimeSpan.FromMinutes(5), cancellationToken);
+        var second = await store.TryStartProcessingAsync("orders", "message-2", now, TimeSpan.FromMinutes(5), cancellationToken);
+        var failed = await store.TryStartProcessingAsync("orders", "message-3", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await store.MarkProcessedAsync(first!, now.AddSeconds(1), cancellationToken);
+        await store.MarkFailedAsync(failed!, "seeded failure", cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var failedRows = await store.GetByStatusAsync(InboxStatus.Failed, 10, cancellationToken);
+        await Assert.That(failedRows).Count().IsEqualTo(1);
+        await Assert.That(failedRows[0].MessageId).IsEqualTo("message-3");
+
+        var processedRows = await store.GetByStatusAsync(InboxStatus.Processed, 10, cancellationToken);
+        await Assert.That(processedRows).Count().IsEqualTo(1);
+        await Assert.That(processedRows[0].MessageId).IsEqualTo("message-1");
+
+        var processingRows = await store.GetByStatusAsync(InboxStatus.Processing, 10, cancellationToken);
+        await Assert.That(processingRows).Count().IsEqualTo(1);
+        await Assert.That(processingRows[0].MessageId).IsEqualTo("message-2");
+
+        // maxCount 生效且按 id 升序（自增 = 插入序）
+        var capped = await store.GetByStatusAsync(InboxStatus.Processing, 1, cancellationToken);
+        await Assert.That(capped).Count().IsEqualTo(1);
+
+        // 未定义状态过滤值可见失败
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => store.GetByStatusAsync((InboxStatus)99, 10, cancellationToken).AsTask());
+    }
+
     private static DbContextOptions<TestInboxDbContext> CreateOptions()
         => new DbContextOptionsBuilder<TestInboxDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))

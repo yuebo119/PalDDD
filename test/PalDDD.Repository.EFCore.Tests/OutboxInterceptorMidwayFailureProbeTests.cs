@@ -193,6 +193,11 @@ public sealed class OutboxInterceptorMidwayFailureProbeTests
         public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
 
+        // 批次 C 读侧方法：探针替身只承载注入中的消息，无状态可查——返回空即实况。
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
+
         public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
 

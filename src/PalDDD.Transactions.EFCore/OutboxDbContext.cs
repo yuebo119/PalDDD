@@ -120,6 +120,25 @@ public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOu
     }
 
     /// <inheritdoc/>
+    public virtual async ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+        OutboxStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        StatusFilterGuard.EnsureDefined(status, nameof(OutboxStatus));
+
+        // 批次 C（2026-11-04）：读侧补齐。AsNoTracking 与 GetPendingMessagesAsync 同口径——
+        // 纯观测契约，突变不进 ChangeTracker（违反契约的突变将静默丢失）。
+        return await OutboxMessages
+            .AsNoTracking()
+            .Where(m => m.Status == status)
+            .OrderBy(m => m.Id)
+            .Take(maxCount)
+            .ToListAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
     public abstract ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
         int batchSize,
         string owner,

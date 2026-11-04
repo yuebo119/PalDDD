@@ -480,6 +480,12 @@ public sealed class OutboxBatchProcessorTests
         public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([message]);
 
+        // 批次 C 读侧方法：单消息替身的状态即该消息的当前状态——如实过滤。
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>(
+                message.Status == status ? [message] : []);
+
         public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
             int batchSize,
             string owner,
@@ -553,6 +559,12 @@ public sealed class OutboxBatchProcessorTests
     {
         public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([poison, healthy]);
+
+        // 批次 C 读侧方法：如实按状态过滤内存中的两条消息（非空即实况）。
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>(
+                [.. new[] { poison, healthy }.Where(m => m.Status == status).Take(maxCount)]);
 
         public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
             int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
@@ -935,6 +947,11 @@ public sealed class OutboxBatchProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => inner.MarkFailedAsync(message, failureReason, ct);
+
+        // 批次 C 读侧方法：纯转发包装，读侧同样转发（保持「批量能力缺口」替身的单一职责）。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => inner.GetByStatusAsync(status, maxCount, ct);
     }
 
     /// <summary>批量能力齐备、完成标记结果可控——锁定批量标记失败/部分命中的可观测口径（R9 D1）。</summary>
@@ -949,6 +966,11 @@ public sealed class OutboxBatchProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => ValueTask.CompletedTask;
+
+        // 批次 C 读侧方法：本替身不持久化记录（每次认领都新建），无状态可查——返回空即实况。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>([]);
 
         public ValueTask<IReadOnlyList<InboxMessage>> TryStartProcessingManyAsync(
             string consumerName, IReadOnlyList<string> messageIds, DateTimeOffset now,
@@ -1754,6 +1776,12 @@ public sealed class InboxProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => throw new InvalidOperationException("The handler should not fail in this test.");
+
+        // 批次 C 读侧方法：单消息录制替身，状态即该消息的当前状态——如实过滤。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>(
+                _message is not null && _message.Status == status ? [_message] : []);
     }
 
     private sealed class DuplicateAwareInboxStore : IInboxStore
@@ -1791,6 +1819,12 @@ public sealed class InboxProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => throw new InvalidOperationException("The handler should not fail in this test.");
+
+        // 批次 C 读侧方法：本替身只保留「已处理」的键集合、不保留消息对象，
+        // 无法按状态列举——返回空即实况（非静默假数据：本就不持有可列举的行）。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>([]);
     }
 
     /// <summary>handler 成功但 MarkProcessed 失败的存储——驱动 pending-confirmation 路径。</summary>
@@ -1817,6 +1851,11 @@ public sealed class InboxProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => throw new InvalidOperationException("The handler succeeded; MarkFailed must not be called.");
+
+        // 批次 C 读侧方法：本替身不持久化（每次认领新建），无状态可查——返回空即实况。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>([]);
     }
 
     private sealed class FailingAwareInboxStore : IInboxStore
@@ -1851,6 +1890,12 @@ public sealed class InboxProcessorTests
             message.Status = InboxStatus.Failed;
             message.LastError = failureReason;
         }
+
+        // 批次 C 读侧方法：单消息替身，状态即该消息的当前状态——如实过滤。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>(
+                _message is not null && _message.Status == status ? [_message] : []);
     }
 
     /// <summary>Information 级可开关的间谍日志器——A-2 守卫测试专用（其余级别恒启用不干扰）。</summary>

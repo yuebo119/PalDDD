@@ -257,6 +257,29 @@ public abstract class InboxDbContext(
         await SaveTerminalStateAsync(message, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// 按状态列举（批次 C，2026-11-04）——读侧补齐，供运维查询失败/滞留列表。
+    /// </summary>
+    /// <remarks>
+    /// 与 Outbox 同口径：AsNoTracking 纯观测（突变不进 ChangeTracker），
+    /// 按自增主键 id 排序 = 插入序，走既有 (status) 索引。
+    /// </remarks>
+    public virtual async ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+        InboxStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        StatusFilterGuard.EnsureDefined(status, nameof(InboxStatus));
+
+        return await InboxMessages
+            .AsNoTracking()
+            .Where(m => m.Status == status)
+            .OrderBy(m => m.Id)
+            .Take(maxCount)
+            .ToListAsync(ct).ConfigureAwait(false);
+    }
+
     /// <inheritdoc/>
     async ValueTask IInboxStore.MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
     {

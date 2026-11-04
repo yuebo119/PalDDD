@@ -211,6 +211,13 @@ public static class SqlTemplates
         "SELECT * FROM outbox_messages WHERE status=@status AND retry_count<@maxRetryCount AND next_attempt_at<=@now ORDER BY next_attempt_at, created_at LIMIT @n";
 
     /// <summary>
+    /// 按状态列举发件箱消息（批次 C，2026-11-04）——读侧补齐，供运维查询死信/积压。
+    /// 💡 四栈语义统一：按主键 id 排序（ULID 字典序=创建序），走既有 (status) 索引。
+    /// </summary>
+    public const string OutboxSelectByStatus =
+        "SELECT * FROM outbox_messages WHERE status=@status ORDER BY id LIMIT @n";
+
+    /// <summary>
     /// 按租约标识回读刚锁定的消息。<br/>
     /// 💡 解决非 PG 路径的并发 Bug：子查询在 UPDATE 后重新评估会把锁定行排除。<br/>
     /// 改为按 <c>locked_by=@owner AND locked_until=@until</c> 回读，精确匹配本次租约。
@@ -234,6 +241,13 @@ public static class SqlTemplates
     /// </summary>
     public const string InboxSelect =
         "SELECT * FROM inbox_messages WHERE consumer_name=@c AND message_id=@m";
+
+    /// <summary>
+    /// 按状态列举收件箱消息（批次 C，2026-11-04）——读侧补齐，供运维查询失败/滞留列表。
+    /// 💡 四栈语义统一：按自增主键 id 排序=插入序，走既有 (status) 索引。
+    /// </summary>
+    public const string InboxSelectByStatus =
+        "SELECT * FROM inbox_messages WHERE status=@status ORDER BY id LIMIT @n";
 
     /// <summary>
     /// 开始处理消息 — 状态改为 Processing，尝试次数 +1。<br/>

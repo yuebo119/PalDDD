@@ -136,6 +136,27 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         return messages.AsList();
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 批次 C（2026-11-04）：读侧补齐。观测语义——不取租约、不推进任何状态，
+    /// 与 <see cref="GetPendingMessagesAsync"/> 同契约。
+    /// </remarks>
+    public async ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+        OutboxStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        StatusFilterGuard.EnsureDefined(status, nameof(OutboxStatus));
+
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var messages = await conn.QueryAsync<OutboxMessage>(
+                SqlTemplates.OutboxSelectByStatus,
+                new { status = (int)status, n = maxCount },
+                Tx).ConfigureAwait(false);
+        return messages.AsList();
+    }
+
     public async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
         int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
     {

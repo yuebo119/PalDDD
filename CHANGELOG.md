@@ -14,6 +14,28 @@
 
 ### Added
 
+- **2026-11-04 公共 API 缺口 C 批：Outbox / Inbox 读侧查询（新增公共 API）**：
+  `IPalOutboxStore.GetByStatusAsync(OutboxStatus, int, CancellationToken)` 与
+  `IInboxStore.GetByStatusAsync(InboxStatus, int, CancellationToken)`，四栈实现
+  （InMemory / EFCore / Dapper / PalORM）语义统一为 `WHERE status = @status ORDER BY id LIMIT @maxCount`
+  （Outbox 主键 ULID 字典序=创建序；Inbox 自增主键=插入序）。
+  补齐的背景：框架自己写入的状态（`OutboxStatus`/`InboxStatus`/`RetryCount`/`LastError`）此前
+  只能靠连库写裸 SQL 查——EF 栈暴露 `DbSet` 尚可，Dapper/PalORM 栈无任何入口，
+  `features.md` 声明的「三栈语义对齐」在读侧是破的。未定义为默认接口实现（DIM）：
+  DIM 返回空列表会让未更新的自定义存储静默给出「查无此状态」，与本轮要消灭的假 API 形态相同；
+  过滤值本身也校验（未定义枚举值抛 `ArgumentOutOfRangeException`）。
+  **索引核查（C5）**：四方言逐一核对——EF 有 `(status, ...)` 前导索引、MySQL/SQLite/通用 schema 有
+  `(status, processed_at)`、PG 的 `idx_outbox_due(status=0)` 与 `idx_outbox_processed(status<>0)`
+  两个互补部分索引已覆盖 Outbox 全部三态；**唯一缺口是 PG Inbox**（只有 `status=2` 的部分索引），
+  已在 `docs/sql/postgresql/000_schema.sql` 补 `idx_inbox_status` 并附迁移文档
+  `docs/sql/migration-2026-11-04-inbox-status-index.md`（纯新增索引，滚动升级安全，
+  大表建议 `CREATE INDEX CONCURRENTLY`）。
+  验证：InMemory 矩阵 9/9（两接口 × 状态隔离 / maxCount / 排序 / 空表 / 未定义值）；
+  EF 2/2、Dapper 2/2、PalORM 2/2（各覆盖两接口的状态隔离 + maxCount + 排序 + 未定义值）。
+  变异验证：InMemory Outbox 过滤改恒真 → 「状态隔离」用例转红（其余 8 例正确保持绿）；
+  Dapper `InboxSelectByStatus` 去掉 `WHERE status` → Dapper Inbox 矩阵转红。
+  公共 API 快照 +12 行（两接口 × 5 处方法 + 两个 SQL 常量）。
+
 - **2026-11-04 公共 API 缺口 B 批：Saga 读侧补齐 `GetByStatusAsync`（新增公共 API）**：
   `ISagaStateStore<TState>` 增 `GetByStatusAsync(SagaStatus status, int maxCount, CancellationToken ct = default)`，
   四栈实现（InMemory / EFCore `SagaStateDbContext` / Dapper / PalORM）语义统一为

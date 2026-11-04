@@ -391,6 +391,11 @@ public sealed class OutboxProcessorTests
 
         public abstract ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct);
 
+        // 批次 C 读侧方法：计数基类不提供状态数据——空返回即实况，子类按需覆写。
+        public virtual ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
+
         public abstract ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct);
 
         public ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default)

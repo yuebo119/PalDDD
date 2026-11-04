@@ -249,6 +249,13 @@ public sealed partial class PoisonMessageDeadLetterTests
         }
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct) => new(0);
+
+        // 批次 C 读侧方法：本替身以 messages 列表为唯一事实源，按状态过滤即实况。
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>(
+                messages.Where(m => m.Status == status).Take(maxCount).ToList());
+
         public ValueTask<int> SaveChangesAsync(CancellationToken ct) => new(0);
     }
 }

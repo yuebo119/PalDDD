@@ -177,6 +177,11 @@ internal static class OutboxWakeUpProbe
         public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => inner.GetPendingMessagesAsync(batchSize, maxRetryCount, ct);
 
+        // 批次 C 读侧方法：包装替身，读侧同样转发给被包裹的 store（与租约/标记同口径）。
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => inner.GetByStatusAsync(status, maxCount, ct);
+
         public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
             int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
         {

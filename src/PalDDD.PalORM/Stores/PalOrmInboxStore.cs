@@ -36,6 +36,25 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         Session = session;
     }
 
+    /// <summary>
+    /// 按状态列举收件箱消息（批次 C，2026-11-04）——读侧补齐，供运维查询失败/滞留列表。
+    /// </summary>
+    /// <remarks>观测语义：不认领、不改状态、不加租约。</remarks>
+    public async ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+        InboxStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        StatusFilterGuard.EnsureDefined(status, nameof(InboxStatus));
+
+        // 列名内联到 SQL 字面量（PalORM 要求 FormattableString 类型，字符串拼接会退化为 string）
+        var rows = await Session.QueryAsync<InboxMessageRow>(
+            $"SELECT id, message_id, consumer_name, status, received_at, processed_at, processing_started_at, attempts, last_error FROM inbox_messages WHERE status = {(int)status} ORDER BY id LIMIT {maxCount}",
+            ct: ct).ConfigureAwait(false);
+        return rows.Select(r => r.ToDomain()).ToList();
+    }
+
     /// <inheritdoc />
     public async ValueTask<InboxMessage?> TryStartProcessingAsync(
         string consumerName, string messageId, DateTimeOffset now, TimeSpan processingTimeout, CancellationToken ct)

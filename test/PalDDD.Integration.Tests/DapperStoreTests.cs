@@ -225,6 +225,75 @@ public sealed class DapperStoreTests
         await Assert.That(pending[0].NextAttemptAt).IsEqualTo(msg.NextAttemptAt);
     }
 
+    /// <summary>
+    /// 批次 C（2026-11-04）读侧补齐：按状态列举——状态隔离、maxCount 生效、id 排序。
+    /// </summary>
+    [Test]
+    public async Task Outbox_GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndOrdersById(CancellationToken cancellationToken)
+    {
+        var store = new DapperOutboxStore(_conn, _dbType);
+        for (var i = 0; i < 3; i++)
+            await store.AddMessageAsync(CreateOutboxMessage($"pending.{i}"));
+        var dead = CreateOutboxMessage("dead");
+        await store.AddMessageAsync(dead);
+        await store.MarkDeadAsync(dead, "seeded dead", TimeProvider.System.GetUtcNow());
+        var processed = CreateOutboxMessage("processed");
+        await store.AddMessageAsync(processed);
+        await store.MarkProcessedAsync(processed, TimeProvider.System.GetUtcNow());
+
+        var deadRows = await store.GetByStatusAsync(OutboxStatus.Dead, 10, cancellationToken);
+        await Assert.That(deadRows).Count().IsEqualTo(1);
+        await Assert.That(deadRows[0].Type).IsEqualTo("dead");
+
+        await Assert.That((await store.GetByStatusAsync(OutboxStatus.Processed, 10, cancellationToken)).Count).IsEqualTo(1);
+
+        var all = await store.GetByStatusAsync(OutboxStatus.Pending, 100, cancellationToken);
+        await Assert.That(all).Count().IsEqualTo(3);
+        var ids = all.Select(static m => m.Id).ToList();
+        await Assert.That(ids.SequenceEqual(ids.OrderBy(static id => id))).IsTrue();
+
+        var capped = await store.GetByStatusAsync(OutboxStatus.Pending, 2, cancellationToken);
+        await Assert.That(capped).Count().IsEqualTo(2);
+        await Assert.That(capped[0].Id).IsEqualTo(ids[0]);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => store.GetByStatusAsync((OutboxStatus)99, 10, cancellationToken).AsTask());
+    }
+
+    /// <summary>
+    /// 批次 C（2026-11-04）读侧补齐：Inbox 按状态列举——状态隔离、maxCount、自增 id 排序。
+    /// </summary>
+    [Test]
+    public async Task Inbox_GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndOrdersById(CancellationToken cancellationToken)
+    {
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = TimeProvider.System.GetUtcNow();
+
+        var first = await store.TryStartProcessingAsync("orders", "message-1", now, TimeSpan.FromMinutes(5), cancellationToken);
+        var second = await store.TryStartProcessingAsync("orders", "message-2", now, TimeSpan.FromMinutes(5), cancellationToken);
+        var failed = await store.TryStartProcessingAsync("orders", "message-3", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await store.MarkProcessedAsync(first!, now.AddSeconds(1), cancellationToken);
+        await store.MarkFailedAsync(failed!, "seeded failure", cancellationToken);
+
+        var failedRows = await store.GetByStatusAsync(InboxStatus.Failed, 10, cancellationToken);
+        await Assert.That(failedRows).Count().IsEqualTo(1);
+        await Assert.That(failedRows[0].MessageId).IsEqualTo("message-3");
+
+        var processedRows = await store.GetByStatusAsync(InboxStatus.Processed, 10, cancellationToken);
+        await Assert.That(processedRows).Count().IsEqualTo(1);
+        await Assert.That(processedRows[0].MessageId).IsEqualTo("message-1");
+
+        var processingRows = await store.GetByStatusAsync(InboxStatus.Processing, 10, cancellationToken);
+        await Assert.That(processingRows).Count().IsEqualTo(1);
+        await Assert.That(processingRows[0].MessageId).IsEqualTo("message-2");
+
+        var capped = await store.GetByStatusAsync(InboxStatus.Processing, 1, cancellationToken);
+        await Assert.That(capped).Count().IsEqualTo(1);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => store.GetByStatusAsync((InboxStatus)99, 10, cancellationToken).AsTask());
+    }
+
     [Test]
     public async Task Outbox_NonPositiveMaxRetryCount_ThrowsArgumentOutOfRange()
     {

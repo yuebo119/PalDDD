@@ -269,6 +269,44 @@ public class PalOrmOutboxStoreTests
         await Assert.That(new OutboxOptions().BatchMarkThreshold).IsEqualTo(1);
     }
 
+    /// <summary>
+    /// 批次 C（2026-11-04）读侧补齐：按状态列举——状态隔离、maxCount 生效、id 排序。
+    /// </summary>
+    [Test]
+    public async Task Outbox_GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndOrdersById()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteOutboxStore(session);
+        for (var i = 0; i < 3; i++)
+            await store.AddMessageAsync(CreateOutboxMessage($"pending.{i}"), default);
+
+        var dead = CreateOutboxMessage("dead");
+        await store.AddMessageAsync(dead, default);
+        await store.MarkDeadAsync(dead, "seeded dead", DateTimeOffset.UtcNow, default);
+
+        var processed = CreateOutboxMessage("processed");
+        await store.AddMessageAsync(processed, default);
+        await store.MarkProcessedAsync(processed, DateTimeOffset.UtcNow, default);
+
+        var deadRows = await store.GetByStatusAsync(OutboxStatus.Dead, 10, default);
+        await Assert.That(deadRows).Count().IsEqualTo(1);
+        await Assert.That(deadRows[0].Type).IsEqualTo("dead");
+
+        await Assert.That((await store.GetByStatusAsync(OutboxStatus.Processed, 10, default)).Count).IsEqualTo(1);
+
+        var all = await store.GetByStatusAsync(OutboxStatus.Pending, 100, default);
+        await Assert.That(all).Count().IsEqualTo(3);
+        var ids = all.Select(static m => m.Id).ToList();
+        await Assert.That(ids.SequenceEqual(ids.OrderBy(static id => id))).IsTrue();
+
+        var capped = await store.GetByStatusAsync(OutboxStatus.Pending, 2, default);
+        await Assert.That(capped).Count().IsEqualTo(2);
+        await Assert.That(capped[0].Id).IsEqualTo(ids[0]);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => store.GetByStatusAsync((OutboxStatus)99, 10, default).AsTask());
+    }
+
     private static OutboxMessage CreateOutboxMessage(string type) => new()
     {
         Id = Ulid.New(),
