@@ -87,11 +87,17 @@ public sealed class KafkaPublishAllocationTests
         var alloc = GC.GetAllocatedBytesForCurrentThread() - baseline;
         await Assert.That(producer.ProduceCount).IsGreaterThan(iterations);
 
-        // 预算构成（新码实测标定，2026-10-16）：JSON 输出一次 ToArray ~1.06KB + key 字符串
-        // ~64B + Message 对象 ~64B + Task ~80B + Debug 构建 async 状态机类 ~150B ≈ 1.42KB。
-        // 旧码（:149 value.ToArray 第二次全载荷拷贝）≈ 2.48KB/迭代，在本预算下红——
+        // 预算构成（2026-11-07 重标定）：JSON 输出一次 ToArray ~1.06KB + key 字符串 ~64B +
+        // Message 对象 ~64B + Task ~80B + Debug 构建 async 状态机 ~440B ≈ 1.79KB。
+        // 相对 2026-10-16 的 1.42KB 标定，+286B/迭代来自**可观测性代价**（二分实测确认）：
+        // 批 D 的发布失败计数（`paldd.broker.publish_failed`）需要 try/catch 包裹 await，
+        // Debug 构建的 async 状态机因此从简单形态变为带 catch 的形态；批 G 的 broker span
+        // 用 `Source.HasListeners()` 快速返回，无 listener 时实测零增量（1,785,944 → 1,787,000，
+        // 差异在噪声内）。这是有意的功能增强而非意外回归——**不接受「静默抬预算」**，
+        // 故在此写明构成与来源。
+        // 旧码（:149 value.ToArray 第二次全载荷拷贝）≈ 2.48KB/迭代，在本预算下仍红——
         // 锁定的回归敏感点即发布路径冗余全载荷拷贝的重引入。
-        await Assert.That(alloc).IsLessThanOrEqualTo(1500L * iterations);
+        await Assert.That(alloc).IsLessThanOrEqualTo(1800L * iterations);
     }
 
     // Confluent IProducer<string, byte[]> 假件——仅发布路径单测需要的 ProduceAsync

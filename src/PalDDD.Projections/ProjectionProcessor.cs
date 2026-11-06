@@ -103,9 +103,11 @@ public sealed class ProjectionProcessor<TMessage>
 
         // v4 批 D（S5）：在线投影路径接入遥测——此前全文件零 PalActivitySource/PalMetrics，
         // 重建路径有而稳态路径无，与 features.md「贯穿全部处理器」的宣称不对称。
-        // 复用既有工厂与计数器（不新增），因此不改计数口径、不触发 count-audit 联动。
-        using var activity = PalActivitySource.StartProjectionRebuild(
-            _handler.ProjectionName, context.SourceName);
+        // 刻意**不新建同名 span**（`StartProjectionRebuild` 的 activity 名是 "Projection Rebuild"，
+        // 在线处理常在重建的 span 内运行，同名子 span 会让按名筛选的监听器拿到错的 span，
+        // 实测 `RebuildAsync_EmitsProjectionRebuildActivity` 因此转红）。改为在**当前 span**
+        // 上打事件与状态——零新增工厂、零计数联动。
+        System.Diagnostics.Activity.Current?.AddEvent(new("projection.online-processed"));
 
         var checkpoint = await _checkpointStore.TryStartAsync(
             _handler.ProjectionName,
@@ -133,8 +135,8 @@ public sealed class ProjectionProcessor<TMessage>
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             await StopLeaseHeartbeatAsync(heartbeat).ConfigureAwait(false);
-            // v4 批 D（S5）：失败计数 + Activity 状态（复用既有 ProjectionFailed 计数器）
-            activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
+            // v4 批 D（S5）：失败计数 + 当前 span 状态（复用既有 ProjectionFailed 计数器）
+            System.Diagnostics.Activity.Current?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             PalMetrics.ProjectionFailed.Add(1);
             // ITM-092 修复：MarkFailedAsync 本身失败不得掩盖主异常——内层捕获挂 Data 后仍以主异常优先。
             try
