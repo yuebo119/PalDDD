@@ -576,16 +576,15 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                         {
                             case AckKind.Acknowledge:
                             case AckKind.RejectSkip:
-                                if (manualStore)
+                                // S1066：合并嵌套 if，manualStore 在前短路——offsetTracker.Ack
+                                // 有副作用（推进前缀状态），自动存储模式绝不能调用它。
+                                // 乱序确认安全：只有连续前缀推进时才存储（并发 handler 下
+                                // 逐条 StoreOffset 会让崩溃后的重启跳过仍在处理中的消息）。
+                                if (manualStore && offsetTracker.Ack(command.Offset) is { } advanced)
                                 {
-                                    // 乱序确认安全：只有连续前缀推进时才存储（并发 handler 下
-                                    // 逐条 StoreOffset 会让崩溃后的重启跳过仍在处理中的消息）。
-                                    if (offsetTracker.Ack(command.Offset) is { } advanced)
-                                    {
-                                        consumer.StoreOffset(advanced);
-                                        if (manualCommit)
-                                            consumer.Commit([advanced]);
-                                    }
+                                    consumer.StoreOffset(advanced);
+                                    if (manualCommit)
+                                        consumer.Commit([advanced]);
                                 }
                                 // 有进展即复位退避——失败重试的成长只针对「连续被拒」。
                                 consecutiveSeeks = 0;
@@ -891,7 +890,14 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         private int _settled;
 
         /// <summary>本次交付是否已结算。</summary>
+        /// <remarks>
+        /// S1144：当前无读取方，但 B3 修复（HandleMessageAsync finally 统一结算）将据此判定
+        /// handler 是否已显式结算，避免覆盖其决定。保留属性并定点抑制，v1「删死属性」与
+        /// 该修法冲突（方案轮红队第 10 条）。
+        /// </remarks>
+#pragma warning disable S1144 // 由 HandleMessageAsync finally 判定（B3 批 2b 接线）
         public bool IsSettled => Volatile.Read(ref _settled) != 0;
+#pragma warning restore S1144
 
         /// <inheritdoc />
         public async ValueTask AcknowledgeAsync(CancellationToken ct = default)

@@ -97,6 +97,17 @@ public abstract class MessageBrokerBase : IMessageBroker
         CancellationToken ct = default)
         => MessageBatchPump.StartAsync(this, handler, maxBatchSize, maxDelay, OnBatchHandlerFailed, ct);
 
+    /// <summary>
+    /// 批量订阅（含批次级确认器）。默认实现把 <see cref="NoOpMessageAck"/> 交给调用方后
+    /// 转发到无 ack 的批量重载；兜底规则见 <see cref="IMessageBroker"/> 同名成员。
+    /// </summary>
+    public virtual ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, IMessageAck, CancellationToken, ValueTask> handler,
+        int maxBatchSize = 64,
+        TimeSpan? maxDelay = null,
+        CancellationToken ct = default)
+        => MessageBatchPump.StartAsync(this, handler, maxBatchSize, maxDelay, OnBatchHandlerFailed, ct);
+
     /// <summary>批量 handler 抛异常时的回调（默认无操作；broker 实现覆写记录日志）。</summary>
     protected virtual void OnBatchHandlerFailed(Exception ex)
     {
@@ -124,14 +135,4 @@ public abstract class MessageBrokerBase : IMessageBroker
         => SubscribeAsync<TMessage>(
             (message, context, token) => handler(message, context, NoOpMessageAck.Instance, token), ct);
 
-    /// <summary>
-    /// 批量订阅（含批次级确认器）。默认实现把 <see cref="NoOpMessageAck"/> 交给调用方后
-    /// 转发到无 ack 的批量重载；兜底规则见 <see cref="IMessageBroker"/> 同名成员。
-    /// </summary>
-    public virtual ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(
-        Func<IReadOnlyList<ConsumedMessage<TMessage>>, IMessageAck, CancellationToken, ValueTask> handler,
-        int maxBatchSize = 64,
-        TimeSpan? maxDelay = null,
-        CancellationToken ct = default)
-        => MessageBatchPump.StartAsync(this, handler, maxBatchSize, maxDelay, OnBatchHandlerFailed, ct);
 }

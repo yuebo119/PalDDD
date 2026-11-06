@@ -195,7 +195,9 @@ internal static class MessageBatchPump
                             await batchAck.RejectAsync(requeue: false, ct: CancellationToken.None).ConfigureAwait(false);
                     }
 #pragma warning disable CA1031 // 弃置动作的失败不得掩盖原始 handler 异常
+#pragma warning disable RCS1075 // 空 catch 是有意设计：原始 handler 异常已交给 onHandlerError，此处吞掉结算失败
                     catch (Exception)
+#pragma warning restore RCS1075
 #pragma warning restore CA1031
                     {
                         // 结算失败（channel 已关/连接断开）由 broker 侧自身日志记录，
