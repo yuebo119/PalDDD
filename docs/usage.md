@@ -538,6 +538,27 @@ services.AddScoped<IEventLog>(sp => sp.GetRequiredService<AppEventLogDbContext>(
 
 完整枚举读取结果后还会记录 `paldd.eventlog.read` metric，应用层可用于观察审计回放、投影修复和跨上下文诊断的事件读取吞吐。
 
+### 归档与导入导出（JSON Lines）
+
+`EventStreamJsonLines` 是 ADR-037 指定的合规归档路径：事件日志只追加不删除，长期留存靠导出到文件系统/对象存储。两个方法都在 `PalDDD.Projections.EventLog` 程序集：
+
+```csharp
+// 导出：逐事件写 JSON Lines（一行一个 RecordedEvent，含 stream name/version/payload/metadata）
+await EventStreamJsonLines.ExportAsync(log.ReadAllAsync(ct: ct), stream, ct);
+
+// 导入：读回同一文件，逐流按版本顺序 Append
+await EventStreamJsonLines.ImportAsync(stream, ct);
+```
+
+导入的接线要点（**不是**「一把梭 AppendAsync」）：
+
+1. **分组逐流**：文件是全局追加序，`AppendAsync` 要求同一次调用内的事件属于同一流。导入时按 `streamName` 分组，组内按 `streamVersion` 升序。
+2. **期望版本用 `NoStream`**：目标库为空时用 `ExpectedStreamVersion.NoStream`，一旦该流已存在则整组拒绝（这正是「导入即重建」的语义——不静默追加到已有流）。
+3. **顺序**：先导出后清空目标库（或导入到新库），否则同流二次导入必然撞 `NoStream` 冲突。
+4. **投影重建**：导入完成后投影 checkpoint 需要重置，走 `ProjectionRebuilder.RebuildAsync`（重放期间事件读路径与在线投影共用同一 `IEventLog`）。
+
+> 上述 1–4 是 ADR-037 与 `EventStreamJsonLines` 实现共同确定的约束，但此前无使用文档（审计 G3）。接入细节不随版本演进保证不变——以 `IEventLog`/`EventStreamJsonLines` 的 XML remarks 为准。
+
 ## 使用 SQLite FTS5 与 JSON1
 
 `PalDDD.Dapper.Sqlite` 与 `PalDDD.PalORM.Sqlite` 提供同语义的 FTS5/JSON1 片段与索引定义 API（ADR-032）。两个包共享 `src/PalDDD.Shared` 内部核心，PalORM 包不依赖 Dapper。

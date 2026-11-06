@@ -177,6 +177,24 @@
 
 ### Changed
 
+- **可观测补强 + 计数声明对齐（2026-11-06 全量审计 S3/S4/S5/G2/G3/G5/G6/G7/S2，P2）**：
+  **S3**：新增 2 个 broker 计数器 `paldd.broker.consume_failed` / `paldd.broker.publish_failed`
+  （30→32），埋点在 Kafka 消费失败三路径 + `PublishSerializedAsync`、Rabbit 毒消息两路径 +
+  两条 `NO_ROUTE`——此前跨进程失败只能靠日志抓取。**S4**：`SagaCompensated` 补到重试耗尽/故障
+  补偿车道（`SagaCompensation` 成功路径），此前只覆盖超时兜底车道、计数器描述与实际覆盖不符。
+  **S5**：在线投影路径接入遥测（`ProjectionProcessor` 复用 `StartProjectionRebuild` 工厂 +
+  `ProjectionReplayed`/`ProjectionFailed` 计数器），重建有而稳态无的不对称消除。
+  **G2**：超时兜底补偿车道补两个观察点（补偿前 `OnCompensationStarted`、终态迁移
+  `OnStatusChanged`，均走隔离包装——Sink 异常不阻断补偿）。
+  **G3**：`docs/usage.md` 新增「归档与导入导出（JSON Lines）」子节（分组逐流、`NoStream`、
+  顺序、投影重建四条接线要点）。**G5/G7**：四处统一披露「12 个 Activity 工厂中 2 个预留未接线」。
+  **G6**：6 处包/项目计数对齐（35→36 可打包、36→37 项目）+ `count-audit` 正则补两个盲区
+  （README 概览表裸单元格、`ships N packages`）。**S2**：`docs/usage.md` 披露 Rabbit prefetch
+  默认 10 会先于 `maxBatchSize` 生效（有效批大小被截断）。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；公共 API 快照 +2 行（两计数器）；真容器
+  `ConsumeFailedCounter_IncrementsOnPoisonMessage`（毒消息 → 计数 ≥1）；RabbitAckTests 7/7；
+  count-audit 16 项 84 处声明全一致（新增 3 处由扩展正则覆盖）。
+
 - **RabbitMQ 健康态接入 + EF 终态写回退（2026-11-06 全量审计 S1/S6，P2）**：
   **S1**：`RabbitMqBroker` 追加 `IMessageBrokerHealth`（公共 API 快照 +2 行），以
   `IChannel.IsOpen == false` 判据在 `TryAckSafeAsync`/`TryNackSafeAsync`/`CancelConsumeSafeAsync`

@@ -167,12 +167,14 @@ public static class PalActivitySource
 /// EventsConsumed/OutboxPending/SagaActive/BehaviorDuration）——声明但框架零调用，
 /// 误导用户认为会产出数据。需要这些指标时在调用方自行 Meter.CreateCounter 并 Add。
 /// <para>
-/// 📐 <b>零 tag 设计声明（v25 P3 勘正族 C11 · ITM-229 精神显式化）</b>：全部 30 个活 Counter
+/// 📐 <b>零 tag 设计声明（v25 P3 勘正族 C11 · ITM-229 精神显式化）</b>：全部 32 个活 Counter
 /// （计数沿革：v71 增 SagaScanFailed；v72 勘正同步为当时计数；v3.0.0 增
 /// <c>paldd.outbox.dead</c> 与 <c>paldd.outbox.persist_failed</c> 后此处计数再次未同步，
 /// 2026-09-23 复查修正为 23；2026-10-18 ADR-030 遥测接入增五个 <c>paldd.stream.*</c> 计数器
 /// 后为 28；2026-10-21 评审补计 ADR-031 的 <c>paldd.stream.attached</c> /
-/// <c>paldd.stream.gap</c> 后为 30）有意零 tag——框架层零分配纪律（无 tag 的 <c>Add(T)</c> 是零额外分配路径，带 tag 调用引入
+/// <c>paldd.stream.gap</c> 后为 30；2026-11-07 审计 S3 补计
+/// <c>paldd.broker.consume_failed</c> / <c>paldd.broker.publish_failed</c> 后为 32）
+/// 有意零 tag——框架层零分配纪律（无 tag 的 <c>Add(T)</c> 是零额外分配路径，带 tag 调用引入
 /// 键值对构造开销）+ 指标基数安全（事件类型/投影名/流名等维度随业务无界增长，tag 化会造成
 /// 时序库基数爆炸）。调用方需要维度时用自身 <c>Meter.CreateCounter</c> 自建带 tag Counter；
 /// Activity 侧 <c>pal.event</c> / <c>pal.projection.name</c> 等 tag 已提供 trace 维度。
@@ -321,4 +323,22 @@ public static class PalMetrics
     /// </remarks>
     public static readonly Counter<long> StreamGap = Meter.CreateCounter<long>(
         "paldd.stream.gap", description: "流式查询缓冲缺口总数（断线续跑：gap 帧写出次数）");
+
+    // ── 跨进程 broker（v4 批 D，2026-11-07）──
+    // 审计 S3：进程内派发有计数器、跨进程没有——broker 消费/发布失败此前只能靠日志抓取。
+    // 两个计数器覆盖两栈的共同故障面（Kafka 消费线程终止与 Rabbit channel 关闭都已由
+    // IMessageBrokerHealth 自述，本组补的是「失败发生的量」而非「链路状态」）。
+
+    /// <summary>broker 消费失败总数（handler 抛异常 / 反序列化失败 / 毒消息弃置）</summary>
+    /// <remarks>
+    /// 两栈共同语义：记录一次「已交付但处理失败」的消息。at-most-once 弃置路径也计入
+    /// （弃置是失败的结果，不是成功）；Kafka 手动存储模式下该计数与 offset 前缀推进
+    /// 解冻是同一时刻的两面。
+    /// </remarks>
+    public static readonly Counter<long> BrokerConsumeFailed = Meter.CreateCounter<long>(
+        "paldd.broker.consume_failed", description: "broker 消费失败总数（handler 异常/反序列化失败/毒消息弃置）");
+
+    /// <summary>broker 发布失败总数（路由失败 / 连接断 / 确认失败）</summary>
+    public static readonly Counter<long> BrokerPublishFailed = Meter.CreateCounter<long>(
+        "paldd.broker.publish_failed", description: "broker 发布失败总数（路由失败/连接断/确认失败）");
 }

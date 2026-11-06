@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using PalDDD.Core.Diagnostics;
 using PalDDD.Core.Logging;
 using System.Diagnostics.CodeAnalysis;
+using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions;
 
@@ -283,11 +284,22 @@ TState>
         {
             try
             {
+                // v4 批 D（G2）：超时兜底补偿车道此前零观察者事件——features.md 宣称
+                // 「五观察点贯穿全生命周期」，但补偿前无 OnCompensationStarted、终态迁移
+                // 无 OnStatusChanged（全仓唯一生产发射点曾是 InterruptStep 挂起）。
+                // 此处补两个观察点，隔离方式与 Saga.cs 的 SafeObserve 族一致：观察者异常
+                // 不得阻断真实补偿（记为 Activity 事件后继续）。
+                var observer = SagaExecutionObserver.Current;
+                var statusBefore = sagaState.Status;
+                await SafeObserveCompensationStartedAsync(
+                    observer, sagaState.SagaId, "timeout-compensation", ct).ConfigureAwait(false);
                 await _orchestrator.CompensateAsync(sagaState, ct).ConfigureAwait(false);
                 sagaState.Status = SagaStatus.Compensated;
                 sagaState.CompletedAt = now;
                 sagaState.CurrentState = SagaState.CompensatedStateName;
                 sagaState.NextCheckAt = null; // M1：终态不再参与超时扫描
+                await SafeObserveStatusChangedAsync(
+                    observer, sagaState.SagaId, statusBefore, SagaStatus.Compensated, ct).ConfigureAwait(false);
                 compensationSucceeded = true;
             }
             catch (OperationCanceledException)
@@ -567,6 +579,48 @@ TState>
             {
                 _logger.Error(ex, $"Saga {state.SagaId} NextCheckAt advance failed; will be re-leased next tick");
             }
+        }
+    }
+
+    /// <summary>
+    /// v4 批 D（G2）：超时补偿车道的观察者隔离包装——Sink 异常不得阻断真实补偿，
+    /// 与 <c>Saga.SafeObserveCompensationStartedAsync</c> 同形态（异常记 Activity 事件）。
+    /// </summary>
+    private static async ValueTask SafeObserveCompensationStartedAsync(
+        SagaExecutionObserver? observer, PalUlid sagaId, string stepKey, CancellationToken ct)
+    {
+        if (observer is null) return;
+        try
+        {
+            await observer.OnCompensationStarted(sagaId, stepKey, ct).ConfigureAwait(false);
+        }
+        catch (Exception obsEx) when (obsEx is not OperationCanceledException)
+        {
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "saga.observer.compensation-started-failed",
+                tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = obsEx.Message, ["step"] = stepKey }));
+        }
+    }
+
+    /// <summary>v4 批 D（G2）：终态迁移观察的隔离包装（同 <see cref="SafeObserveCompensationStartedAsync"/>）。</summary>
+    private static async ValueTask SafeObserveStatusChangedAsync(
+        SagaExecutionObserver? observer, PalUlid sagaId, SagaStatus oldStatus, SagaStatus newStatus, CancellationToken ct)
+    {
+        if (observer is null) return;
+        try
+        {
+            await observer.OnStatusChanged(sagaId, oldStatus, newStatus, ct).ConfigureAwait(false);
+        }
+        catch (Exception obsEx) when (obsEx is not OperationCanceledException)
+        {
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "saga.observer.status-changed-failed",
+                tags: new System.Diagnostics.ActivityTagsCollection
+                {
+                    ["error"] = obsEx.Message,
+                    ["from"] = oldStatus.ToString(),
+                    ["to"] = newStatus.ToString()
+                }));
         }
     }
 }

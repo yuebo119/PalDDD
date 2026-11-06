@@ -6,7 +6,7 @@
 
 ## 总览
 
-`src/` 下共 36 个项目（35 个可打包 NuGet 包 + 1 个共享源码目录），另有 `test/` 下 16 个测试项目。产品面按清洁架构分为 7 层：
+`src/` 下共 37 个项目（36 个可打包 NuGet 包 + 1 个共享源码目录），另有 `test/` 下 16 个测试项目。产品面按清洁架构分为 7 层：
 
 | 层 | 项目 | 职责 |
 |---|---|---|
@@ -32,7 +32,7 @@
 | 工作单元端口 | Begin/Commit/Rollback/SaveChanges，不支持嵌套（ADR-023），模板方法扩展 | `IUnitOfWork`（IUnitOfWork.cs） |
 | 强类型标识 | `IPalIdentity<TKey>` 契约 + Ulid 生成器抽象（RFC 9562 合规实现） | `IPalIdGenerator`（Identity/） |
 | 日志门面 | 五成员接口隔离具体日志后端，空实现 NullPalLogger | `IPalLogger<T>`（Logging/） |
-| 可观测门面 | 30 个指标计数器 + 12 个 Activity 工厂（命令/事件/Saga/Outbox/Inbox/幂等/投影/事件日志读写/流式查询） | `PalDiagnostics`（PalDiagnostics.cs） |
+| 可观测门面 | 32 个指标计数器 + 12 个 Activity 工厂（命令/事件/Saga/Outbox/Inbox/幂等/投影/事件日志读写/流式查询/broker 消费与发布失败；**其中 2 个 Activity 工厂预留未接线**：`StartCommandDispatch`/`StartSagaTransition`，其余 10 个有生产调用点） | `PalDiagnostics`（PalDiagnostics.cs） |
 | 失败原因归一 | 五处理器共用：截断 2000 字符 + UTF-16 代理对完整性守卫 | `FailureReason`（FailureReason.cs） |
 | 契约标记 | GenerateId / GenerateEnum / GenerateMessage / BoundedContext / ProcessManager 五个 Attribute | Attributes.cs |
 
@@ -204,7 +204,7 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 ## 横切能力
 
 - **AOT 分层矩阵**：抽象层（Core/CQRS/Messaging/Serialization/Compression/EventLog/Idempotency/Projections/Transactions 抽象面）零反射；基础设施 4 包（Kafka、RabbitMQ、Compression.Native、Serialization.MemoryPack）加 Transactions 的子 Saga 反射路径显式豁免，豁免均有 csproj/注释理由。详见 [AOT 指南](aot.md)。
-- **可观测统一**：12 个 Activity 工厂 + 30 个指标计数器贯穿全部处理器；五处理器共用的 FailureReason 归一化。
+- **可观测统一**：12 个 Activity 工厂 + 32 个指标计数器贯穿全部处理器（含跨进程 broker 消费/发布失败）；**12 个 Activity 工厂中 2 个预留未接线**（`StartCommandDispatch` / `StartSagaTransition`，ITM-627），其余 10 个有生产调用点；五处理器共用的 FailureReason 归一化。
 - **并发防护三形态**：Outbox 用租约 token + RetryCount 快照；Saga 用 Version 换代乐观锁；Checkpoint/Idempotency 用单调 Revision CAS。
 - **全端口 InMemory 替身**：事件日志、Outbox、Inbox、Saga、检查点、幂等存储均有内存实现（替身与真实实现的语义分叉均以注释定案）。
 

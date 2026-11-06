@@ -126,6 +126,8 @@ static class PalDDD.Core.Diagnostics.PalActivitySource
   method System.Diagnostics.Activity StartSagaTransition(System.String sagaType, System.String fromState, System.String toState)
   method System.Diagnostics.Activity StartStreamQuery(System.String queryType, System.String itemType)
 static class PalDDD.Core.Diagnostics.PalMetrics
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> BrokerConsumeFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> BrokerPublishFailed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventHandlersFailed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventHandlersHandled
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventLogAppended

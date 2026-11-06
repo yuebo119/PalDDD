@@ -19,7 +19,7 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 
 | NuGet packages | Compile-time diagnostics | Persistence stacks | Measured tests |
 |:---:|:---:|:---:|:---:|
-| **35** | **38** | **3** | **1502**¹ |
+| **36** | **38** | **3** | **1502**¹ |
 
 ¹ 16 test projects, full-suite local measurement on 2026-10-08: 1434 passed + 68 skipped — 60 Docker-dependent (PalORM multi-dialect 46 + Integration 14, executed by CI Testcontainers) + 8 unreachable local broker prechecks; PalORM.Tests and Messaging.Integration.Tests require Docker.
 
@@ -64,7 +64,7 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 
 **Pluggable compression**. `ICompressionProvider` / `ICompressor` abstractions with two implementations: the System built-in compressor and the native LZ4/ZStandard binding (`PalDDD.Compression.Native`, AOT-safe), swappable via DI.
 
-**Built-in observability**. `PalActivitySource` (12 Start methods) + `PalMetrics` (30 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything (command dispatch / Saga transition Activities are reserved, not yet wired).
+**Built-in observability**. `PalActivitySource` (12 Start methods) + `PalMetrics` (32 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything. **2 of the 12 Activity factories are reserved and not wired** (`StartCommandDispatch` / `StartSagaTransition`, ITM-627 family, remarks say "reserved for external integration"); the other 10 all have production call sites.
 
 **Three persistence stacks, chosen by scenario**. PalORM (true AOT, source-generated SQL) / Dapper (call-site-level AOT, hand-written SQL) / EF Core (Migration/LINQ/ChangeTracker ecosystem) coexist equally long-term with no retirement plan; five Store capabilities are fully covered across all three stacks, with behavior guarded by cross-stack parity tests ([ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md), [ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)); ambient transactions and explicit transaction boundaries are supported.
 
@@ -452,7 +452,7 @@ For full data, the MediumRun formal baselines, and the historical archive, see [
 
 ## Package List
 
-PalDDD ships 35 packages of its own plus 5 third-party PalORM engine packages (`PalORM.Core` · `PalORM.SourceGen` · `PalORM.PostgreSql` · `PalORM.MySql` · `PalORM.Sqlite`, independent version line). The per-package release list and versions are in the [release package scope](docs/release.md); the current version is authoritative on the [NuGet](https://www.nuget.org/packages/PalDDD.Base) badge and in the [CHANGELOG](CHANGELOG.md).
+PalDDD ships 36 packages of its own plus 5 third-party PalORM engine packages (`PalORM.Core` · `PalORM.SourceGen` · `PalORM.PostgreSql` · `PalORM.MySql` · `PalORM.Sqlite`, independent version line). The per-package release list and versions are in the [release package scope](docs/release.md); the current version is authoritative on the [NuGet](https://www.nuget.org/packages/PalDDD.Base) badge and in the [CHANGELOG](CHANGELOG.md).
 
 | Layer | Packages |
 |----|----|
@@ -519,7 +519,7 @@ flowchart TB
 | Document | Description |
 |------|------|
 | [Architecture](docs/architecture.md) | Layering, dependency direction, project responsibilities |
-| [Feature Panorama](docs/features.md) | Full feature inventory across all 36 projects (source-derived, with type anchors) |
+| [Feature Panorama](docs/features.md) | Full feature inventory across all 37 projects (source-derived, with type anchors) |
 | [Usage Guide](docs/usage.md) | Complete code examples for each component |
 | [Tutorial](docs/tutorial.md) | Build a DDD application from scratch |
 | [Idempotency Rationale](docs/idempotency-rationale.md) | Why it is designed this way: trade-offs and boundaries |

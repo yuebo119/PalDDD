@@ -840,4 +840,43 @@ public sealed class RabbitAckTests
         await broker.DisposeAsync();
         await Assert.That(connection.IsOpen).IsFalse();
     }
+
+    /// <summary>
+    /// v4 批 D（S3）：broker 消费失败计数器——毒消息（handler 抛异常 → 弃置）必须计一次
+    /// <c>paldd.broker.consume_failed</c>。修复前 broker 失败路径零计数器，告警只能靠日志抓取。
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task ConsumeFailedCounter_IncrementsOnPoisonMessage(CancellationToken cancellationToken)
+    {
+        using var meter = new RecordingMeterListener("paldd.broker.consume_failed");
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger);
+        await using var broker = created.Item1;
+
+        var payload = $"rmq-metric-{Guid.NewGuid():N}";
+        var handled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var sub = await broker.SubscribeAsync<TestMessage>(
+            (TestMessage msg, PalDDD.Messaging.MessageConsumeContext? context, PalDDD.Messaging.IMessageAck ack, CancellationToken ct) =>
+            {
+                _ = context;
+                _ = ack;
+                _ = ct;
+                if (msg.Name != payload)
+                    return ValueTask.CompletedTask;
+
+                handled.TrySetResult();
+                throw new InvalidOperationException("poison message for metric (test)");
+            }, cancellationToken);
+
+        await broker.PublishAsync(new TestMessage(payload), cancellationToken);
+        await handled.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+
+        // 计数在 catch 内同步发射；稳定窗口给足余量
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && meter.Measurements.IsEmpty)
+            await Task.Delay(10);
+
+        await Assert.That(meter.Measurements.Count).IsGreaterThanOrEqualTo(1);
+    }
 }

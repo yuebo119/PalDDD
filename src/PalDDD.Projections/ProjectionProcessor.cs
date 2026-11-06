@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // 📽️ ProjectionProcessor — Checkpoint 幂等投影处理
 // ─────────────────────────────────────────────────────────────
+using PalDDD.Core.Diagnostics;
 using PalDDD.Core.Logging;
 using System.Diagnostics.CodeAnalysis;
 
@@ -100,6 +101,12 @@ public sealed class ProjectionProcessor<TMessage>
         if (message is null)
             throw new ArgumentNullException(nameof(message));
 
+        // v4 批 D（S5）：在线投影路径接入遥测——此前全文件零 PalActivitySource/PalMetrics，
+        // 重建路径有而稳态路径无，与 features.md「贯穿全部处理器」的宣称不对称。
+        // 复用既有工厂与计数器（不新增），因此不改计数口径、不触发 count-audit 联动。
+        using var activity = PalActivitySource.StartProjectionRebuild(
+            _handler.ProjectionName, context.SourceName);
+
         var checkpoint = await _checkpointStore.TryStartAsync(
             _handler.ProjectionName,
             context.SourceName,
@@ -126,6 +133,9 @@ public sealed class ProjectionProcessor<TMessage>
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             await StopLeaseHeartbeatAsync(heartbeat).ConfigureAwait(false);
+            // v4 批 D（S5）：失败计数 + Activity 状态（复用既有 ProjectionFailed 计数器）
+            activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
+            PalMetrics.ProjectionFailed.Add(1);
             // ITM-092 修复：MarkFailedAsync 本身失败不得掩盖主异常——内层捕获挂 Data 后仍以主异常优先。
             try
             {
@@ -166,6 +176,8 @@ public sealed class ProjectionProcessor<TMessage>
             _logger?.Warning(
                 $"Projection '{_handler.ProjectionName}' handler succeeded but checkpoint completion could not be persisted (pending confirmation); error: {markEx.Message}");
         }
+        // v4 批 D（S5）：在线投影成功计数（复用既有 ProjectionReplayed，与重建路径同口径）
+        PalMetrics.ProjectionReplayed.Add(1);
         return true;
     }
 

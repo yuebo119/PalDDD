@@ -1,5 +1,6 @@
 using Confluent.Kafka;
 using Microsoft.Extensions.Logging;
+using PalDDD.Core.Diagnostics;
 using PalDDD.Core.Logging;
 using PalDDD.Serialization;
 using System.Collections.Concurrent;
@@ -186,6 +187,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
     }
 
     /// <summary>发布已序列化字节（对象路径与 raw 路径共用）。</summary>
+    /// <remarks>
+    /// v4 批 D（S3）：发布失败（ProduceException 等）按 <c>paldd.broker.publish_failed</c> 计。
+    /// 异常仍原样上抛——Outbox 的重试/死信语义不变，本处只补可观测。
+    /// </remarks>
     private async ValueTask PublishSerializedAsync(
         byte[] value,
         string key,
@@ -193,12 +198,20 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         MessagePublishContext context,
         CancellationToken ct)
     {
-        await _producer.ProduceAsync(descriptor.Name, new Message<string, byte[]>
+        try
         {
-            Key = key,
-            Value = value,
-            Headers = CreateHeaders(context)
-        }, ct).ConfigureAwait(false);
+            await _producer.ProduceAsync(descriptor.Name, new Message<string, byte[]>
+            {
+                Key = key,
+                Value = value,
+                Headers = CreateHeaders(context)
+            }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            PalMetrics.BrokerPublishFailed.Add(1);
+            throw;
+        }
 
         if (_logger.IsEnabled(LogLevel.Debug))
             _logger.Debug($"Published {descriptor.ClrType.Name} to Kafka topic {descriptor.Name}, key={key}");
@@ -798,6 +811,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                     else
                     {
                         // 反序列化返回 null — 消息无法处理，不重试（finally 会补 RejectSkip 解冻水印）
+                        // v4 批 D（S3）：反序列化失败按消费失败计
+                        PalMetrics.BrokerConsumeFailed.Add(1);
                         _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {topic}");
                     }
                 }
@@ -812,10 +827,14 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                 }
                 catch (OperationCanceledException ex)
                 {
+                    // v4 批 D（S3）：非关停 OCE = 应用自身取消 → 按失败计（关停窗口不计）
+                    PalMetrics.BrokerConsumeFailed.Add(1);
                     _logger.Error(ex, $"Handler for {typeof(TMessage).Name} message threw a non-shutdown OperationCanceledException, discarding: {topic}");
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    // v4 批 D（S3）：handler 异常 / 反序列化失败（null 分支下方同计）
+                    PalMetrics.BrokerConsumeFailed.Add(1);
                     _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message: {topic}");
                 }
                 finally

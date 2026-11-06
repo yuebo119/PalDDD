@@ -1,3 +1,4 @@
+using PalDDD.Core.Diagnostics;
 using PalDDD.Core.Logging;
 using PalDDD.Serialization;
 using Microsoft.Extensions.Logging;
@@ -247,6 +248,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             _logger.Warning(
                 $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
                 $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
+            // v4 批 D（S3）：发布失败计数器（NO_ROUTE 是丢消息的直接原因，必须可见）
+            PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }
 
@@ -293,6 +296,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             _logger.Warning(
                 $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
                 $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
+            // v4 批 D（S3）：raw 发布路径同计
+            PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }
 
@@ -572,12 +577,16 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 // 共用 _channel 的全部订阅与发布一并瘫痪。本分支记 Error + nack 弃置
                 //（与 ITM-008 at-most-once 对齐），消费继续
                 // v4 批 A（B2）：判据同上方的关停分支——已移交且入队确认才交给批次结算。
+                // v4 批 D（S3）：非关停 OCE 按消费失败计（关停窗口不计）
+                PalMetrics.BrokerConsumeFailed.Add(1);
                 _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, discarding: {queueName}");
                 if (!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed)
                     await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                // v4 批 D（S3）：handler 异常按消费失败计
+                PalMetrics.BrokerConsumeFailed.Add(1);
                 _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message, discarding (anonymous queue): {queueName}");
                 // P2 定案：exclusive 队列的消费者只有本连接——requeue:true 会立即重投给自己，
                 // 持续失败时形成无退避热循环。与 Kafka 路径 ITM-008 对齐：记录后弃置（at-most-once）。

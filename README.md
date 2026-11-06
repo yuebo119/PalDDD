@@ -19,7 +19,7 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 | NuGet 包 | 编译期诊断 | 持久化栈 | 实测用例 |
 |:---:|:---:|:---:|:---:|
-| **35** 个 | **38** 条 | **3** 套 | **1502** 项¹ |
+| **36** 个 | **38** 条 | **3** 套 | **1502** 项¹ |
 
 ¹ 16 个测试项目，2026-10-08 本机全量实测：1434 通过 + 68 跳过——60 项 Docker 依赖（PalORM 多方言 46 + Integration 14，由 CI Testcontainers 执行）+ 8 项本机 broker 预检不可达；PalORM.Tests 与 Messaging.Integration.Tests 需 Docker。
 
@@ -64,7 +64,7 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 **可插拔压缩**。`ICompressionProvider` / `ICompressor` 抽象带两套实现：System 内置压缩与原生 LZ4/ZStandard 绑定（`PalDDD.Compression.Native`，AOT 安全），经 DI 替换。
 
-**内建可观测性**。`PalActivitySource`（12 个 Start 方法）+ `PalMetrics`（30 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测（命令分发/Saga 转换 Activity 为预留，尚未接线）。
+**内建可观测性**。`PalActivitySource`（12 个 Start 方法）+ `PalMetrics`（32 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测。**12 个 Activity 工厂中有 2 个预留未接线**（`StartCommandDispatch` / `StartSagaTransition`，ITM-627 家族，remarks 声明「保留供外部集成」），其余 10 个均有生产调用点。
 
 **三栈持久化，按场景选型**。PalORM（真 AOT，源生成 SQL）/ Dapper（调用点级 AOT，手写 SQL）/ EF Core（Migration/LINQ/ChangeTracker 生态）平等共存、无废弃计划；五组 Store 能力三栈全量覆盖、行为由跨栈对照测试守护（[ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md)、[ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)）；支持环境事务与显式事务边界。
 
@@ -515,7 +515,7 @@ flowchart TB
 | 文档 | 说明 |
 |------|------|
 | [架构说明](docs/architecture.md) | 分层、依赖方向、项目职责 |
-| [功能特性全景](docs/features.md) | 36 个项目的全量功能特性清单（源自源码分析，逐条带类型锚点） |
+| [功能特性全景](docs/features.md) | 37 个项目的全量功能特性清单（源自源码分析，逐条带类型锚点） |
 | [使用指南](docs/usage.md) | 各组件完整代码示例 |
 | [教程](docs/tutorial.md) | 从零构建 DDD 应用 |
 | [幂等设计说明](docs/idempotency-rationale.md) | 为什么这样设计：幂等执行的取舍与边界 |
