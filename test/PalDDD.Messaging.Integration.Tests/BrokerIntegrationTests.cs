@@ -242,6 +242,14 @@ public sealed class BrokerFixture : IAsyncDisposable
     }
 
     public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync(IPalLogger<RabbitMqBroker> logger)
+        => await CreateRabbitMqBrokerAsync(logger, prefetchCount: 10);
+
+    /// <summary>
+    /// v4 批 A 锁定测试用：可控 prefetch 的 broker 工厂。prefetch=1 时「批次 handler
+    /// 成功前 delivery 恒 unacked」可直接由「第二条不投递」观测（v4 §3 批 A 验收）。
+    /// </summary>
+    public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync(
+        IPalLogger<RabbitMqBroker> logger, ushort prefetchCount)
     {
         var connection = await CreateRabbitConnectionAsync();
         // ITM-651：改走 CreateAsync 工厂——channel 启用 publisher confirms + confirmation
@@ -253,7 +261,8 @@ public sealed class BrokerFixture : IAsyncDisposable
             connection,
             logger,
             _catalogAndSerializer.Serializer,
-            _catalogAndSerializer.Catalog);
+            _catalogAndSerializer.Catalog,
+            prefetchCount);
         return (broker, _catalogAndSerializer.Serializer);
     }
 

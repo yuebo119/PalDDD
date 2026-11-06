@@ -65,7 +65,7 @@
 
 | 特性 | 说明 | 锚点 |
 |---|---|---|
-| 消息代理契约 | `IMessageBroker` 泛型/非泛型发布 + 逐条订阅 + 批量订阅（数量/时间界组批，`ConsumedMessage<T>` 携带含 `MessageId` 的消费上下文）；接口 remarks 显式声明投递语义（当前两实现均为 at-most-once、不保证顺序、多订阅者语义分叉），消费幂等由 Inbox 保证 | MessageBroker.cs、MessageBatchPump.cs |
+| 消息代理契约 | `IMessageBroker` 泛型/非泛型发布 + 逐条订阅 + 批量订阅（数量/时间界组批，`ConsumedMessage<T>` 携带含 `MessageId` 的消费上下文；含批次级 `IMessageAck` 的重载把整批结算权交给 handler，逐条兜底让位于批次结算）；接口 remarks 显式声明投递语义（当前两实现均为 at-most-once、不保证顺序、多订阅者语义分叉），消费幂等由 Inbox 保证 | MessageBroker.cs、MessageBatchPump.cs |
 | 追踪信封闭环 | 发布侧 W3C TraceParent/CorrelationId/CausationId，消费侧 FromHeaders 还原，头键名常量锁定读写一致 | MessagePublishContext.cs、MessageConsumeContext.cs |
 | 空实现 | 单节点模式零发送 | `NullMessageBroker` |
 | Kafka 适配器 | 按消息类型名路由同名 Topic、后台线程阻塞消费循环、订阅句柄幂等释放 + Flush 排空、librdkafka 错误/统计/日志接线 | `KafkaBroker`（KafkaBroker.cs） |
@@ -210,7 +210,7 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 
 ## 边界与刻意取舍
 
-1. Broker 层默认投递语义是 at-most-once；需要 at-least-once 时用携带 `IMessageAck` 的订阅重载显式确认/拒绝（Kafka 侧还须 `EnableAutoOffsetStore=false`），业务侧幂等仍由 Inbox/幂等存储承担（`IMessageBroker` remarks 明示）。
+1. Broker 层默认投递语义是 at-most-once；需要 at-least-once 时用携带 `IMessageAck` 的订阅重载显式确认/拒绝（Kafka 侧还须 `EnableAutoOffsetStore=false`），业务侧幂等仍由 Inbox/幂等存储承担（`IMessageBroker` remarks 明示）。批量订阅的批次级确认器语义是「整批一次结算」：逐条兜底让位于批次结算，handler 未结算时按成功确认 / 异常弃置收尾，需要整批重投须在 handler 内显式 `RejectAsync(requeue: true)`。
 2. `SagaStatus` 的数值即持久化契约：`AwaitingHumanDecision=5`，`4` 是 v5.0.0 移除 `DeadLettered` 后的永久空洞（不得复用）——存量 `status=4` 的行会在水合时 fail-fast，升级前须按 `SELECT COUNT(*) FROM saga_states WHERE status = 4` 核对并修正。
 3. `AddPalFullStack` 已在 v5.0 契约窗口移除，统一入口为 `AddPalCoreStack`（原名字易被误解为包含基础设施）。
 4. SQLite 时间列编码在 PalORM 栈与 Dapper 栈互不兼容，同一物理库只能单选一个适配器族（双侧对称声明）。

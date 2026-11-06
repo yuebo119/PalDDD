@@ -14,6 +14,26 @@
 
 ### Fixed 修复
 
+- **RabbitMQ 批量订阅 pre-ack 使批次确认契约失效（2026-11-06 全量审计 B2，P1）**：
+  批量泵只把逐条确认器入队、不结算，而 broker 在 `await handler(...)` 返回后按
+  `!ack.IsSettled` 兜底 ACK——handler 一入队就结算，批次 handler 成败与结算脱钩；
+  批次收尾 `AcknowledgeAsync` 落在已结算确认器上，每条刷
+  `Duplicate acknowledge ignored` Warning，`RejectAsync(requeue:true)` 在批量路径静默无操作。
+  修复：新增 `internal DeferredAckRegistry`（`ConditionalWeakTable`，零公共 API 变化）+
+  `PalDDD.Messaging` 对 RabbitMQ 的 IVT 一行；泵在 `channel.Writer.WriteAsync` **之前**
+  同步打移交标记（顺序硬约束：先写后标在关停竞态下会漏标）；broker 六分支精确判据——
+  `:514`/`:530`（从未入队）保留无条件 Nack，成功兜底与通用异常分支查
+  `!IsDeferred && !IsSettled`，两个 OCE 分支改为「已移交**且**入队已确认」才跳过；
+  泵在关停 `catch(OCE)` break 前对当前批补 `RejectAsync(requeue:false)`，防 delivery 悬空。
+  Kafka 侧 `finally` 判据只看 `IsSettled`，不读该标记，零行为变化。
+  验证：`dotnet build` 0 警告 0 错误；单元锁定测试
+  `SubscribeBatchAsync_AckPath_MarksDeferredBeforeBrokerHandlerReturns` /
+  `SubscribeBatchAsync_ShutdownDuringHandler_RejectsCurrentBatch`；真容器集成锁定
+  `BatchSubscription_DoesNotPreAcknowledge_UntilHandlerSettles`（prefetch=1，批次未结算时
+  第二条不投递且零 Duplicate Warning）/ `BatchSubscription_RejectWithRequeue_RedeliversSameMessage`；
+  变异三点红→绿（删 `MarkDeferred`、标记移到 `WriteAsync` 之后、删泵关停 `Reject`）；
+  公共 API 快照零变化。
+
 - **Kafka 手动存储模式毒消息冻结 offset 水印（2026-11-06 全量审计 B3，P1）**：
   `EnableAutoOffsetStore=false` 下，消费线程先把每条已交付消息的 offset 播种进 `OffsetTracker`，
   但 `HandleMessageAsync` 的失败路径（handler 抛异常、非关停 OCE、反序列化返回 null）与

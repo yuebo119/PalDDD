@@ -477,6 +477,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             // 批次 A（2026-11-04）：每次交付一个确认器——handler 显式结算时由它调 broker API，
             // 未结算时下方兜底分支按既有规则收尾（成功 BasicAck / 异常 Nack(false)）。
             var ack = new RabbitMqMessageAck(this, consumerChannel, ea.DeliveryTag, queueName);
+            // v4 批 A（B2）：入队确认——只有泵的四参 handler 正常返回才置 true。
+            // 批量路径的 handler 就是 MessageBatchPump.EnqueueAsync：它先同步打 deferred
+            // 标记，再 WriteAsync 入通道。WriteAsync 在关停/通道关闭时抛 OCE 或
+            // ChannelClosedException，item 未入通道，泵永远看不到这条确认器、不会结算，
+            // broker 必须自行 Nack——否则 delivery 恒 unacked 占用 prefetch 名额。
+            var enqueueConfirmed = false;
             try
             {
                 // 2026-10-19 性能实施轮：泛型反序列化，免运行时 Type 查找与值类型装箱。
@@ -517,9 +523,14 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                     using (deliveryCts)
                     {
                         await handler(message, consumeContext, ack, deliveryCts.Token).ConfigureAwait(false);
+                        // v4 批 A（B2）：handler 正常返回 = 泵已把 item 写入通道并入批。
+                        enqueueConfirmed = true;
                         // 兜底确认 — handler 未显式结算时按处理成功 ACK（旧行为）
                         // P3 修复：ACK 与 Nack 同样加保护——channel 已关时异常逃逸进消费者回调
-                        if (!ack.IsSettled)
+                        // v4 批 A（B2）：批量泵在 WriteAsync 之前把结算权移交批次，此处必须显式
+                        // 查 IsDeferred——CWT 标记不置 ack.IsSettled，只查 IsSettled 会提前 ACK，
+                        // 与批次收尾结算冲突（pre-ACK 主缺陷就在此分支）。
+                        if (!DeferredAckRegistry.IsDeferred(ack) && !ack.IsSettled)
                             await TryAckSafeAsync(consumerChannel, ea.DeliveryTag, queueName).ConfigureAwait(false);
                     }
                 }
@@ -540,7 +551,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // 误标为关停 Warning；CTS.IsCancellationRequested 属性在 Dispose 后读取安全（不抛），
                 // 句柄释放（linkedCts.Dispose）后的飞行中 OCE 同样落回通用 catch 记 Error
                 _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled during shutdown, discarding: {queueName}");
-                await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                // v4 批 A（B2）：批量路径下若确认器已移交批次**且** item 已确认入通道
+                // （enqueueConfirmed），结算权归泵的批次收尾，此处跳过以免二次 Nack。
+                // WriteAsync 抛 OCE 时 item 未入通道、泵看不到这条 ack，必须由 broker 兜底
+                // Nack，否则 delivery 恒 unacked 占用 prefetch 名额（红队 A-2 实证）。
+                if (!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed)
+                    await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is OperationCanceledException)
             {
@@ -551,8 +567,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // consumer_timeout（默认 30 分钟）触发 PRECONDITION_FAILED 关闭 channel，
                 // 共用 _channel 的全部订阅与发布一并瘫痪。本分支记 Error + nack 弃置
                 //（与 ITM-008 at-most-once 对齐），消费继续
+                // v4 批 A（B2）：判据同上方的关停分支——已移交且入队确认才交给批次结算。
                 _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, discarding: {queueName}");
-                await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                if (!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed)
+                    await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -561,7 +579,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // 持续失败时形成无退避热循环。与 Kafka 路径 ITM-008 对齐：记录后弃置（at-most-once）。
                 // 需要失败重试语义的应用应使用持久队列 + DLX，由自身的 Broker 配置承载。
                 // 批次 A：handler 已显式结算（含 RejectAsync(true)）时不覆盖其决定。
-                if (!ack.IsSettled)
+                // v4 批 A（B2）：已移交且入队确认的确认器由泵的批次收尾结算；WriteAsync 抛
+                // ChannelClosedException 等异常时 item 未入通道，必须由 broker 兜底 Nack——
+                // 只查 IsDeferred 会跳过而悬空（v4 §2.1 表 :564 判据的实施轮补强）。
+                if ((!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed) && !ack.IsSettled)
                     await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
         };

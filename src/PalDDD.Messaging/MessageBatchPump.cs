@@ -86,8 +86,15 @@ internal static class MessageBatchPump
 
         // 逐条订阅：ack 通路走四参重载把 broker 的真实确认器带进通道；旧通路仍走三参重载，
         // 传 null 表示「本次交付无需结算」——两条通路的收件逻辑因此只差 Ack 字段。
+        // v4 批 A（B2）：标记必须在 WriteAsync 之前同步置位。broker 的 await handler(...) 返回
+        // 后立刻判定兜底 ACK，且泵在独立 Task.Run 上跑；标记若落在 WriteAsync 之后或 reader
+        // 侧，关停竞态会漏标，pre-ACK 与批次结算冲突（v4 §2.1 顺序硬约束）。
         ValueTask EnqueueAsync(TMessage message, MessageConsumeContext? context, IMessageAck? ack, CancellationToken token)
-            => channel.Writer.WriteAsync(new PumpItem<TMessage>(message, context, ack), token);
+        {
+            if (ack is not null)
+                DeferredAckRegistry.MarkDeferred(ack);
+            return channel.Writer.WriteAsync(new PumpItem<TMessage>(message, context, ack), token);
+        }
 
         var inner = propagateAcks
             ? await broker.SubscribeAsync<TMessage>(
@@ -182,6 +189,14 @@ internal static class MessageBatchPump
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
+                    // v4 批 A（B2）：关停时当前批已组好但 handler 未被结算，直接 break 会让
+                    // 整批 delivery 恒 unacked 占用 prefetch 名额（重造 RabbitMqBroker
+                    // :547-553 注释所记缺陷，且 broker 侧的 OCE 分支在「结算已移交」时
+                    // 不再兜底 Nack）。补一次整批弃置：requeue:false 与逐条关停语义一致，
+                    // CancellationToken.None 保证取消窗口内仍能落地。IsSettled 门控避免
+                    // 覆盖 handler 已显式作出的结算决定。
+                    if (!batchAck.IsSettled)
+                        await batchAck.RejectAsync(requeue: false, ct: CancellationToken.None).ConfigureAwait(false);
                     break;
                 }
                 catch (Exception ex)

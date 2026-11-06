@@ -1042,3 +1042,31 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 ```
 
 Outbox processor 会使用 `OutboxMessage.Id` 作为 `messageId`，并把 `OutboxMessage` 上的 correlation/causation/trace metadata 作为 `MessagePublishContext` 传给 broker。消息 payload 不需要实现基础设施 marker interface；wire name、schema version 和 content type 来自 `MessageDescriptor`。
+
+### 消费确认与批量订阅
+
+逐条订阅用携带 `IMessageAck` 的重载显式确认或拒绝；Kafka 侧须同时关闭自动存储（`EnableAutoOffsetStore=false`）确认才真正存储 offset，否则 `AcknowledgeAsync` 是无操作：
+
+```csharp
+await using var sub = await broker.SubscribeAsync<OrderCreated>(async (message, context, ack, ct) =>
+{
+    await HandleAsync(message, ct);
+    await ack.AcknowledgeAsync(ct);            // 成功：RabbitMQ BasicAck / Kafka 存 offset
+    // await ack.RejectAsync(requeue: true, ct); // 失败要重投：Kafka Seek 退避 / RabbitMQ Nack(true)
+}, ct);
+```
+
+批量订阅把**整批**交给 handler，批次级确认器一次结算全部：`AcknowledgeAsync` 整批确认，`RejectAsync` 整批拒绝（Kafka 逆序 seek 使重投从批内最早一条开始）。批内不支持部分确认——需要逐条差异化处置请用逐条订阅：
+
+```csharp
+await using var sub = await broker.SubscribeBatchAsync<OrderCreated>(async (batch, ack, ct) =>
+{
+    foreach (var item in batch)
+        await HandleAsync(item.Message, ct);
+    await ack.AcknowledgeAsync(ct);   // handler 不结算时泵按成功确认兜底；抛异常则整批弃置
+}, maxBatchSize: 64, maxDelay: TimeSpan.FromMilliseconds(50), ct);
+```
+
+批量路径的结算权归批次：broker 的逐条兜底 ACK 会让位于批次结算（内部移交标记，零公共 API 变化），因此批次 handler 返回之前 delivery 保持 unacked——这正是「批次成败决定结算」的前提。若某条消息在入队前就失败（关停或通道关闭），泵看不到它，broker 仍自行 Nack 兜底，不会留下悬空 delivery。
+
+⚠️ RabbitMQ 的 prefetch 默认 10（`BasicQos` 上限）会先于 `maxBatchSize` 生效：批量泵在整批结算前保持全部 delivery unacked，故有效批大小实际被 prefetch 截断在 10 以内。需要更大批次时调高 `prefetchCount`（broker 构造参数），两者需匹配。

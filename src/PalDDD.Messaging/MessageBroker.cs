@@ -168,6 +168,13 @@ public interface IMessageBroker
     /// 重投请在 handler 内显式 <c>RejectAsync(requeue: true)</c>（Kafka 逆序 seek 使重投从批内
     /// 最早一条开始，见 <c>MessageBatchAck</c> 说明）。
     /// </para>
+    /// <para>
+    /// <b>逐条兜底的移交（v4 批 A，2026-11-07）</b>：批量路径下 broker 的单条兜底结算必须让位
+    /// 于批次结算，否则 handler 返回入队时刻就会被提前 ACK（pre-ACK），批次 handler 的成败与
+    /// 结算脱钩。泵在把确认器写入组批通道<b>之前</b>经 <c>DeferredAckRegistry</c> 打移交标记，
+    /// 逐条兜底据此跳过；若入队本身失败（关停/通道关闭），泵看不到该确认器，broker 仍自行
+    /// Nack 兜底。该标记是程序集内部机制，不进公共契约、不影响未走批量路径的调用方。
+    /// </para>
     /// <para>其余参数语义同无 ack 的批量重载。</para>
     /// </remarks>
     ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(

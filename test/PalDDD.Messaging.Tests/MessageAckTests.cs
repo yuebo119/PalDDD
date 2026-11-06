@@ -265,6 +265,77 @@ public sealed class MessageAckTests
         await Assert.That(log.Count).IsEqualTo(0);
     }
 
+    // ── v4 批 A（B2）：结算移交标记 + 泵关停兜底 ──
+
+    /// <summary>
+    /// 标记时序锁定：broker 的 handler（泵的 EnqueueAsync）返回时标记必须已置位。
+    /// 若标记挪到 WriteAsync 之后或 reader 侧，broker 的兜底 ACK 判定会漏标 → pre-ACK。
+    /// </summary>
+    [Test]
+    public async Task SubscribeBatchAsync_AckPath_MarksDeferredBeforeBrokerHandlerReturns(CancellationToken cancellationToken)
+    {
+        var broker = new AckProbeBroker<string>();
+        IMessageBroker iface = broker;
+        var log = new List<string>();
+        var first = new RecordingAck(0, log);
+        var second = new RecordingAck(1, log);
+
+        await using var subscription = await iface.SubscribeBatchAsync<string>(
+            (batch, ack, token) =>
+            {
+                _ = batch;
+                _ = token;
+                _ = ack;
+                return ValueTask.CompletedTask;
+            },
+            maxBatchSize: 2,
+            maxDelay: TimeSpan.FromMilliseconds(10),
+            cancellationToken);
+
+        await broker.PushAsync("m0", first, cancellationToken);
+
+        // PushAsync 内部 await 了泵的四参 handler；返回即表示 EnqueueAsync 已完成，
+        // 此时标记必须已置位（v4 §2.1 顺序硬约束）
+        await Assert.That(DeferredAckRegistry.IsDeferred(first)).IsTrue();
+        // 未进入泵的确认器不受影响（负向对照）
+        await Assert.That(DeferredAckRegistry.IsDeferred(second)).IsFalse();
+    }
+
+    /// <summary>
+    /// 泵关停兜底：handler 因取消抛 OCE 时，当前批必须补 Reject(requeue:false)，
+    /// 否则已入通道的 delivery 恒 unacked（占用 prefetch 名额）。
+    /// </summary>
+    [Test]
+    public async Task SubscribeBatchAsync_ShutdownDuringHandler_RejectsCurrentBatch(CancellationToken cancellationToken)
+    {
+        var broker = new AckProbeBroker<string>();
+        IMessageBroker iface = broker;
+        var log = new List<string>();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource();
+
+        var subscription = await iface.SubscribeBatchAsync<string>(
+            async (batch, ack, token) =>
+            {
+                _ = batch;
+                _ = ack;
+                entered.TrySetResult();
+                // 等到订阅关停：pump 的 ct 取消 → OCE 从 handler 逃逸 → 关停兜底分支
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            },
+            maxBatchSize: 2,
+            maxDelay: TimeSpan.FromMilliseconds(10),
+            cts.Token);
+
+        await broker.PushAsync("m0", new RecordingAck(0, log), cancellationToken);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+        await cts.CancelAsync();
+        await subscription.DisposeAsync();
+
+        await Assert.That(string.Join(",", log)).IsEqualTo("reject-0-False");
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, string message)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);

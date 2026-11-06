@@ -665,4 +665,113 @@ public sealed class RabbitAckTests
         await Assert.That(Volatile.Read(ref count)).IsEqualTo(1);
         await Assert.That(logger.ErrorCount).IsEqualTo(0);
     }
+
+    /// <summary>
+    /// v4 批 A（B2）：批量订阅在批次 handler 成功前 delivery 恒 unacked——prefetch=1 时
+    /// 第一条未结算则第二条不投递；批次收尾 AcknowledgeAsync 后第二条才到达，且零
+    /// Duplicate acknowledge Warning（修复前 broker 在入队时刻兜底 ACK，批次收尾二次结算）。
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task BatchSubscription_DoesNotPreAcknowledge_UntilHandlerSettles(CancellationToken cancellationToken)
+    {
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger, prefetchCount: 1);
+        await using var broker = created.Item1;
+
+        var payload = $"rmq-batch-{Guid.NewGuid():N}";
+        var firstBatch = new TaskCompletionSource<IReadOnlyList<ConsumedMessage<TestMessage>>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondBatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var sub = await broker.SubscribeBatchAsync<TestMessage>(
+            async (batch, ack, ct) =>
+            {
+                if (batch.Any(static m => m.Message.Name.StartsWith("rmq-batch-", StringComparison.Ordinal)))
+                {
+                    if (!firstBatch.Task.IsCompleted)
+                    {
+                        firstBatch.TrySetResult([.. batch]);
+                        // 批次 handler 未结算前，delivery 必须保持 unacked（prefetch=1 会
+                        // 扣住第二条）；此处阻塞到测试确认后再显式确认。
+                        await release.Task.WaitAsync(ct);
+                        await ack.AcknowledgeAsync(ct);
+                    }
+                    else
+                    {
+                        secondBatch.TrySetResult();
+                        await ack.AcknowledgeAsync(ct);
+                    }
+                }
+                else
+                {
+                    await ack.AcknowledgeAsync(ct);
+                }
+            },
+            maxBatchSize: 1,
+            maxDelay: TimeSpan.FromMilliseconds(20),
+            cancellationToken);
+
+        await broker.PublishAsync(new TestMessage(payload), cancellationToken);
+        var first = await firstBatch.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await Assert.That(first.Count).IsEqualTo(1);
+        await Assert.That(first[0].Message.Name).IsEqualTo(payload);
+
+        // 稳定窗口：prefetch=1 + 第一条未结算 ⇒ 第二条必须仍未投递（无第二个 handler 进入）
+        await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
+        await Assert.That(firstBatch.Task.IsCompleted).IsTrue();
+
+        release.TrySetResult();
+        await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
+
+        // 修复前：入队时刻 broker 兜底 ACK 已结算 → 批次 AcknowledgeAsync 触发
+        // "Duplicate acknowledge ignored" Warning。
+        await Assert.That(logger.WarningCount).IsEqualTo(0);
+        await Assert.That(logger.ErrorCount).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// v4 批 A（B2）：批量 handler 显式 RejectAsync(requeue:true) 必须真重投（修复前
+    /// broker 已提前 ACK，批量路径的 Reject 静默无操作）。
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task BatchSubscription_RejectWithRequeue_RedeliversSameMessage(CancellationToken cancellationToken)
+    {
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger);
+        await using var broker = created.Item1;
+
+        var payload = $"rmq-batch-requeue-{Guid.NewGuid():N}";
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var count = 0;
+
+        await using var sub = await broker.SubscribeBatchAsync<TestMessage>(
+            async (batch, ack, ct) =>
+            {
+                if (!batch.Any(static m => m.Message.Name.StartsWith("rmq-batch-requeue-", StringComparison.Ordinal)))
+                {
+                    await ack.AcknowledgeAsync(ct);
+                    return;
+                }
+
+                if (Interlocked.Increment(ref count) == 1)
+                {
+                    await ack.RejectAsync(requeue: true, ct);
+                    return;
+                }
+
+                await ack.AcknowledgeAsync(ct);
+                done.TrySetResult();
+            },
+            maxBatchSize: 1,
+            maxDelay: TimeSpan.FromMilliseconds(20),
+            cancellationToken);
+
+        await broker.PublishAsync(new TestMessage(payload), cancellationToken);
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
+
+        await Assert.That(Volatile.Read(ref count)).IsGreaterThanOrEqualTo(2);
+    }
 }
