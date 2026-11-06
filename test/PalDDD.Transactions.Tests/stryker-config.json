@@ -3,7 +3,9 @@
     "test-runner": "mtp",
     "project": "PalDDD.Transactions.csproj",
     "mutate": [
-      "**/Outbox/MySqlLeasePolicy.cs"
+      "**/Outbox/MySqlLeasePolicy.cs",
+      "**/Retry/RetryExecutor.cs",
+      "**/Outbox/OutboxWakeUpSignal.cs"
     ],
     "reporters": [
       "cleartext",

@@ -249,6 +249,18 @@
 
 ### Tests
 
+- **变异门禁可信度（2026-11-06 全量审计 B5/J1，P2）**：`break=95` 的历史 success 建立在被
+  filter 吃掉后的个位数基数上（152 created→12 tested、2310 created→35 tested，422 CompileError），
+  「执行过」成立、「拒绝过吗」不成立。本批：① 两份 `stryker-config.json` 在**各自 project 内**
+  扩 mutate 面（Transactions 增 `RetryExecutor`/`OutboxWakeUpSignal`，Compression 增
+  `SystemCompressor`），不改 `project` 字段；② 新增 `scripts/mutation-probe.cs`——向被测源码注入
+  语义存活体、跑目标测试项目、断言必须转红，两个探针均实测转红（MySqlLeasePolicy 314 项中 2 失败、
+  CompressionProvider 49 项中 41 失败，均为真实测试拒绝而非编译错误）；③ `mutation.yml` 头部
+  明写**零覆盖边界**：批 A/B/C 的 Messaging/CQRS/Transactions.EFCore 文件不在这两份配置内，
+  B5 的「基数/覆盖率」另一半未解决；新增 Messaging/CQRS stryker 配置属放弃范围。
+  验证：`mutation-probe --selftest` 6/6；真实探针 2/2 转红；`gate-audit --inventory`
+  45 脚本（28 接线 OK / 17 TOOL / 0 REVIEW）。
+
 - **2026-11-05 批次 A 收尾：消费确认边界补齐与 A6 口径修正**：
   ①**显式 Commit 路径集成用例**（此前 Not-Tested）：`EnableAutoOffsetStore=false` 且
   `EnableAutoCommit=false` 时，`AcknowledgeAsync` 与 `RejectAsync(false)` 必须补发显式 `Commit`。

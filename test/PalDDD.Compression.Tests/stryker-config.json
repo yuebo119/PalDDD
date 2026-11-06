@@ -3,7 +3,8 @@
     "test-runner": "mtp",
     "project": "PalDDD.Compression.csproj",
     "mutate": [
-      "**/CompressionProvider.cs"
+      "**/CompressionProvider.cs",
+      "**/SystemCompressor.cs"
     ],
     "reporters": [
       "cleartext",
