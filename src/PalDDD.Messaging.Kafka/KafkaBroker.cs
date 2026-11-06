@@ -345,6 +345,13 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
     /// <c>EnableAutoCommit=false</c> 时进一步由确认动作显式 <c>Commit</c>（否则存储的 offset
     /// 永不被提交，形成「确认了但仍在重投」的静默失败）。
     /// </para>
+    /// <para>
+    /// <b>失败路径结算（B3，2026-11-06）</b>：<c>EnableAutoOffsetStore=false</c> 下，handler
+    /// 抛异常、反序列化返回 null、或 handler 成功但未显式结算时，框架在 <c>HandleMessageAsync</c>
+    /// 的 <c>finally</c> 补一次 <c>RejectAsync(requeue:false)</c> 解冻 offset 水印前缀推进
+    ///（与 <c>AcknowledgeAsync</c> 在消费线程走同一分支，等价）。关停窗口（令牌已取消）不补，
+    /// 走既有 at-least-once 重启重放；EOF/tombstone 不进 offset 跟踪、不创建确认器。
+    /// </para>
     /// </remarks>
     public override ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, MessageConsumeContext?, IMessageAck, CancellationToken, ValueTask> handler, CancellationToken ct = default)
@@ -750,12 +757,16 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
 
             async Task HandleMessageAsync(ConsumeResult<string, byte[]> result)
             {
+                // B3（2026-11-06）：确认器提升到 try 外——失败路径（handler 抛异常/反序列化
+                // null/非关停 OCE）此前不结算，而 offset 在消费线程 :532-533 已播种进
+                // OffsetTracker，前缀推进永久卡死（分区消费停摆 + 重启全量重放）。
+                KafkaMessageAck? ack = null;
                 try
                 {
                     // ITM-628 修复：分区 EOF 空消息守卫（EnablePartitionEof=true 时
                     // Consume 返回 ConsumeResult.Message == null，仅 IsPartitionEOF 置位）——
                     // 原代码直接解引用 result.Message.Value 抛 NRE，落 catch(Exception)
-                    // 记假错误日志。EOF 非消息，跳过继续等待。
+                    // 记假错误日志。EOF 非消息，跳过继续等待（不进 offset 跟踪、不创建 ack）。
                     if (result.Message is null)
                         return;
                     // 三十八轮 P3 修复：tombstone（null value）消息走专门分支——
@@ -765,6 +776,14 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                         _logger.Information($"Tombstone (null value) message on {topic}, discarding");
                         return;
                     }
+                    // B3：确认器在反序列化之前构造，确保 null 分支也有 ack 可结算。
+                    // 批次 A（2026-11-04）：动作经队列回送消费线程执行（IConsumer 非线程安全，
+                    // handler 跑在 worker 线程上）。
+                    ack = new KafkaMessageAck(
+                        ackCommands,
+                        new TopicPartitionOffset(result.TopicPartition, result.Offset),
+                        manualStore,
+                        _logger);
                     // 2026-10-19 性能实施轮：走泛型反序列化（编译时 JsonTypeInfo<T>/
                     // MemoryPack 泛型 Formatter），免运行时 Type 查找与值类型装箱。
                     TMessage? message = Serializer.Deserialize<TMessage>(result.Message.Value, descriptor);
@@ -774,18 +793,11 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                         // C-11（EPSL 地毯审计 2026-10-11）：单趟遍历 Confluent Headers 直产
                         // 已解码字典（原 ToHeaderMap 中间字典 + FromHeaders 二次物化消除）
                         var consumeContext = FromKafkaHeaders(result.Message.Headers, result.Message.Key);
-                        // 批次 A（2026-11-04）：本次交付的确认器——命令经队列回送消费线程执行
-                        // （IConsumer 非线程安全，handler 跑在 worker 线程上）。
-                        var ack = new KafkaMessageAck(
-                            ackCommands,
-                            new TopicPartitionOffset(result.TopicPartition, result.Offset),
-                            manualStore,
-                            _logger);
                         await handler(message, consumeContext, ack, tokenSnapshot).ConfigureAwait(false);
                     }
                     else
                     {
-                        // 反序列化返回 null — 消息无法处理，不重试
+                        // 反序列化返回 null — 消息无法处理，不重试（finally 会补 RejectSkip 解冻水印）
                         _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {topic}");
                     }
                 }
@@ -800,11 +812,30 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                 }
                 catch (OperationCanceledException ex)
                 {
-                    _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, discarding: {topic}");
+                    _logger.Error(ex, $"Handler for {typeof(TMessage).Name} message threw a non-shutdown OperationCanceledException, discarding: {topic}");
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message: {topic}");
+                }
+                finally
+                {
+                    // B3（v2 §2.1）：失败路径统一结算，解冻 OffsetTracker 前缀推进。
+                    // 四门控：
+                    //  · manualStore —— 自动存储模式不结算（RejectSkip 本就早退，但 TryClaim
+                    //    会置 _settled；门控后零状态变化，保持既有 at-most-once 语义）；
+                    //  · ack is { IsSettled: false } —— handler 已显式结算（Ack/Reject/Seek）
+                    //    时不覆盖其决定；EOF/tombstone 的 ack=null 由模式匹配天然跳过；
+                    //  · !tokenSnapshot.IsCancellationRequested —— 关停窗口不结算：
+                    //    EnqueueAsync 的 WaitAsync(ct) 在已取消 token 上立即抛 OCE，且消费线程
+                    //    finally 已放弃队列命令，补结算必然异常逃逸；关停走 at-least-once 重启重放；
+                    //  · CancellationToken.None —— finally 结算不受外部取消打断，消费线程
+                    //    Consume(100ms) 每轮排空命令，100ms 内落地。
+                    // 注：handler 成功但未显式结算时补 RejectSkip 与 Acknowledge 等价——两者在
+                    // DrainAckCommands（:577-593）走同一分支（前缀推进 + 复位退避），
+                    // 因此不会误伤「成功未结算」路径，反而闭合了成功却漏 ack 的推进缺口。
+                    if (manualStore && ack is { IsSettled: false } && !tokenSnapshot.IsCancellationRequested)
+                        await ack.RejectAsync(requeue: false, CancellationToken.None).ConfigureAwait(false);
                 }
             }
         });

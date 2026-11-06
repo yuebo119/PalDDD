@@ -12,6 +12,21 @@
 
 ## [Unreleased]
 
+### Fixed 修复
+
+- **Kafka 手动存储模式毒消息冻结 offset 水印（2026-11-06 全量审计 B3，P1）**：
+  `EnableAutoOffsetStore=false` 下，消费线程先把每条已交付消息的 offset 播种进 `OffsetTracker`，
+  但 `HandleMessageAsync` 的失败路径（handler 抛异常、非关停 OCE、反序列化返回 null）与
+  「handler 成功但未显式结算」都不结算确认器——连续前缀缺一环，`StoreOffset` 永不推进，
+  分区消费永久停摆且重启从最早位点全量重放。修复：`KafkaMessageAck` 提升到 `try` 外、
+  在反序列化之前构造，新增 `finally` 在四门控（`manualStore` / 未结算 / 非关停窗口 /
+  `CancellationToken.None`）下补 `RejectAsync(requeue:false)`；自动存储模式零状态变化，
+  EOF/tombstone 不结算，handler 已显式结算时不覆盖其决定。
+  验证：Kafka 项目 0 警告 0 错误；新增集成锁定测试
+  `PoisonHandlerFailure_AutoSettlesOffset_WatermarkAdvancesAfterRestart`（毒消息抛异常 →
+  健康消息确认 → 同 GroupId 重启两条均不重投，修复前水印冻结两条都重投转红）；
+  公共 API 无变化。
+
 ### Added
 
 - **2026-11-04 公共 API 缺口 C 批：Outbox / Inbox 读侧查询（新增公共 API）**：

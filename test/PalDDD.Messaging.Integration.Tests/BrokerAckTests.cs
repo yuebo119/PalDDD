@@ -266,6 +266,72 @@ public sealed class KafkaAckTests
     }
 
     /// <summary>
+    /// B3（2026-11-06 全量审计 P1）：手动存储模式下毒消息（handler 抛异常）不结算确认器，
+    /// 但 offset 已在消费线程播种进 OffsetTracker——前缀推进卡死导致分区永久停摆且重启全量重放。
+    /// <para>
+    /// 本用例锁死修复：投毒 → handler 抛异常（broker 记 Error 后继续）→ 后续健康消息显式
+    /// Acknowledge → 关停重启同 GroupId，毒消息与健康消息都不得重投。修复前毒消息 offset
+    /// 未被结算，健康消息的 Ack 推不动连续前缀（水印停在毒消息），重启后两条都重投 → 转红。
+    /// </para>
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task PoisonHandlerFailure_AutoSettlesOffset_WatermarkAdvancesAfterRestart(CancellationToken cancellationToken)
+    {
+        var groupId = $"paldd-poison-{Guid.NewGuid():N}";
+        var logger = new CapturingLogger<KafkaBroker>();
+        var topic = NewTopic("kafka-poison-wm");
+        var poison = $"poison-{Guid.NewGuid():N}";
+        var healthy = $"healthy-{Guid.NewGuid():N}";
+
+        var poisonSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var healthyAcked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var created = CreateBroker(topic, groupId, logger);
+        await using (var broker = created.Broker)
+        {
+            await using var sub = await broker.SubscribeAsync<TestMessage>(async (msg, _, ack, ct) =>
+            {
+                if (msg.Name == poison)
+                {
+                    // 毒消息：不调用任何结算方法，直接抛业务异常（模拟持久化故障）。
+                    // 修复前此路径不结算 → 水印冻结；修复后 finally 补 RejectSkip 解冻。
+                    poisonSeen.TrySetResult();
+                    throw new InvalidOperationException("poison handler failure (B3 regression lock)");
+                }
+                if (msg.Name == healthy)
+                {
+                    await ack.AcknowledgeAsync(ct);
+                    healthyAcked.TrySetResult();
+                    return;
+                }
+                await ack.AcknowledgeAsync(ct);
+            }, cancellationToken);
+
+            await broker.PublishAsync(new TestMessage(poison), cancellationToken);
+            await broker.PublishAsync(new TestMessage(healthy), cancellationToken);
+            await poisonSeen.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
+            await healthyAcked.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
+        }
+
+        // 第二段：同 GroupId 重启。若毒消息 offset 未结算，前缀推进卡死 → 两条都重投。
+        var redelivered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondBroker = CreateBroker(topic, groupId, logger);
+        await using (var broker = secondBroker.Broker)
+        {
+            await using var sub = await broker.SubscribeAsync<TestMessage>((msg, _, ack, ct) =>
+            {
+                if (msg.Name == poison || msg.Name == healthy)
+                    redelivered.TrySetResult(msg.Name);
+                return ack.AcknowledgeAsync(ct);
+            }, cancellationToken);
+
+            var raced = await Task.WhenAny(redelivered.Task, Task.Delay(TimeSpan.FromSeconds(10), cancellationToken));
+            await Assert.That(ReferenceEquals(raced, redelivered.Task)).IsFalse()
+                .Because($"毒消息或健康消息被重投：{redelivered.Task.IsCompletedSuccessfully}");
+        }
+    }
+
+    /// <summary>
     /// 显式 Commit 路径（批次 A 的 Not-Tested 项收口）：`EnableAutoOffsetStore=false` 且
     /// `EnableAutoCommit=false` 时，确认动作（Ack 与 Reject(false)）必须补发显式 Commit——
     /// 否则存储的 offset 永不提交（Confluent 的 Close() 在 auto.commit=false 下不提交），
