@@ -273,6 +273,18 @@
 
 ### Tests
 
+- **P3 卫生 18 项盘点（2026-11-06 全量审计附录 A，批 H）**：逐项标注闭合状态——
+  **已闭合 6 项**：⑬ 发布侧自定义头（批 G A3）、⑭ broker 层 Activity（批 G A5）、
+  ⑮ features.md at-most-once 表述（批 A）、⑯ usage.md ack/批量订阅（批 A）、
+  ⑰ 跨栈矩阵缺口（批 G A1 四栈 SQLite 格）、③ Saga 重试耗尽零信号（批 D+E S4 计数器）。
+  **未做 12 项**（①②④⑤⑥⑦⑧⑨⑩⑪⑫⑱），逐项给理由与建议载体：多数属**行为变更**
+  （schemaVersion 校验、ContentType 构造期校验、ProblemDetails 形态、新增公共 API）
+  或**新诊断/新计数器**（触发 count-audit 与诊断覆盖门禁联动），不是纯卫生；
+  ⑫ 的 remarks 修正需先核实原文与 HTTP 路径实际行为的精确差异（避免「改注释掩盖实现」，
+  项目已知陷阱 M3-3）。清单：`docs/review/batch-h-p3-inventory-2026-11-07.md`。
+  **明确声明**：`verify-conventions --quick` 只查结构/链接/TODO，查不到语义失实；
+  本盘点不宣称它覆盖语义正确性。
+
 - **变异门禁可信度（2026-11-06 全量审计 B5/J1，P2）**：`break=95` 的历史 success 建立在被
   filter 吃掉后的个位数基数上（152 created→12 tested、2310 created→35 tested，422 CompileError），
   「执行过」成立、「拒绝过吗」不成立。本批：① 两份 `stryker-config.json` 在**各自 project 内**
