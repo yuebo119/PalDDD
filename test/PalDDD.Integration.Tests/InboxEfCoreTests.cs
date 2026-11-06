@@ -127,12 +127,46 @@ public sealed class InboxEfCoreTests
             await ((IInboxStore)a2).MarkProcessedAsync(snapshot, t0.AddSeconds(2), cancellationToken);
         }
 
+        // v4 批 C（S6）：DB 拒绝后入参必须回退到调用前快照——败者不得持「假终态」
+        // （修复前 EF 只告警不回退，snapshot 会被变异为 Processed 而 DB 仍是 Failed）
+        await Assert.That(snapshot.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(snapshot.ProcessedAt).IsNull();
+        await Assert.That(snapshot.LastError).IsNull();
+
         await using (var verify = new TestInboxDbContext(options))
         {
             var row = await verify.InboxMessages.SingleAsync(
                 x => x.ConsumerName == "orders" && x.MessageId == "msg-f1b", cancellationToken);
             await Assert.That(row.Status).IsEqualTo(InboxStatus.Failed); // 未被过期终态翻写
         }
+    }
+
+    /// <summary>
+    /// v4 批 C（S6）：非关系型（InMemory）路径的并发冲突同样回退入参。
+    /// EF InMemory 不校验并发令牌，无法自然制造 <c>DbUpdateConcurrencyException</c>——
+    /// 用注入上下文在首次 SaveChanges 抛该异常（与既有 OceOnSaveInboxDbContext 同形态）。
+    /// </summary>
+    [Test]
+    public async Task MarkFailed_FromStaleSnapshot_ConcurrencyConflict_RevertsCallerSnapshot(CancellationToken cancellationToken)
+    {
+        var options = new DbContextOptionsBuilder<ConcurrencyFaultInboxDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
+            .Options;
+        var t0 = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
+
+        await using var db = new ConcurrencyFaultInboxDbContext(options);
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+        var store = (IInboxStore)db;
+        var record = (await store.TryStartProcessingAsync(
+            "orders", "msg-conflict", t0, TimeSpan.FromMinutes(5), cancellationToken))!;
+
+        // 败者用该快照 MarkFailed：注入的 SaveChanges 抛 DbUpdateConcurrencyException
+        // → 入参必须回退，不得持 Failed
+        db.FaultOnNextSave = true;
+        await store.MarkFailedAsync(record, "stale failure", cancellationToken);
+
+        await Assert.That(record.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(record.LastError).IsNull();
     }
 
     [Test]
@@ -661,6 +695,29 @@ public sealed class InboxEfCoreTests
         public override Task<int> SaveChangesAsync(
             bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
             => throw new OperationCanceledException("simulated cancellation during claim save");
+    }
+
+    /// <summary>
+    /// v4 批 C（S6）探针：<see cref="FaultOnNextSave"/> 置位时下一次 SaveChangesAsync 抛
+    /// <see cref="DbUpdateConcurrencyException"/>——EF InMemory 不校验并发令牌，
+    /// 非关系型的并发冲突分支只能这样构造。
+    /// </summary>
+    private sealed class ConcurrencyFaultInboxDbContext(DbContextOptions<ConcurrencyFaultInboxDbContext> options)
+        : InboxDbContext(options)
+    {
+        public bool FaultOnNextSave { get; set; }
+
+        public override Task<int> SaveChangesAsync(
+            bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+        {
+            if (FaultOnNextSave)
+            {
+                FaultOnNextSave = false;
+                throw new DbUpdateConcurrencyException("simulated concurrency conflict (test)");
+            }
+
+            return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
     }
 
     /// <summary>回查失败注入状态——SaveChangesAsync 冲突抛出后置位，使后续 Reader 命令（回查）失败。</summary>

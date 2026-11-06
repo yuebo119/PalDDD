@@ -250,8 +250,15 @@ public sealed class BrokerFixture : IAsyncDisposable
     /// </summary>
     public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync(
         IPalLogger<RabbitMqBroker> logger, ushort prefetchCount)
+        => await CreateRabbitMqBrokerAsync(logger, prefetchCount, await CreateRabbitConnectionAsync());
+
+    /// <summary>
+    /// v4 批 C 锁定测试用：调用方自持 connection 的 broker 工厂——健康态测试需要主动
+    /// 关闭连接来制造「channel 级不可恢复故障」（v4 §2.3 置位判据）。
+    /// </summary>
+    public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync(
+        IPalLogger<RabbitMqBroker> logger, ushort prefetchCount, IConnection connection)
     {
-        var connection = await CreateRabbitConnectionAsync();
         // ITM-651：改走 CreateAsync 工厂——channel 启用 publisher confirms + confirmation
         // tracking（原裸 CreateChannelAsync() 的 channel 无 confirms，mandatory:true 的
         // basic.return 不会被客户端转成 PublishException，集成面从未覆盖 confirms 路径）。

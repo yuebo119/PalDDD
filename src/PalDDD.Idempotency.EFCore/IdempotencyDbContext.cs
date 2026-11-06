@@ -366,6 +366,17 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
             // 语义：另一并发执行者已写入终态（Completed 或 Failed），本方操作已实际完成，
             // 只是终态标记被抢先。at-least-once 语义下这是可接受的（操作本身幂等）。
             // 调用方收到 Executed 返回值——DB 终态可能是另一节点写入的 Completed 或 Failed。
+            // v4 批 C（S6）：语义不变（返回值、入参终态、Detach 行为全部照旧），只补一条
+            // Activity 事件让「本方标记被抢先」可见——此前该分支完全静默，运维无法区分
+            // 「终态由本节点写入」与「被另一节点抢先」。用 Activity 事件而非日志，因为本
+            // 上下文没有日志门面注入（加构造参数会改公共 API 签名）。
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "pal.idempotency.terminal-state-concurrency-conflict",
+                tags: new System.Diagnostics.ActivityTagsCollection
+                {
+                    ["operation"] = record.OperationName,
+                    ["key"] = record.Key
+                }));
             Entry(record).State = EntityState.Detached;
         }
         catch (DbUpdateException)

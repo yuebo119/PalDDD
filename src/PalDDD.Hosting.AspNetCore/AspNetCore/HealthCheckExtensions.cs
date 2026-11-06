@@ -166,8 +166,10 @@ internal sealed class PalMessageBrokerHealthCheck(Message.IMessageBroker? broker
         // NullMessageBroker 是 AddPalDDD 的默认注册（单节点形态）：健康检查的既有契约是
         // 「注册即健康」，报 Degraded 会让默认应用 readiness 变红（滚动更新阻塞）——
         // 语义变更风险高于收益，维持原判定；真实 broker 是否配置由部署侧自行保证。
-        // R14：实现 IMessageBrokerHealth 的 broker（Kafka）自述消费链路状态——消费线程
-        // 不可恢复终止时转 Unhealthy；未实现者（含 NullMessageBroker）保持原语义。
+        // R14：实现 IMessageBrokerHealth 的 broker（Kafka/RabbitMQ）自述消费链路状态——
+        // Kafka 是消费线程不可恢复终止，RabbitMQ 是 channel 关闭（per-delivery 回调模型无
+        // 消费线程概念，见 RabbitMQ.cs 的 IsConsumingHealthy remarks）；未实现者（含
+        // NullMessageBroker）保持原语义。普通 handler 失败（毒消息弃置）两栈都不置位。
         var result = broker switch
         {
             null => HealthCheckResult.Degraded("消息代理未注册"),

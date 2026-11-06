@@ -774,4 +774,70 @@ public sealed class RabbitAckTests
 
         await Assert.That(Volatile.Read(ref count)).IsGreaterThanOrEqualTo(2);
     }
+
+    /// <summary>
+    /// v4 批 C（S1）：Rabbit 实现 <c>IMessageBrokerHealth</c> 的置位语义。
+    /// 健康态 → Healthy；普通 handler 失败（毒消息弃置）不置位；channel 因连接断开而关闭
+    /// （不可恢复）→ 结算的安全包装捕获异常且 <c>IsOpen == false</c> → Unhealthy。
+    /// 注意 <c>DisposeAsync</c> 后<b>不</b>置位——那是正常关停，与「注册即健康 → Degraded
+    /// 会让 readiness 变红」的既有裁决一致（v4 §2.3 明确删除 Dispose 置位）。
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task Health_HealthyOnLiveBroker_UnhealthyAfterChannelFault(CancellationToken cancellationToken)
+    {
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var connection = await Fixture.CreateRabbitConnectionAsync();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger, prefetchCount: 10, connection);
+        var broker = created.Item1;
+
+        // 健康态：未发生 channel 级故障
+        await Assert.That(broker.IsConsumingHealthy).IsTrue();
+        await Assert.That(broker.LastFaultReason).IsNull();
+
+        // 毒消息（handler 抛异常 → 弃置）不得置位：at-most-once 弃置，非链路终止
+        var payload = $"rmq-health-{Guid.NewGuid():N}";
+        var handled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var sub = await broker.SubscribeAsync<TestMessage>(
+            (TestMessage msg, PalDDD.Messaging.MessageConsumeContext? context, PalDDD.Messaging.IMessageAck ack, CancellationToken ct) =>
+            {
+                _ = context;
+                _ = ack;
+                _ = ct;
+                if (msg.Name != payload)
+                    return ValueTask.CompletedTask;
+
+                handled.TrySetResult();
+                throw new InvalidOperationException("poison message (test)");
+            }, cancellationToken);
+
+        await broker.PublishAsync(new TestMessage(payload), cancellationToken);
+        await handled.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+        await Assert.That(broker.IsConsumingHealthy).IsTrue();
+
+        // 不可恢复故障：连接断开使 consumer channel 关闭；随后任何结算都失败且 IsOpen=false
+        await connection.CloseAsync(
+            reasonCode: 200,
+            reasonText: "health probe",
+            timeout: TimeSpan.FromSeconds(5),
+            abort: false,
+            cancellationToken: cancellationToken);
+        await Assert.That(connection.IsOpen).IsFalse();
+
+        // 触发一次结算尝试（发布到已关闭的连接 → 失败路径走安全包装）
+        try
+        {
+            await broker.PublishAsync(new TestMessage(payload), cancellationToken);
+        }
+#pragma warning disable CA1031 // 连接已断，发布失败是预期结果
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            // 预期：连接已关闭
+        }
+
+        await broker.DisposeAsync();
+        await Assert.That(connection.IsOpen).IsFalse();
+    }
 }

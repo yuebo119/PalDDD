@@ -177,6 +177,25 @@
 
 ### Changed
 
+- **RabbitMQ 健康态接入 + EF 终态写回退（2026-11-06 全量审计 S1/S6，P2）**：
+  **S1**：`RabbitMqBroker` 追加 `IMessageBrokerHealth`（公共 API 快照 +2 行），以
+  `IChannel.IsOpen == false` 判据在 `TryAckSafeAsync`/`TryNackSafeAsync`/`CancelConsumeSafeAsync`
+  的 catch 里置故障态——per-delivery 回调模型没有 Kafka 式「消费线程终止」观测点，可观测面只有
+  channel 关闭；普通 handler 失败（毒消息弃置）**不置位**；`DisposeAsync` 后**不**置位（正常关停，
+  与「注册即健康 → Degraded 会让 readiness 变红」的既有裁决一致）。
+  **S6**：`InboxDbContext.SaveTerminalStateAsync` 改返回 `bool`，`MarkProcessedAsync`/`MarkFailedAsync`
+  在持久化前保存 `(Status, ProcessedAt, LastError)` 快照，DB 拒绝（关系型 `affected==0` / 非关系型
+  `DbUpdateConcurrencyException`）时回退——此前 EF 只告警不回退，败者持「假终态」而 DB 仍是
+  Processing（Dapper/PalORM 栈有 `affected>0` 门控，EF 是唯一分叉）。
+  `IdempotencyDbContext` 的并发冲突分支补一条 Activity 事件（`pal.idempotency.terminal-state-concurrency-conflict`）
+  让「本方标记被抢先」可见，**不改返回值语义、不改入参终态、不加 IVT/RestoreFromStore**
+  （生产调用方只把 record 当局部变量，见 v4 §2.4 三行拆分定级）。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；公共 API 快照 +2 行（`IsConsumingHealthy`/
+  `LastFaultReason`）同提交；真容器 `Health_HealthyOnLiveBroker_UnhealthyAfterChannelFault`
+  （健康 → 毒消息仍健康 → 连接关闭后 Unhealthy）；`InboxEfCoreTests` 19/19（含新增 InMemory
+  并发冲突回退用例 + 既有 SQLite 用例扩断言入参回退）；`IdempotencyEfCoreTests` 10/10
+  （既有并发冲突用例补断言败者返回值语义）；变异红→绿（删回退 → InMemory 用例转红）。
+
 - **超时放弃的 handler 持已释放 scope：P1 登记与可观测补强（2026-11-06 全量审计 B4，P1）**：
   `TimeoutBehavior` 超时后 abandoned handler 在请求 scope 释放后继续运行，触碰 scoped 依赖抛
   `ObjectDisposedException` 且被 `ObserveFault` 静默吞掉；叠加「CQRS 请求面无幂等键」→ 504 重试

@@ -38,9 +38,13 @@ namespace PalDDD.Messaging.RabbitMQ;
 /// </remarks>
 [SuppressMessage("Design", "CA1031:Do not catch general exception types",
     Justification = "Broker 消费回调需记录毒消息失败并执行合理 nack，需捕获 Exception 基类。")]
-public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
+public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessageBrokerHealth
 {
     private int _disposed;
+    // v4 批 C（S1）：channel 级不可恢复故障原因（健康检查读取；普通 handler 失败不置位）。
+    // Rabbit 无 Kafka 式「消费线程终止」观测点——per-delivery ReceivedAsync 回调模型下，
+    // 可观测的故障面只有 channel 关闭（BasicNack/BasicAck/BasicCancel 抛异常且 IsOpen=false）。
+    private volatile string? _consumeFaultReason;
     private readonly IChannel _channel;
     private readonly IConnection _connection;
     private readonly IPalLogger<RabbitMqBroker> _logger;
@@ -652,6 +656,18 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         return subscription;
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// v4 批 C（S1）：Rabbit 的健康态定义为「channel 级不可恢复故障」——per-delivery
+    /// <c>ReceivedAsync</c> 回调模型没有 Kafka 式「消费线程终止」观测点，可观测的故障面是
+    /// channel 关闭（结算/取消的安全包装抛异常且 <c>IChannel.IsOpen == false</c>）。
+    /// 普通 handler 失败（毒消息弃置）<b>不置位</b>——那是 at-most-once 弃置，不是链路终止。
+    /// </remarks>
+    public bool IsConsumingHealthy => _consumeFaultReason is null;
+
+    /// <inheritdoc />
+    public string? LastFaultReason => _consumeFaultReason;
+
     public async ValueTask DisposeAsync()
     {
         // P2 修复（所有权契约）：IConnection 由调用方创建并注入——可能被多个 Channel/Broker
@@ -681,6 +697,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicNack failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
+            MarkChannelFaultIfClosed(channel, ex, queueName);
         }
     }
 
@@ -697,7 +714,23 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicAck failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
+            MarkChannelFaultIfClosed(channel, ex, queueName);
         }
+    }
+
+    /// <summary>
+    /// v4 批 C（S1）：channel 关闭即置健康故障态。判据用 <c>IChannel.IsOpen</c>（RabbitMQ.Client
+    /// 7.x 公开属性）而非具体异常类型——全仓零 <c>AlreadyClosedException</c> 引用，无现成依据；
+    /// channel 仍 open 时的失败（如瞬时协议错误）不置位，避免把可恢复故障误报成链路终止。
+    /// </summary>
+    private void MarkChannelFaultIfClosed(IChannel channel, Exception ex, string queueName)
+    {
+        // IsOpen 在 channel 已释放后读取安全（返回 false，不抛）
+        if (channel.IsOpen)
+            return;
+
+        // 记录原因不含凭据：异常类型 + 消息 + 队列名即可定位
+        _consumeFaultReason ??= $"{ex.GetType().Name}: {ex.Message} ({queueName})";
     }
 
     /// <summary>
@@ -773,6 +806,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicCancel failed (channel closed?): {queueName}, consumerTag={consumerTag}: {ex.Message}");
+            MarkChannelFaultIfClosed(channel, ex, queueName);
         }
     }
 
