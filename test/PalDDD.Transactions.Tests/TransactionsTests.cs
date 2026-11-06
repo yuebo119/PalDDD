@@ -935,6 +935,58 @@ public sealed class OutboxBatchProcessorTests
         await Assert.That(hosted.Any(static h => h.GetType().Name.StartsWith("SagaProcessor", StringComparison.Ordinal))).IsTrue();
     }
 
+    /// <summary>
+    /// G1（2026-11-06 全量审计 P2）：AddPalSaga 此前只注册编排器单例，不装配
+    /// SagaManager（普通读写属性，DI 不自动注入）——ExecuteInterruptStep 的
+    /// `is DefaultSagaManager` 判定整体跳过，AWD 永久滞留。
+    /// 本用例锁死「DI 解析的 Saga 挂起后 manager 有条目、ResumeAsync 可达」：
+    /// 修复前 orchestrator.SagaManager 为 null，ResumeAsync 抛 InvalidOperationException → 转红。
+    /// 归属 Transactions.Tests（分母本就含 PalDDD.Transactions 全程序集），不落在
+    /// DependencyInjection.Tests——后者的插桩分母窄，新增 Saga 派生类会把单模块覆盖率
+    /// 从 24.39% 稀释到 15.54%（CI run 42244424678 实证，降幅 9.05pp > 5pp 容差）。
+    /// </summary>
+    [Test]
+    public async Task AddPalSaga_InjectsSagaManager_InterruptResumeReachable(CancellationToken ct)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalSaga<DiWiringSagaState, DiWiringSaga>();
+        await using var provider = services.BuildServiceProvider();
+
+        var saga = provider.GetRequiredService<Saga<DiWiringSagaState>>();
+        await Assert.That(saga.SagaManager).IsNotNull();
+        await Assert.That(saga.SagaManager).IsTypeOf<DefaultSagaManager>();
+
+        var state = new DiWiringSagaState();
+        var interrupted = await saga.ProcessEventAsync(state, new DiWiringKickoff(), ct);
+        await Assert.That(interrupted.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+
+        var manager = (DefaultSagaManager)saga.SagaManager!;
+        await manager.ResumeAsync(state.SagaId, "approved", ct);
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.Completed);
+        await Assert.That(state.CurrentState).IsEqualTo("Approved");
+    }
+
+    private sealed class DiWiringSagaState : SagaState;
+
+    private sealed record DiWiringKickoff;
+
+    private sealed class DiWiringSaga : Saga<DiWiringSagaState>
+    {
+        public DiWiringSaga()
+        {
+            When<DiWiringKickoff>("Initial",
+                new InterruptStep("await-approval", "di-wiring", typeof(string)));
+            When<string>("Initial", new SagaStep("apply-decision",
+                execute: static (s, _, _) =>
+                {
+                    s.CurrentState = "Approved";
+                    s.Status = SagaStatus.Completed;
+                    return new ValueTask<SagaState>(s);
+                }));
+        }
+    }
+
     /// <summary>只声明 IInboxStore 的转发包装——模拟 PalORM/EF 的批量能力缺口。</summary>
     private sealed class NonBatchInboxStore(IInboxStore inner) : IInboxStore
     {
