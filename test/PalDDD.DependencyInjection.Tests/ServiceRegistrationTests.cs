@@ -3,6 +3,7 @@ using PalDDD.Core;
 using PalDDD.CQRS;
 using PalDDD.Messaging;
 using PalDDD.Serialization;
+using PalDDD.Transactions;
 
 namespace PalDDD.DependencyInjection.Tests;
 
@@ -59,6 +60,58 @@ public sealed class ServiceRegistrationTests
 
         await Assert.That(b1).IsTypeOf<NullMessageBroker>();
         await Assert.That(b2).IsSameReferenceAs(b1);
+    }
+
+    /// <summary>
+    /// G1（2026-11-06 全量审计 P2）：AddPalSaga 此前只注册编排器单例，不装配
+    /// SagaManager（普通读写属性，DI 不自动注入）——ExecuteInterruptStep 的
+    /// `is DefaultSagaManager` 判定整体跳过，AWD 永久滞留。
+    /// 本用例锁死「DI 解析的 Saga 挂起后 manager 有条目、ResumeAsync 可达」：
+    /// 修复前 orchestrator.SagaManager 为 null，ResumeAsync 抛 InvalidOperationException → 转红。
+    /// </summary>
+    [Test]
+    public async Task AddPalSaga_InjectsSagaManager_InterruptResumeReachable(CancellationToken ct)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalSaga<DiSagaState, DiHitlSaga>();
+        using var provider = services.BuildServiceProvider();
+
+        var saga = provider.GetRequiredService<Saga<DiSagaState>>();
+        await Assert.That(saga.SagaManager).IsNotNull();
+        await Assert.That(saga.SagaManager).IsTypeOf<DefaultSagaManager>();
+
+        var state = new DiSagaState();
+        var interrupted = await saga.ProcessEventAsync(state, new DiKickoff(), ct);
+        await Assert.That(interrupted.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+
+        var manager = (DefaultSagaManager)saga.SagaManager!;
+        await manager.ResumeAsync(state.SagaId, new DiApprove(Approved: true), ct);
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.Completed);
+        await Assert.That(state.CurrentState).IsEqualTo("Approved");
+    }
+
+    private sealed class DiSagaState : SagaState;
+
+    private sealed record DiKickoff;
+
+    private sealed record DiApprove(bool Approved);
+
+    private sealed class DiHitlSaga : Saga<DiSagaState>
+    {
+        public DiHitlSaga()
+        {
+            When<DiKickoff>("Initial",
+                new InterruptStep("await-approval", "di-wiring", typeof(DiApprove)));
+            When<DiApprove>("Initial", new SagaStep("apply-decision",
+                execute: static (s, e, _) =>
+                {
+                    var decision = (DiApprove)e;
+                    s.CurrentState = decision.Approved ? "Approved" : "Rejected";
+                    s.Status = SagaStatus.Completed;
+                    return new ValueTask<SagaState>(s);
+                }));
+        }
     }
 
     [Test]

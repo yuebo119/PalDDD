@@ -79,7 +79,7 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         var rows = await conn.QueryAsync<InboxMessage>(
                 SqlTemplates.InboxSelectByStatus,
                 new { status = (int)status, n = maxCount },
-                _transaction).ConfigureAwait(false);
+                Tx).ConfigureAwait(false);
         return rows.AsList();
     }
 
