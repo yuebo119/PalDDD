@@ -113,6 +113,8 @@ static class PalDDD.Core.Diagnostics.PalActivitySource
   field const System.String Name = PalDDD
   field static readonly System.Diagnostics.ActivitySource Source
   field static readonly System.String Version
+  method System.Diagnostics.Activity StartBrokerConsume(System.String topicOrExchange, System.String eventName)
+  method System.Diagnostics.Activity StartBrokerPublish(System.String topicOrExchange, System.String eventName)
   method System.Diagnostics.Activity StartCommandDispatch(System.String commandName, System.String handlerName)
   method System.Diagnostics.Activity StartEventDispatch(System.String eventName)
   method System.Diagnostics.Activity StartEventLogAppend(System.String streamName, System.Int32 eventCount)
@@ -336,6 +338,7 @@ class PalDDD.Dapper.DapperEventLog
   ctor(System.Data.Common.DbConnection connection, System.Data.Common.DbTransaction transaction, PalDDD.Dapper.DapperDbType dbType, System.TimeProvider timeProvider)
   property System.Boolean UseBinaryEventId
   method System.Threading.Tasks.ValueTask<PalDDD.EventLog.AppendEventsResult> AppendAsync(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Collections.Generic.IReadOnlyList<PalDDD.EventLog.EventData> events, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.ValueTask<System.Int64> GetStreamVersionAsync(System.String streamName, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadAllAsync(System.Int64 fromPosition, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadStreamAsync(System.String streamName, System.Int64 fromVersion, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
 class PalDDD.Dapper.DapperIdempotencyStore
@@ -379,7 +382,7 @@ class PalDDD.Dapper.DapperProjectionCheckpointStore
 class PalDDD.Dapper.DapperRetentionStore
   ctor(System.Data.Common.DbConnection connection, PalDDD.Dapper.DapperDbType dbType)
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredIdempotencyAsync(System.DateTimeOffset now, System.Int32 batchSize, System.Threading.CancellationToken ct)
-  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeFailed, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredOutboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeDead, System.Threading.CancellationToken ct)
 class PalDDD.Dapper.DapperSagaStateStore<TState>
   ctor(System.Data.Common.DbConnection connection, System.Data.Common.DbTransaction transaction, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo, System.TimeProvider timeProvider, PalDDD.Dapper.DapperDbType dbType)
@@ -774,11 +777,13 @@ struct PalDDD.EventLog.ExpectedStreamVersion
   method System.String ToString()
 interface PalDDD.EventLog.IEventLog
   method System.Threading.Tasks.ValueTask<PalDDD.EventLog.AppendEventsResult> AppendAsync(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Collections.Generic.IReadOnlyList<PalDDD.EventLog.EventData> events, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.ValueTask<System.Int64> GetStreamVersionAsync(System.String streamName, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadAllAsync(System.Int64 fromPosition, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadStreamAsync(System.String streamName, System.Int64 fromVersion, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
 class PalDDD.EventLog.InMemoryEventLog
   ctor(System.TimeProvider timeProvider)
   method System.Threading.Tasks.ValueTask<PalDDD.EventLog.AppendEventsResult> AppendAsync(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Collections.Generic.IReadOnlyList<PalDDD.EventLog.EventData> events, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.ValueTask<System.Int64> GetStreamVersionAsync(System.String streamName, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadAllAsync(System.Int64 fromPosition, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadStreamAsync(System.String streamName, System.Int64 fromVersion, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
 class PalDDD.EventLog.RecordedEvent
@@ -802,6 +807,7 @@ class PalDDD.EventLog.EventLogDbContext
   property System.Boolean UseBinaryEventId
   method System.Threading.Tasks.ValueTask<PalDDD.EventLog.AppendEventsResult> AppendAsync(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Collections.Generic.IReadOnlyList<PalDDD.EventLog.EventData> events, System.Threading.CancellationToken cancellationToken)
   method System.Threading.Tasks.Task<System.Int32> CountMissingBinaryEventIdsAsync(System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.ValueTask<System.Int64> GetStreamVersionAsync(System.String streamName, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadAllAsync(System.Int64 fromPosition, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadStreamAsync(System.String streamName, System.Int64 fromVersion, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
 class PalDDD.EventLog.EventLogGlobalPositionAllocator
@@ -1038,14 +1044,16 @@ static class PalDDD.Messaging.MessageConsumeContext+HeaderNames
   field const System.String CorrelationId = x-correlation-id
   field const System.String TraceParent = traceparent
   field const System.String TraceState = tracestate
+  method System.Boolean IsKnown(System.String name)
 struct PalDDD.Messaging.MessagePublishContext
-  ctor(System.Nullable<ByteAether.Ulid.Ulid> CorrelationId, System.Nullable<ByteAether.Ulid.Ulid> CausationId, System.String TraceParent, System.String TraceState)
+  ctor(System.Nullable<ByteAether.Ulid.Ulid> CorrelationId, System.Nullable<ByteAether.Ulid.Ulid> CausationId, System.String TraceParent, System.String TraceState, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> ExtraHeaders)
   property System.Nullable<ByteAether.Ulid.Ulid> CausationId [init]
   property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId [init]
   property PalDDD.Messaging.MessagePublishContext Empty
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> ExtraHeaders [init]
   property System.String TraceParent [init]
   property System.String TraceState [init]
-  method System.Void Deconstruct(System.Nullable`1[[ByteAether.Ulid.Ulid, ByteAether.Ulid, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]& CorrelationId, System.Nullable`1[[ByteAether.Ulid.Ulid, ByteAether.Ulid, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]& CausationId, System.String& TraceParent, System.String& TraceState)
+  method System.Void Deconstruct(System.Nullable`1[[ByteAether.Ulid.Ulid, ByteAether.Ulid, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]& CorrelationId, System.Nullable`1[[ByteAether.Ulid.Ulid, ByteAether.Ulid, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]& CausationId, System.String& TraceParent, System.String& TraceState, System.Collections.Generic.IReadOnlyDictionary`2[[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e],[System.String, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]& ExtraHeaders)
   method System.Boolean Equals(PalDDD.Messaging.MessagePublishContext other)
   method System.Boolean Equals(System.Object obj)
   method System.Int32 GetHashCode()
@@ -1163,6 +1171,7 @@ class PalDDD.PalORM.Stores.PalOrmEventLog<TProvider>
   ctor(PalORM.DataSession<TProvider> session, System.TimeProvider clock)
   property System.Boolean UseBinaryEventId
   method System.Threading.Tasks.ValueTask<PalDDD.EventLog.AppendEventsResult> AppendAsync(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Collections.Generic.IReadOnlyList<PalDDD.EventLog.EventData> events, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.ValueTask<System.Int64> GetStreamVersionAsync(System.String streamName, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadAllAsync(System.Int64 fromPosition, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadStreamAsync(System.String streamName, System.Int64 fromVersion, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
 class PalDDD.PalORM.Stores.PalOrmIdempotencyStore<TProvider>
@@ -1204,7 +1213,7 @@ class PalDDD.PalORM.Stores.PalOrmProjectionCheckpointStore<TProvider>
 class PalDDD.PalORM.Stores.PalOrmRetentionStore<TProvider>
   ctor(PalORM.DataSession<TProvider> session)
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredIdempotencyAsync(System.DateTimeOffset now, System.Int32 batchSize, System.Threading.CancellationToken ct)
-  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeFailed, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredOutboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeDead, System.Threading.CancellationToken ct)
 class PalDDD.PalORM.Stores.PalOrmSagaStateStore<TProvider, TState>
   ctor(PalORM.DataSession<TProvider> session, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo, System.TimeProvider clock)
@@ -1713,7 +1722,7 @@ interface PalDDD.Transactions.IPalOutboxStore
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IRetentionStore
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredIdempotencyAsync(System.DateTimeOffset now, System.Int32 batchSize, System.Threading.CancellationToken ct)
-  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeFailed, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredOutboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeDead, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IRetryBackoffPolicy
   method System.TimeSpan ComputeDelay(System.Int32 attempt)
@@ -1866,6 +1875,7 @@ class PalDDD.Transactions.RetentionOptions
   ctor()
   property System.Int32 BatchSize
   property System.Boolean DeleteDeadOutboxMessages
+  property System.Boolean DeleteFailedInboxMessages
   property System.TimeSpan InboxRetention
   property System.Int32 MaxBatchesPerTick
   property System.TimeSpan OutboxRetention
@@ -1984,6 +1994,16 @@ struct PalDDD.Transactions.SagaStepCompleted
   method System.Boolean Equals(System.Object obj)
   method System.Int32 GetHashCode()
   method System.String ToString()
+struct PalDDD.Transactions.SagaStepDescriptor
+  ctor(System.String Key, PalDDD.Transactions.StepDispatchKind DispatchKind, System.Nullable<System.TimeSpan> Timeout)
+  property PalDDD.Transactions.StepDispatchKind DispatchKind [init]
+  property System.String Key [init]
+  property System.Nullable<System.TimeSpan> Timeout [init]
+  method System.Void Deconstruct(System.String& Key, PalDDD.Transactions.StepDispatchKind& DispatchKind, System.Nullable`1[[System.TimeSpan, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]& Timeout)
+  method System.Boolean Equals(PalDDD.Transactions.SagaStepDescriptor other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
 struct PalDDD.Transactions.SagaStepFailed
   ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey, System.String ErrorMessage)
   property System.String ErrorMessage [init]
@@ -2013,6 +2033,7 @@ class PalDDD.Transactions.Saga<TState>
   property System.TimeSpan RetryDelay
   property PalDDD.Transactions.ISagaManager SagaManager
   method System.Threading.Tasks.ValueTask CompensateAsync(TState state, System.Threading.CancellationToken ct)
+  method System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.SagaStepDescriptor> GetRegisteredSteps()
   method System.Threading.Tasks.ValueTask<TState> HandleEventAsync(TState current, System.Object event, System.Threading.CancellationToken ct)
   method System.Boolean IsTimedOut(TState state, System.DateTimeOffset now, System.Collections.Generic.IReadOnlyList`1[[PalDDD.Transactions.SagaStep, PalDDD.Transactions, Version=5.0.0.0, Culture=neutral, PublicKeyToken=null]]& timedOutSteps)
   method System.Threading.Tasks.ValueTask<TState> ProcessEventAsync(TState current, System.Object event, System.Threading.CancellationToken ct)
@@ -2038,7 +2059,7 @@ class PalDDD.Transactions.EfCoreRetentionStore
   ctor(System.Data.Common.DbConnection connection, PalDDD.Transactions.RetentionDialect dialect)
   ctor(System.Data.Common.DbConnection connection, PalDDD.Transactions.RetentionDialect dialect, System.String outboxTable, System.String inboxTable, System.String idempotencyTable)
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredIdempotencyAsync(System.DateTimeOffset now, System.Int32 batchSize, System.Threading.CancellationToken ct)
-  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeFailed, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredOutboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeDead, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.InboxDbContext
   property Microsoft.EntityFrameworkCore.DbSet<PalDDD.Transactions.InboxMessage> InboxMessages

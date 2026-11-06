@@ -231,6 +231,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         // publisherConfirmationTrackingEnabled:true) 创建，否则本 await 会静默"成功"。
         try
         {
+            // ADR-039 / 审计 A5：发布跳 span（与消费侧 StartBrokerConsume 配对）
+            using var publishActivity = PalActivitySource.StartBrokerPublish(descriptor.Name, descriptor.Name);
             await _channel.BasicPublishAsync(
                 exchange: cachedExchange,
                 routingKey: CachedString.Empty,
@@ -357,7 +359,25 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        // ADR-039 / 审计 A3：调用方自定义头；框架头优先（已知键名冲突静默跳过）
+        AddExtraHeaders(ref headers, context.ExtraHeaders);
         return headers;
+    }
+
+    /// <summary>ADR-039：追加 <see cref="MessagePublishContext.ExtraHeaders"/>（null/空零分配）。</summary>
+    private static void AddExtraHeaders(ref Dictionary<string, object?>? headers, IReadOnlyDictionary<string, string?>? extra)
+    {
+        if (extra is null || extra.Count == 0)
+            return;
+
+        foreach (var (name, value) in extra)
+        {
+            if (string.IsNullOrWhiteSpace(name)
+                || string.IsNullOrWhiteSpace(value)
+                || MessageConsumeContext.HeaderNames.IsKnown(name))
+                continue;
+            (headers ??= new Dictionary<string, object?>(StringComparer.Ordinal)).Add(name, Encoding.UTF8.GetBytes(value));
+        }
     }
 
     private static void AddHeader(ref Dictionary<string, object?>? headers, string name, string? value)
@@ -531,6 +551,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                     }
                     using (deliveryCts)
                     {
+                        // ADR-039 / 审计 A5：消费跳 span（与发布侧 StartBrokerPublish 配对）
+                        using var consumeActivity = PalActivitySource.StartBrokerConsume(exchange, typeof(TMessage).Name);
                         await handler(message, consumeContext, ack, deliveryCts.Token).ConfigureAwait(false);
                         // v4 批 A（B2）：handler 正常返回 = 泵已把 item 写入通道并入批。
                         enqueueConfirmed = true;

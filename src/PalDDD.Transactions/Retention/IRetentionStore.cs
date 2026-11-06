@@ -22,10 +22,18 @@ public interface IRetentionStore
         bool includeDead,
         CancellationToken ct = default);
 
-    /// <summary>删除已处理且超过保留期的 Inbox 行。</summary>
+    /// <summary>
+    /// 删除已处理且超过保留期的 Inbox 行。
+    /// </summary>
+    /// <param name="includeFailed">
+    /// ADR-039 / 审计 A2/G4：<c>true</c> 时同时删除 <c>Failed</c> 行（<c>status IN (2,3)</c>），
+    /// 对齐 Outbox 的 <c>includeDead</c> 先例；<c>false</c> 只删 <c>Processed</c>——
+    /// Failed 行是待人工处置的失败记录，默认保留。
+    /// </param>
     ValueTask<int> DeleteExpiredInboxAsync(
         DateTimeOffset cutoff,
         int batchSize,
+        bool includeFailed,
         CancellationToken ct = default);
 
     /// <summary>删除已过期（<c>expires_at &lt; now</c>）的幂等记录。</summary>

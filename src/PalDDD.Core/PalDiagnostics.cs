@@ -142,8 +142,30 @@ public static class PalActivitySource
             ("pal.stream.query", queryType),
             ("pal.stream.item", itemType));
 
+    /// <summary>
+    /// broker 发布跳（ADR-039 / 审计 A5）：覆盖「消息发出」这一段——traceparent 头虽已传播，
+    /// 但发布跳本身此前无 span，跨进程链在 broker 边界断开。
+    /// </summary>
+    /// <param name="topicOrExchange">Kafka topic 或 RabbitMQ exchange 名（按消息类型名路由，低基数）。</param>
+    /// <param name="eventName">消息类型名（低基数；实例级 ID 按 ITM-229 纪律不入 tag）。</param>
+    public static Activity? StartBrokerPublish(string topicOrExchange, string eventName)
+        => Start("Broker Publish",
+            ("pal.broker.target", topicOrExchange),
+            ("pal.broker.event", eventName));
+
+    /// <summary>
+    /// broker 消费跳（ADR-039 / 审计 A5）：覆盖「消息交付到 handler」这一段，
+    /// 与 <see cref="StartBrokerPublish"/> 配对，使跨进程链在 broker 两侧连续。
+    /// </summary>
+    /// <param name="topicOrExchange">Kafka topic 或 RabbitMQ exchange/队列名（低基数）。</param>
+    /// <param name="eventName">消息类型名（低基数）。</param>
+    public static Activity? StartBrokerConsume(string topicOrExchange, string eventName)
+        => Start("Broker Consume",
+            ("pal.broker.target", topicOrExchange),
+            ("pal.broker.event", eventName));
+
     // ── 内部辅助 ──
-    // 12 个公共 Start* 方法遵循完全相同的模式：Source.StartActivity → SetTag → return。
+    // 14 个公共 Start* 方法遵循完全相同的模式：Source.StartActivity → SetTag → return。
     // 使用 params ReadOnlySpan<(string,object?)>（C# 13+ / .NET 11）压缩重复代码，
     // 编译器对少量参数生成栈分配 span，消除原 params 数组的堆分配。注（v8 勘正）：int/long
     // tag 经元组构造仍存在装箱（listener 关闭也发生）——本优化消除的是数组分配而非全部 GC。

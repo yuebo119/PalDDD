@@ -748,6 +748,24 @@ public class PalOrmEventLog<TProvider> : IEventLog
         }
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// ADR-039 / 审计 A1：与 <see cref="AppendAsync"/> 的并发预检查同一条聚合 SQL，
+    /// 零事件物化。流不存在返回 -1。
+    /// </remarks>
+    public async ValueTask<long> GetStreamVersionAsync(
+        string streamName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var max = await Session.ScalarAsync<long?>(
+            $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
+            ct: cancellationToken).ConfigureAwait(false);
+        return max ?? -1L;
+    }
+
     /// <summary>EventLogRow → RecordedEvent 领域类型（零拷贝路径，payload/metadata 直接引用 byte[]）。</summary>
     private static RecordedEvent ToRecorded(EventLogRow row, string streamName, bool useBinaryEventId)
     {

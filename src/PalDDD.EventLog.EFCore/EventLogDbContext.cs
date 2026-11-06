@@ -209,6 +209,24 @@ public abstract class EventLogDbContext(
         }
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// ADR-039 / 审计 A1：单行聚合走 <c>(StreamName, StreamVersion)</c> 唯一索引，
+    /// 零事件物化。流不存在返回 -1（与 <see cref="ExpectedStreamVersion.NoStream"/> 对齐）。
+    /// </remarks>
+    public virtual async ValueTask<long> GetStreamVersionAsync(
+        string streamName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
+
+        var max = await Events
+            .Where(e => e.StreamName == streamName)
+            .MaxAsync(e => (long?)e.StreamVersion, cancellationToken)
+            .ConfigureAwait(false);
+        return max ?? -1L;
+    }
+
     /// <summary>按读取模式投影：文本模式只拉 EventId，二进制模式只拉 EventIdBin。</summary>
     private IQueryable<EventReadRow> ProjectReadRows(IQueryable<StoredEvent> query)
     {

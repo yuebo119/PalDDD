@@ -76,6 +76,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
     private FrozenDictionary<(string State, string? EventName), SagaStepRegistration>? _frozen;
     private FrozenDictionary<string, SagaStep>? _frozenByStringKey;
     private IReadOnlyList<(string Key, SagaStep Step)>? _stepsView;
+    // ADR-039（A4）：公开步骤表的投影快照缓存，注册时与 _stepsView 一并失效
+    private IReadOnlyList<SagaStepDescriptor>? _stepDescriptors;
 
     // ═══════════════════════════════════════════════════════════════
     // 策略组件（内部组合，非多态替换）
@@ -190,6 +192,26 @@ public abstract class Saga<TState> where TState : SagaState, new()
     protected IReadOnlyList<(string Key, SagaStep Step)> Steps
         => _stepsView ??= _stepsInOrder.Select(static r => (r.Key, r.Step)).ToArray();
 
+    /// <summary>
+    /// 只读步骤表（ADR-039 / 审计 A4）：返回已注册步骤的 key、分发类型与超时。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Steps"/> 是 <c>protected</c>，框架此前无公开枚举入口——<c>DynamicStep.Route</c>
+    /// 返回未知 key 时零信号，拼写错误与滚动发布窗口期未注册新 key 在观测上不可区分。
+    /// 本方法给宿主/运维一个可查询的步骤清单（启动期自检、诊断端点、健康探针）。
+    /// </para>
+    /// <para>
+    /// 返回的是<b>投影快照</b>（不可变 DTO），不暴露 <see cref="SagaStep"/> 本身——
+    /// 步骤委托与可变成员不进公共面。<see cref="SagaStepDescriptor.Timeout"/> 与
+    /// <see cref="SagaStep.Timeout"/> 同义（仅快照超时检测器消费）。
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<SagaStepDescriptor> GetRegisteredSteps()
+        => _stepDescriptors ??= _stepsInOrder
+            .Select(static r => new SagaStepDescriptor(r.Key, r.Step.DispatchKind, r.Step.Timeout))
+            .ToArray();
+
     // ═══════════════════════════════════════════════════════════════
     // Saga 管理器（中断恢复 + 子 Saga 执行）
     // ═══════════════════════════════════════════════════════════════
@@ -268,6 +290,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         _frozen = null;
         _frozenByStringKey = null;
         _stepsView = null;
+        _stepDescriptors = null;
         // 策略组件持有查找表快照：注册后重建，保持"注册期单线程、首次执行前完成"契约下的可见性。
         _compensation = null;
         _timeoutDetector = null;

@@ -64,7 +64,7 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 **可插拔压缩**。`ICompressionProvider` / `ICompressor` 抽象带两套实现：System 内置压缩与原生 LZ4/ZStandard 绑定（`PalDDD.Compression.Native`，AOT 安全），经 DI 替换。
 
-**内建可观测性**。`PalActivitySource`（12 个 Start 方法）+ `PalMetrics`（32 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测。**12 个 Activity 工厂中有 2 个预留未接线**（`StartCommandDispatch` / `StartSagaTransition`，ITM-627 家族，remarks 声明「保留供外部集成」），其余 10 个均有生产调用点。
+**内建可观测性**。`PalActivitySource`（14 个 Start 方法）+ `PalMetrics`（32 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测。**14 个 Activity 工厂中有 2 个预留未接线**（`StartCommandDispatch` / `StartSagaTransition`，ITM-627 家族，remarks 声明「保留供外部集成」），其余 12 个均有生产调用点（含 broker 发布/消费两跳）。
 
 **三栈持久化，按场景选型**。PalORM（真 AOT，源生成 SQL）/ Dapper（调用点级 AOT，手写 SQL）/ EF Core（Migration/LINQ/ChangeTracker 生态）平等共存、无废弃计划；五组 Store 能力三栈全量覆盖、行为由跨栈对照测试守护（[ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md)、[ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)）；支持环境事务与显式事务边界。
 
@@ -527,7 +527,7 @@ flowchart TB
 | [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
 | [踩坑目录](docs/pitfalls.md) | 88 条 DDD/AOT/并发实战踩坑 |
 | [开发流程](docs/development.md) | 开发环境、Git 钩子、测试运行 |
-| [架构决策](docs/decisions/) | 38 份 ADR |
+| [架构决策](docs/decisions/) | 39 份 ADR |
 | [部署性能旋钮](docs/deployment-performance.md) | GC 选型 / PG·MySQL 服务端旋钮实测与权衡 |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 

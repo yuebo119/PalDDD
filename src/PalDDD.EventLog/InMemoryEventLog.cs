@@ -201,6 +201,27 @@ public sealed class InMemoryEventLog : IEventLog
         }
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// ADR-039 / 审计 A1：内存栈直接取流列表末位版本（append-only 保证单调），零物化。
+    /// 与其余三栈同语义：流不存在或为空返回 -1。
+    /// </remarks>
+    public ValueTask<long> GetStreamVersionAsync(
+        string streamName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_lock)
+        {
+            return ValueTask.FromResult(
+                _streams.TryGetValue(streamName, out var stream) && stream.Count > 0
+                    ? stream[^1].StreamVersion
+                    : -1L);
+        }
+    }
+
     private List<RecordedEvent> GetOrCreateStream(string streamName)
     {
         if (_streams.TryGetValue(streamName, out var stream))

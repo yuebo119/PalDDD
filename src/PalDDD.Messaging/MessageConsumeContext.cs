@@ -247,6 +247,16 @@ public sealed class MessageConsumeContext
 
         /// <summary>因果上游消息 ID 键名。</summary>
         public const string CausationId = "x-causation-id";
+
+        /// <summary>
+        /// ADR-039 / 审计 A3：判断键名是否为框架保留头——业务自定义头不得覆盖
+        /// （框架头优先，冲突项在写侧静默跳过）。
+        /// </summary>
+        public static bool IsKnown(string name)
+            => string.Equals(name, TraceParent, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, TraceState, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, CorrelationId, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, CausationId, StringComparison.OrdinalIgnoreCase);
     }
 
     // P2 修复（八轮评审）：头值解码——写侧以 UTF-8 字节写入（见两个 Broker 的 AddHeader），

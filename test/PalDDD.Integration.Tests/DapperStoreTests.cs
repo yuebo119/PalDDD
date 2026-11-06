@@ -1594,6 +1594,32 @@ public sealed class DapperStoreTests
         await Assert.That(recordedAt).IsEqualTo(now);
     }
 
+    /// <summary>
+    /// ADR-039 / 审计 A1：Dapper 栈只读流版本——空流 -1，追加后末位版本（四栈矩阵的
+    /// Dapper 格；走与 AppendAsync 并发检查同一条 MAX 聚合 SQL）。
+    /// </summary>
+    [Test]
+    public async Task EventLog_GetStreamVersionAsync_UnknownStreamMinusOne_ThenLastVersion(
+        CancellationToken cancellationToken)
+    {
+        var log = new DapperEventLog(_conn, null, _dbType);
+
+        await Assert.That(await log.GetStreamVersionAsync("missing-stream", cancellationToken)).IsEqualTo(-1L);
+
+        await log.AppendAsync(
+            "version-stream",
+            ExpectedStreamVersion.NoStream,
+            [
+                new(PalUlid.New(), "test.event.v1", 1, "application/json",
+                    "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty),
+                new(PalUlid.New(), "test.event.v1", 1, "application/json",
+                    "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)
+            ],
+            cancellationToken);
+
+        await Assert.That(await log.GetStreamVersionAsync("version-stream", cancellationToken)).IsEqualTo(1L);
+    }
+
     [Test]
     public async Task EventLog_AppendAsync_NoStream(CancellationToken cancellationToken)
     {

@@ -792,6 +792,23 @@ public sealed class DapperEventLog : IEventLog
         }
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// ADR-039 / 审计 A1：复用 <c>EventLogSql.MaxVersion</c> 单行聚合（与 AppendAsync 的
+    /// 并发检查同一条 SQL），零事件物化。流不存在返回 -1。
+    /// </remarks>
+    public async ValueTask<long> GetStreamVersionAsync(
+        string streamName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var max = await _connection.QueryFirstOrDefaultAsync<long?>(
+            EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
+        return max ?? -1L;
+    }
+
     /// <summary>
     /// 真流式读取（2026-10-19 性能实施轮）：DbDataReader + SequentialAccess 逐行产出，
     /// 不再经 Dapper QueryAsync 先物化全部行。连接所有权：仅当本方法打开连接时才在

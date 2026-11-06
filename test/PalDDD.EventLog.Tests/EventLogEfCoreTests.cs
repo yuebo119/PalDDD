@@ -286,6 +286,33 @@ public sealed class EventLogEfCoreTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
+    /// <summary>
+    /// ADR-039 / 审计 A1：只读流版本查询——空流返回 -1，追加后返回末位版本，
+    /// 且不物化任何事件（走单行聚合）。
+    /// </summary>
+    [Test]
+    public async Task GetStreamVersionAsync_ReturnsMinusOneForUnknownStream_AndLastVersionAfterAppend(
+        CancellationToken cancellationToken)
+    {
+        var options = CreateOptions();
+        await using var db = new TestEventLogDbContext(options);
+
+        // 空流 → -1（与 ExpectedStreamVersion.NoStream 对齐）
+        await Assert.That(await db.GetStreamVersionAsync("missing-stream", cancellationToken)).IsEqualTo(-1L);
+
+        await db.AppendAsync(
+            "ordering-order-1",
+            ExpectedStreamVersion.NoStream,
+            [
+                CreateEvent(PalUlid.New(), "orders.order-submitted.v1", "one"),
+                CreateEvent(PalUlid.New(), "orders.order-paid.v1", "two")
+            ],
+            cancellationToken);
+
+        // 两条事件版本 0/1 → 末位 1
+        await Assert.That(await db.GetStreamVersionAsync("ordering-order-1", cancellationToken)).IsEqualTo(1L);
+    }
+
     // P1 回归（二十一轮）：关系型 provider（SQLite in-memory）——StoredEvent 三个 Ulid 属性
     // 曾无 value converter，ctx.Model 即抛"无法映射 Ulid"（InMemory-only 测试网掩盖）。
     // 本测试堵盲区：模型构建 + 追加 + 读回全链在关系型 provider 下走通。

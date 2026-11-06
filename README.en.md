@@ -64,7 +64,7 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 
 **Pluggable compression**. `ICompressionProvider` / `ICompressor` abstractions with two implementations: the System built-in compressor and the native LZ4/ZStandard binding (`PalDDD.Compression.Native`, AOT-safe), swappable via DI.
 
-**Built-in observability**. `PalActivitySource` (12 Start methods) + `PalMetrics` (32 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything. **2 of the 12 Activity factories are reserved and not wired** (`StartCommandDispatch` / `StartSagaTransition`, ITM-627 family, remarks say "reserved for external integration"); the other 10 all have production call sites.
+**Built-in observability**. `PalActivitySource` (14 Start methods) + `PalMetrics` (32 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything. **2 of the 14 Activity factories are reserved and not wired** (`StartCommandDispatch` / `StartSagaTransition`, ITM-627 family, remarks say "reserved for external integration"); the other 12 all have production call sites (including the broker publish/consume hops).
 
 **Three persistence stacks, chosen by scenario**. PalORM (true AOT, source-generated SQL) / Dapper (call-site-level AOT, hand-written SQL) / EF Core (Migration/LINQ/ChangeTracker ecosystem) coexist equally long-term with no retirement plan; five Store capabilities are fully covered across all three stacks, with behavior guarded by cross-stack parity tests ([ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md), [ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)); ambient transactions and explicit transaction boundaries are supported.
 
@@ -531,7 +531,7 @@ flowchart TB
 | [Release SOP](docs/release.md) | Versioning, package scope, CHANGELOG conventions & workflow |
 | [Pitfalls](docs/pitfalls.md) | 88 real-world DDD/AOT/concurrency pitfalls |
 | [Development](docs/development.md) | Dev environment, Git hooks, test running |
-| [Architecture Decisions](docs/decisions/) | 38 ADRs |
+| [Architecture Decisions](docs/decisions/) | 39 ADRs |
 | [Deployment Performance Knobs](docs/deployment-performance.md) | GC mode / PG·MySQL server knobs with measured trade-offs |
 | [Changelog](CHANGELOG.md) | Version history (consumer-facing changes + engineering appendix) |
 

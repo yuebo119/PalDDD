@@ -198,6 +198,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         MessagePublishContext context,
         CancellationToken ct)
     {
+        // ADR-039 / 审计 A5：发布跳 span（与消费侧 StartBrokerConsume 配对）
+        using var activity = PalActivitySource.StartBrokerPublish(descriptor.Name, descriptor.Name);
         try
         {
             await _producer.ProduceAsync(descriptor.Name, new Message<string, byte[]>
@@ -210,6 +212,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             PalMetrics.BrokerPublishFailed.Add(1);
+            activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             throw;
         }
 
@@ -312,7 +315,29 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.CorrelationId, context.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        // ADR-039 / 审计 A3：调用方自定义头。框架头优先——先写框架头，业务头只在
+        // 不覆盖已知键名时追加（键名冲突静默跳过，不让业务头破坏追踪链）。
+        AddExtraHeaders(ref headers, context.ExtraHeaders);
         return headers;
+    }
+
+    /// <summary>
+    /// ADR-039：追加 <see cref="MessagePublishContext.ExtraHeaders"/>——框架头键名优先，
+    /// 冲突项跳过；<c>null</c>/空字典零分配。
+    /// </summary>
+    private static void AddExtraHeaders(ref Headers? headers, IReadOnlyDictionary<string, string?>? extra)
+    {
+        if (extra is null || extra.Count == 0)
+            return;
+
+        foreach (var (name, value) in extra)
+        {
+            if (string.IsNullOrWhiteSpace(name)
+                || string.IsNullOrWhiteSpace(value)
+                || MessageConsumeContext.HeaderNames.IsKnown(name))
+                continue;
+            (headers ??= new Headers()).Add(name, Encoding.UTF8.GetBytes(value));
+        }
     }
 
     private static void AddHeader(ref Headers? headers, string name, string? value)
@@ -806,6 +831,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                         // C-11（EPSL 地毯审计 2026-10-11）：单趟遍历 Confluent Headers 直产
                         // 已解码字典（原 ToHeaderMap 中间字典 + FromHeaders 二次物化消除）
                         var consumeContext = FromKafkaHeaders(result.Message.Headers, result.Message.Key);
+                        // ADR-039 / 审计 A5：消费跳 span（与发布侧 StartBrokerPublish 配对）
+                        using var consumeActivity = PalActivitySource.StartBrokerConsume(topic, descriptor.Name);
                         await handler(message, consumeContext, ack, tokenSnapshot).ConfigureAwait(false);
                     }
                     else

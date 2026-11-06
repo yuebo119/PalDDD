@@ -63,7 +63,7 @@
 │  ✅ 消息兼容 → Schema Evolution 显式升级管道 + 编译期版本校验       │
 │  ✅ AOT 兼容 → 源码生成器 + 泛型 + JsonTypeInfo 零反射             │
 │  ✅ 编译期防错 → Analyzer 15 条诊断规则，写错代码直接编译不过      │
-│  ✅ 可观测 → 32 个预定义指标 + 12 种 Activity，零配置              │
+│  ✅ 可观测 → 32 个预定义指标 + 14 种 Activity，零配置              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -893,7 +893,7 @@ app.Run();
 
 ### 4.14 可观测性：指标与追踪
 
-**框架解决的问题：** 生产环境出问题了，你先要知道的是：命令执行了多少？失败了几个？发件箱积压了多少？Pal.DDD 内建了 32 个 OpenTelemetry 指标和 12 种 Activity，零配置即可采集。
+**框架解决的问题：** 生产环境出问题了，你先要知道的是：命令执行了多少？失败了几个？发件箱积压了多少？Pal.DDD 内建了 32 个 OpenTelemetry 指标和 14 种 Activity，零配置即可采集。
 
 ```csharp
 // 一行代码接入
@@ -904,7 +904,7 @@ builder.Services.AddOpenTelemetry()
             .AddPrometheusExporter())
     .WithTracing(tracerProviderBuilder =>
         tracerProviderBuilder
-            .AddSource("PalDDD")                         // 内建 12 种 Activity
+            .AddSource("PalDDD")                         // 内建 14 种 Activity
             .AddConsoleExporter());
 ```
 
