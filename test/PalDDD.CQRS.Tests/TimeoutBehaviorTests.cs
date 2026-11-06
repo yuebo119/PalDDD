@@ -102,6 +102,86 @@ public sealed class TimeoutBehaviorTests
             () => _ = new TimeoutBehavior<CreateOrderCommand, Guid>(
                 new PalTimeoutBehaviorOptions(TimeSpan.FromSeconds(-1))));
 
+    /// <summary>
+    /// v4 批 B（B4 阶段 1）：504 时序必须不变——超时抛出不得等待 abandoned handler 收尾。
+    /// 这是阶段 1 的「不修根因」契约边界：任何后续尝试在管道内等 abandoned 收尾都会
+    /// 把该断言推红（v3 形态实测 118ms → 505ms）。
+    /// </summary>
+    /// <remarks>
+    /// 计时只用于上界守卫（≤ timeout + 50ms 余量），不作精确断言（T21 禁墙钟断言）。
+    /// </remarks>
+    [Test]
+    public async Task SlowNext_TimeoutDoesNotWaitForAbandonedHandler()
+    {
+        var timeout = TimeSpan.FromMilliseconds(50);
+        var behavior = CreateBehavior(timeout);
+        var abandoned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await behavior.HandleAsync(
+                new CreateOrderCommand("slow", 1m), CancellationToken.None,
+                async () =>
+                {
+                    // abandoned handler 远慢于超时：若管道等它收尾，上界断言必红
+                    await abandoned.Task.ConfigureAwait(false);
+                    return Guid.Empty;
+                }));
+        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(elapsed).IsLessThanOrEqualTo(timeout + TimeSpan.FromMilliseconds(50));
+
+        abandoned.TrySetResult();
+    }
+
+    /// <summary>
+    /// v4 批 B（独立 P3 可观测项）：abandoned handler 失败必须记
+    /// <c>pal.timeout.abandoned-handler-fault</c> Activity 事件——修复前完全静默。
+    /// 该用例只锁「可观测」，不锁任何行为变更。
+    /// </summary>
+    [Test]
+    public async Task SlowNext_AbandonedHandlerFault_IsRecordedAsActivityEvent()
+    {
+        var behavior = CreateBehavior(TimeSpan.FromMilliseconds(50));
+        var faultRaised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == PalDDD.Core.Diagnostics.PalActivitySource.Name,
+            Sample = static (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) => System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+
+        using var activity = new System.Diagnostics.Activity("test-root").SetIdFormat(
+            System.Diagnostics.ActivityIdFormat.W3C).Start();
+
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await behavior.HandleAsync(
+                new CreateOrderCommand("slow", 1m), CancellationToken.None,
+                async () =>
+                {
+                    // 必须晚于 timeout 才失败：否则异常会在 WaitAsync 之前就逃逸，
+                    // 走不到超时分支，ObserveFault 也不会被调用
+                    await Task.Delay(TimeSpan.FromMilliseconds(400)).ConfigureAwait(false);
+                    faultRaised.TrySetResult();
+                    throw new InvalidOperationException("abandoned handler fault (test)");
+                }));
+
+        // ObserveFault 的续体在异常任务上同步执行；等待事件落地给足余量
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var recorded = false;
+        while (DateTime.UtcNow < deadline && !recorded)
+        {
+            recorded = activity.Events.Any(static e => e.Name == "pal.timeout.abandoned-handler-fault");
+            if (!recorded)
+                await Task.Delay(10);
+        }
+
+        await faultRaised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.That(recorded).IsTrue();
+    }
+
     private static async Task<object?> SlowNextAsObjectAsync()
     {
         await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);

@@ -177,6 +177,20 @@
 
 ### Changed
 
+- **超时放弃的 handler 持已释放 scope：P1 登记与可观测补强（2026-11-06 全量审计 B4，P1）**：
+  `TimeoutBehavior` 超时后 abandoned handler 在请求 scope 释放后继续运行，触碰 scoped 依赖抛
+  `ObjectDisposedException` 且被 `ObserveFault` 静默吞掉；叠加「CQRS 请求面无幂等键」→ 504 重试
+  可能双写。**本轮不含根因修复**（阶段 1 只做登记与披露，见
+  [`docs/decisions/038-timeout-abandoned-scope.md`](docs/decisions/038-timeout-abandoned-scope.md)）：
+  ① `ObserveFault` 把 abandoned handler 失败记成 `pal.timeout.abandoned-handler-fault` Activity
+  事件（独立 P3 可观测项，不改运行时行为、不改 504 时序）；② `docs/usage.md` 超时小节披露 scope
+  已释放的后果与双写风险；③ `.ai/state.md` 登记 B4-P1 与阶段 2 立项条目，「CQRS 请求面无幂等键」
+  单列为独立条目。
+  验证：`PalDDD.CQRS` 0 警告 0 错误；新增锁定测试
+  `SlowNext_TimeoutDoesNotWaitForAbandonedHandler`（504 时序上界 ≤ timeout+50ms，锁死阶段 1 契约边界）
+  与 `SlowNext_AbandonedHandlerFault_IsRecordedAsActivityEvent`（删 Activity 事件即转红）；
+  `TimeoutBehaviorTests` 9/9。阶段 2（scope 生命周期归属）需独立 ADR + ADR-026 性能定案回退裁决。
+
 - **2026-11-04 公共 API 缺口 A 批：`IMessageBroker` 投递语义描述改写（纯文档，无行为变更）**：
   原文写「Kafka 若需 at-least-once，请关闭 EnableAutoOffsetStore 并在 handler 成功后 StoreOffset」——
   但旧订阅契约不向 handler 暴露 `IConsumer`，`StoreOffset` 没有任何调用点；照做只会让 offset 永不前进，

@@ -164,6 +164,8 @@ services.AddPalTimeoutBehavior<CreateOrderCommand, OrderId>(TimeSpan.FromSeconds
 
 超时只**放弃等待**，不中断 handler——管道 next 委托不接收 `CancellationToken`（状态机用派发时的原始 token 调 handler），超时后原工作可能仍在后台跑完。调用方取消仍按 `OperationCanceledException` 传播，只有超时转 `TimeoutException`，由 `UsePalExceptionHandler()` 映射为 504。超时行为与验证 / 日志正交（互斥检测显式排除），注册顺序不影响解析结果。流式读（`MapStreamQuery`）不经管道，超时由 `DetachedStreamOptions.MaxRunDuration` 独立控制。
 
+⚠️ **超时后的 scope 后果（已知 P1 缺口，见 [ADR-038](decisions/038-timeout-abandoned-scope.md)）**：HTTP 路径复用请求的 `RequestServices`（ADR-026 性能定案，避免每请求两个 DbContext）。504 响应写出后 ASP.NET 随即释放请求 scope，此时仍在后台运行的 handler 若再触碰 scoped 依赖（`DbContext`、`IUnitOfWork`、仓储等）会抛 `ObjectDisposedException`。该异常不再静默——`TimeoutBehavior.ObserveFault` 会把它记成 `pal.timeout.abandoned-handler-fault` Activity 事件，但**handler 的后续工作已无法完成**。此外 CQRS 请求面没有幂等键，客户端收到 504 后重试可能造成双写：handler 应自身保证幂等，或在超时预算内完成副作用。根因修复（scope 生命周期归属）需 ADR 与性能裁决，尚未实施。
+
 ### 与 HTTP 请求验证的分工（两层，别混）
 
 Pal.DDD 的验证在 **CQRS 管线**里（`IPalValidator<T>` + `ValidationBehavior`），因此覆盖**所有分发路径**——HTTP 端点、Kafka / RabbitMQ 消费者、后台任务触发的同一条命令都走同一套验证。
