@@ -148,10 +148,15 @@ public static class PalActivitySource
     /// </summary>
     /// <param name="topicOrExchange">Kafka topic 或 RabbitMQ exchange 名（按消息类型名路由，低基数）。</param>
     /// <param name="eventName">消息类型名（低基数；实例级 ID 按 ITM-229 纪律不入 tag）。</param>
+    /// <remarks>
+    /// <b>不走通用 <c>Start</c> 辅助</b>：通用版形参是 <c>ReadOnlySpan&lt;(string, object?)&gt;</c>，
+    /// 调用点会把 string 装箱为 object（v8 已记 int/long 同族问题）。Kafka 发布路径有
+    /// 1500B/条 的分配预算（`PublishAsync_SinglePayloadCopy_NoRedundantToArray`），
+    /// 装箱会直接推红。本方法用 <c>SetTag(string, string?)</c> 重载 + 无 listener 快速返回，
+    /// 无 listener 时零分配。
+    /// </remarks>
     public static Activity? StartBrokerPublish(string topicOrExchange, string eventName)
-        => Start("Broker Publish",
-            ("pal.broker.target", topicOrExchange),
-            ("pal.broker.event", eventName));
+        => StartBrokerHop("Broker Publish", topicOrExchange, eventName);
 
     /// <summary>
     /// broker 消费跳（ADR-039 / 审计 A5）：覆盖「消息交付到 handler」这一段，
@@ -160,12 +165,30 @@ public static class PalActivitySource
     /// <param name="topicOrExchange">Kafka topic 或 RabbitMQ exchange/队列名（低基数）。</param>
     /// <param name="eventName">消息类型名（低基数）。</param>
     public static Activity? StartBrokerConsume(string topicOrExchange, string eventName)
-        => Start("Broker Consume",
-            ("pal.broker.target", topicOrExchange),
-            ("pal.broker.event", eventName));
+        => StartBrokerHop("Broker Consume", topicOrExchange, eventName);
+
+    /// <summary>broker 两跳共用实现——无 listener 快速返回（零分配），有 listener 也不装箱。</summary>
+    private static Activity? StartBrokerHop(string name, string topicOrExchange, string eventName)
+    {
+        // 无 listener 时直接返回：避免 SetTag 与任何分配（发布路径有分配预算门禁）
+        if (!Source.HasListeners())
+            return null;
+
+        var activity = Source.StartActivity(name);
+        if (activity is null)
+            return null;
+
+        activity.SetTag("pal.broker.target", topicOrExchange);
+        activity.SetTag("pal.broker.event", eventName);
+        return activity;
+    }
 
     // ── 内部辅助 ──
-    // 14 个公共 Start* 方法遵循完全相同的模式：Source.StartActivity → SetTag → return。
+    // 12 个公共 Start* 方法走本辅助（Source.StartActivity → SetTag → return）；
+    // 另外 2 个 broker 跳工厂（StartBrokerPublish/Consume）刻意不走本辅助——它们的调用点在
+    // Kafka 发布热路径，而本辅助的 `(string, object?)` 元组会把 string 装箱（v8 勘正已记
+    // int/long 同族），撞 1500B/条的分配预算；broker 两跳用 `SetTag(string,string?)` 重载 +
+    // HasListeners 快速返回实现零装箱（见 StartBrokerHop）。
     // 使用 params ReadOnlySpan<(string,object?)>（C# 13+ / .NET 11）压缩重复代码，
     // 编译器对少量参数生成栈分配 span，消除原 params 数组的堆分配。注（v8 勘正）：int/long
     // tag 经元组构造仍存在装箱（listener 关闭也发生）——本优化消除的是数组分配而非全部 GC。
