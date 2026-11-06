@@ -65,7 +65,7 @@
 4. **恢复 mutation 门禁可信度**（B5）：收窄 mutate filter 口径、排除 CompileError 形态、或改自建 mutation-replay 为唯一信号源（与既有自建 replay 路线对齐），先裁决再动。
 5. 方向裁决项 A1/A2 立案（ADR + 四栈同加 / includeFailed 参数）。
 
-## 附录 A：P3 发现（16 条，从略）
+## 附录 A：P3 发现（18 条，从略）
 
 代理报告原文含全部 P3 行式证据（Interrupt 车道观察者豁免、DynamicStep 未知 key 零信号、Saga 重试耗尽零日志、UoW 非泛型错误路径三测、struct 领域事件零诊断盲区、TryFromValue null 契约零测试、RecordedEvent.Rehydrate schemaVersion 校验、EventLogReplaySource ContentType 构造期校验、JSON Lines BOM 双栈不对称、EventLogPositionReserver 分配停滞不可观测、DetachedStream ProblemDetails 形态分叉、Dispatcher.Register(instance) remarks 对 HTTP 路径失真、发布侧自定义头缺失、broker 层 Activity 缺失、features.md §4 at-most-once 表述滞后、usage.md Kafka/Rabbit 节未提 ack 重载与批量订阅、跨栈矩阵测试面结构性缺口、Outbox CorrelationId 检索入口缺口）。共 18 项。
 
