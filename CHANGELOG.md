@@ -58,7 +58,11 @@
   验证：`InboxCrossStackMatrixTests.MarkFailed_WritesProcessedAt`（四栈）+
   `RetentionIncludeFailedTests`（Dapper/PalORM/EF 三栈 SQLite 端到端）；变异删 EF 赋值 →
   四栈用例转红，`InboxDeleteAllSubquery` 谓词退回 `status = 2` → 三栈用例转红；
-  公共 API 快照零变化。
+  公共 API 快照随 `InboxMarkFailed` 常量值同步更新（G23 同提交，见下条）。
+
+- **公共 API 快照同步（2026-11-07）**：批 2 变更 `Dapper.SqlTemplates.InboxMarkFailed`
+  常量值（加 `processed_at=@processedAt`）后，`core-packages-public-api.txt` 金标同步更新
+  （G23 要求快照与 CHANGELOG 同提交；3bd84b5 补记）。
 
 - **README AOT 虚假声称（2026-11-07 审计后，P1-C）**：
   特性段称 `PalDDD.Compression.Native`「AOT 安全」，但其 csproj 显式
