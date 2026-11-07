@@ -153,7 +153,8 @@ public sealed class RetentionProcessorTests
 
     [Test]
     public async Task RetentionQueries_UseProcessedIndexes()
-    {        await using var conn = new SqliteConnection("Data Source=:memory:");
+    {
+        await using var conn = new SqliteConnection("Data Source=:memory:");
         await conn.OpenAsync();
         await CreateSchemaAsync(conn);
 
