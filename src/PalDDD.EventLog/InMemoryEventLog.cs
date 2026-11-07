@@ -11,7 +11,7 @@ namespace PalDDD.EventLog;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>内存事件日志 — 用于测试和单进程原型。</summary>
-public sealed class InMemoryEventLog : IEventLog
+public sealed class InMemoryEventLog : IEventLog, IEventLogVersionReader
 {
     private readonly Lock _lock = new();
     private readonly Dictionary<string, List<RecordedEvent>> _streams = new(StringComparer.Ordinal);

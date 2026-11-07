@@ -92,6 +92,11 @@ public sealed class EfCoreRetentionStore : IRetentionStore
 
     /// <inheritdoc />
     public ValueTask<int> DeleteExpiredInboxAsync(
+        DateTimeOffset cutoff, int batchSize, CancellationToken ct = default)
+        => DeleteExpiredInboxAsync(cutoff, batchSize, includeFailed: false, ct);
+
+    /// <inheritdoc />
+    public ValueTask<int> DeleteExpiredInboxAsync(
         DateTimeOffset cutoff, int batchSize, bool includeFailed, CancellationToken ct = default)
         => ExecuteAsync(BuildInboxDelete(includeFailed), cutoff, batchSize, ct);
 

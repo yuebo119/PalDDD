@@ -42,7 +42,7 @@ namespace PalDDD.Dapper;
 /// auto-open/close 兜底（事务场景连接必已 open）。
 /// v9 修复 P1-1：本注释原以行内 // 形式加在类声明行，把 ": IEventLog" 吞进注释行尾——
 /// 接口声明静默丢失（build/测试/快照三重缺口均未拦，验证轮 v9 抓出）；现移入 XML doc 并恢复声明。</remarks>
-public sealed class DapperEventLog : IEventLog
+public sealed class DapperEventLog : IEventLog, IEventLogVersionReader
 {
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;

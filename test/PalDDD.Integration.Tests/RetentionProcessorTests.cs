@@ -114,6 +114,43 @@ public sealed class RetentionProcessorTests
         await Assert.That(await CountAsync(conn, "inbox_messages")).IsEqualTo(0);
     }
 
+    /// <summary>
+    /// ADR-039：DIM 默认实现 fail-visible——未覆写 4 参重载的实现者在
+    /// <c>includeFailed: true</c> 时抛 <see cref="NotSupportedException"/>（不静默按 false
+    /// 执行造成「Failed 已清理」的假成功）；<c>false</c> 转发旧成员、语义零变化。
+    /// </summary>
+    [Test]
+    public async Task DeleteExpiredInboxAsync_DefaultDim_FailsVisibleWhenIncludeFailedUnsupported()
+    {
+        var store = new LegacyRetentionStore();
+
+        // false：转发旧成员（返回旧成员的值），不抛
+        var forwarded = await ((IRetentionStore)store).DeleteExpiredInboxAsync(
+            DateTimeOffset.UtcNow, 10, includeFailed: false);
+        await Assert.That(forwarded).IsEqualTo(7);
+
+        // true：未覆写 → fail-visible
+        await Assert.That(async () => await ((IRetentionStore)store).DeleteExpiredInboxAsync(
+            DateTimeOffset.UtcNow, 10, includeFailed: true))
+            .Throws<NotSupportedException>();
+    }
+
+    /// <summary>只实现旧 3 参成员的存储——验证 DIM 的两条分支。</summary>
+    private sealed class LegacyRetentionStore : IRetentionStore
+    {
+        public ValueTask<int> DeleteExpiredOutboxAsync(
+            DateTimeOffset cutoff, int batchSize, bool includeDead, CancellationToken ct = default)
+            => ValueTask.FromResult(0);
+
+        public ValueTask<int> DeleteExpiredInboxAsync(
+            DateTimeOffset cutoff, int batchSize, CancellationToken ct = default)
+            => ValueTask.FromResult(7);
+
+        public ValueTask<int> DeleteExpiredIdempotencyAsync(
+            DateTimeOffset now, int batchSize, CancellationToken ct = default)
+            => ValueTask.FromResult(0);
+    }
+
     [Test]
     public async Task RetentionQueries_UseProcessedIndexes()
     {        await using var conn = new SqliteConnection("Data Source=:memory:");

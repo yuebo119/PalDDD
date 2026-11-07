@@ -23,7 +23,7 @@ namespace PalDDD.EventLog;
 public abstract class EventLogDbContext(
     DbContextOptions options,
     TimeProvider? timeProvider = null,
-    EventLogPositionReserver? positionReserver = null) : DbContext(options), IEventLog
+    EventLogPositionReserver? positionReserver = null) : DbContext(options), IEventLog, IEventLogVersionReader
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly EventLogPositionReserver _positionReserver = positionReserver ?? new EventLogPositionReserver();  // P2-4: Scoped 下 Hi/Lo 缓存不可达，生产推荐 Singleton

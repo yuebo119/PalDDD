@@ -50,28 +50,35 @@
 ### Added
 
 - **五项 API 增补（2026-11-06 全量审计 A1–A5/G4，ADR-039）**：
-  **A1** `IEventLog.GetStreamVersionAsync(streamName, ct)` 返回 `ValueTask<long>`（空流 -1，
-  与 `ExpectedStreamVersion.NoStream` 对齐），四栈同加（InMemory/EF Core/Dapper/PalORM）——
+  **A1** 新增**能力子接口** `IEventLogVersionReader.GetStreamVersionAsync(streamName, ct)`
+  → `ValueTask<long>`（空流 -1，与 `ExpectedStreamVersion.NoStream` 对齐），四栈均实现
+  （InMemory/EF Core/Dapper/PalORM）。`IEventLog` **不变**——刻意不用 DIM 返回 -1（那会给出
+  「流不存在」的假结果），调用方显式 `is IEventLogVersionReader` 探测能力。
   此前向已有流追加并要求 `Exact` 时只能全量物化算版本（10k 事件流付 10k 条物化）。
-  **A2/G4** `IRetentionStore.DeleteExpiredInboxAsync` 增 `bool includeFailed`（对齐 Outbox
-  `includeDead`），`RetentionSql` / `EfCoreRetentionStore` 同步扩面（`status = 2` vs `IN (2,3)`），
-  `RetentionOptions.DeleteFailedInboxMessages` 默认 false（Failed 行保留待人工处置）——
-  此前 Failed 行永不清理且无 reset/requeue 入口。
-  **A3** `MessagePublishContext.ExtraHeaders`（`IReadOnlyDictionary<string,string?>?`，默认 null
-  零分配）作为第 5 个位置参数；两 broker 写侧按需追加，框架保留键名（traceparent 等）优先、
-  业务头冲突静默跳过。
+  **A2/G4** `IRetentionStore` **保留**旧 3 参 `DeleteExpiredInboxAsync`，新增 4 参重载
+  （`bool includeFailed`，DIM 默认实现：`false` 转发旧成员、`true` 抛 `NotSupportedException`
+  fail-visible）；`RetentionSql` / `EfCoreRetentionStore` 同步扩面（`status = 2` vs `IN (2,3)`）；
+  `RetentionOptions.DeleteFailedInboxMessages` 默认 false——此前 Failed 行永不清理且无
+  reset/requeue 入口。
+  **A3** `MessagePublishContext` 保持 **4 位置参数主构造器**，新增
+  `IReadOnlyDictionary<string,string?>? ExtraHeaders { get; init; }`（ctor/Deconstruct 不变）；
+  两 broker 写侧按需追加，框架保留键名（traceparent 等）优先、业务头冲突静默跳过。
   **A4** `Saga<TState>.GetRegisteredSteps()` 返回 `IReadOnlyList<SagaStepDescriptor>`
   （Key / DispatchKind / Timeout），`Steps` 保持 protected——此前无公开枚举入口，
   `DynamicStep.Route` 未知 key 零信号。
   **A5** `PalActivitySource.StartBrokerPublish/StartBrokerConsume` 两工厂（12→14），
-  两 broker 发布/消费入口各接一个，跨进程链在 broker 两侧连续。
-  **兼容性**：A1/A2/A3 含破坏性签名变更（接口新增成员 / 方法增参 / 主构造器 4→5 参），
-  按 SemVer 属 Major 面，随 `5.0.0-preview.*` 线交付；A4/A5 为纯增量。
-  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；公共 API 快照 +27/−6（全部预期项）；
+  两 broker 发布/消费入口各接一个，跨进程链在 broker 两侧连续；两工厂走
+  `HasListeners` 快速返回 + `SetTag(string,string?)`，无 listener 零分配（Kafka 发布路径
+  有 1500B/条 分配预算）。
+  **兼容性：五项均为纯加法（Minor）**，无破坏性签名变更、无迁移成本。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；公共 API 快照为纯增量
+  （新增 `IEventLogVersionReader` 接口、`ExtraHeaders` init 属性、`DeleteExpiredInboxAsync`
+  4 参重载、`SagaStepDescriptor`、`StartBroker*` ×2、`DeleteFailedInboxMessages`、
+  `HeaderNames.IsKnown`；旧形态全部保留）；
   A1 四栈矩阵各一用例（空流 -1 → 追加后末位版本）；A2 `InboxDelete_IncludeFailed_ControlsWhetherFailedRowsAreRemoved`
   （默认删 1 / 开启删 2）；A3 `ExtraHeaders_WrittenByBothBrokers_FrameworkKeysTakePrecedence`
   + `ExtraHeaders_Null_KeepsEmptyContextZeroAllocationPath`；A4 `SagaStepDescriptorTests` 2/2；
-  count-audit 16 项 84 处声明全一致（Activity 12→14、ADR 38→39、源文件 264→265 同提交同步）。
+  count-audit 16 项 84 处声明全一致（Activity 12→14、ADR 40 份、源文件 265）。
 
 - **2026-11-04 公共 API 缺口 C 批：Outbox / Inbox 读侧查询（新增公共 API）**：
   `IPalOutboxStore.GetByStatusAsync(OutboxStatus, int, CancellationToken)` 与

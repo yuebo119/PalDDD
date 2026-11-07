@@ -22,19 +22,40 @@ public interface IRetentionStore
         bool includeDead,
         CancellationToken ct = default);
 
+    /// <summary>删除已处理且超过保留期的 Inbox 行（只删 Processed）。</summary>
+    /// <remarks>
+    /// 既有成员，保持必需——既有自定义实现者不受影响（ADR-039 的向后兼容取舍）。
+    /// 需要连 Failed 行一起清理时用带 <c>includeFailed</c> 的重载。
+    /// </remarks>
+    ValueTask<int> DeleteExpiredInboxAsync(
+        DateTimeOffset cutoff,
+        int batchSize,
+        CancellationToken ct = default);
+
     /// <summary>
-    /// 删除已处理且超过保留期的 Inbox 行。
+    /// 删除已处理/已失败且超过保留期的 Inbox 行（ADR-039 / 审计 A2/G4）。
     /// </summary>
     /// <param name="includeFailed">
-    /// ADR-039 / 审计 A2/G4：<c>true</c> 时同时删除 <c>Failed</c> 行（<c>status IN (2,3)</c>），
-    /// 对齐 Outbox 的 <c>includeDead</c> 先例；<c>false</c> 只删 <c>Processed</c>——
-    /// Failed 行是待人工处置的失败记录，默认保留。
+    /// <c>true</c> 时同时删除 <c>Failed</c> 行（<c>status IN (2,3)</c>），对齐 Outbox 的
+    /// <c>includeDead</c> 先例；<c>false</c> 与无参重载等价（只删 <c>Processed</c>）。
     /// </param>
+    /// <remarks>
+    /// <b>默认实现（DIM）刻意 fail-visible</b>：未覆写本成员的实现者在
+    /// <c>includeFailed: true</c> 时抛 <see cref="NotSupportedException"/>，而不是静默按
+    /// <c>false</c> 执行——后者会让调用方以为 Failed 行已清理而实际仍在（假成功）。
+    /// <c>includeFailed: false</c> 转发到既有成员，语义零变化。三个内置实现
+    /// （Dapper / PalORM / EF Core）均覆写本成员。
+    /// </remarks>
     ValueTask<int> DeleteExpiredInboxAsync(
         DateTimeOffset cutoff,
         int batchSize,
         bool includeFailed,
-        CancellationToken ct = default);
+        CancellationToken ct = default)
+        => includeFailed
+            ? ValueTask.FromException<int>(new NotSupportedException(
+                $"Retention store '{GetType().FullName}' does not implement failed-Inbox cleanup; " +
+                "override DeleteExpiredInboxAsync(cutoff, batchSize, includeFailed, ct) to support it."))
+            : DeleteExpiredInboxAsync(cutoff, batchSize, ct);
 
     /// <summary>删除已过期（<c>expires_at &lt; now</c>）的幂等记录。</summary>
     ValueTask<int> DeleteExpiredIdempotencyAsync(

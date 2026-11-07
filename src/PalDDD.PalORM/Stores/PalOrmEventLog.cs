@@ -41,7 +41,7 @@ namespace PalDDD.PalORM.Stores;
 /// 误译为并发异常」权衡自此关闭（PG 单条快路径此前已有同款探测）。
 /// </para>
 /// </summary>
-public class PalOrmEventLog<TProvider> : IEventLog
+public class PalOrmEventLog<TProvider> : IEventLog, IEventLogVersionReader
     where TProvider : IDbProvider
 {
     [SuppressMessage("Performance", "CA1051:Do not declare visible instance fields",

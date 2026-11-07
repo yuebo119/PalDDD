@@ -76,7 +76,10 @@ public sealed class BrokerHeaderConstructionTests
             [MessageConsumeContext.HeaderNames.TraceParent] = "00-attacker",
             ["x-blank"] = null
         };
-        var context = new MessagePublishContext(null, null, "00-abc-def-01", null, extra);
+        var context = new MessagePublishContext(null, null, "00-abc-def-01", null)
+        {
+            ExtraHeaders = extra
+        };
 
         var kafka = PalDDD.Messaging.Kafka.KafkaBroker.CreateHeaders(context);
         await Assert.That(kafka).IsNotEmpty();
