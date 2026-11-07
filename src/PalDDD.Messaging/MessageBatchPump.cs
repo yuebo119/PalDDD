@@ -240,7 +240,13 @@ internal static class MessageBatchPump
             {
                 try
                 {
-                    await pendingRead.ConfigureAwait(false);
+                    var leftover = await pendingRead.ConfigureAwait(false);
+                    // v4 批 A 收口（悬空窗口）：关停时 pendingRead 可能已完成并读到一条 item，
+                    // 但外层循环已退出、它从未进入任何批次——其 ack 已 MarkDeferred（broker 侧
+                    // 成功兜底已跳过），若不结算则恒 unacked 直到连接关闭。补一次弃置，
+                    // 与逐条关停语义一致（requeue:false）。
+                    if (leftover.Ack is not null)
+                        await leftover.Ack.RejectAsync(requeue: false, ct: CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is OperationCanceledException or ChannelClosedException or ObjectDisposedException)
                 {

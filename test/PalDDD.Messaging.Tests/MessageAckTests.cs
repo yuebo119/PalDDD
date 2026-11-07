@@ -336,6 +336,50 @@ public sealed class MessageAckTests
         await Assert.That(string.Join(",", log)).IsEqualTo("reject-0-False");
     }
 
+    /// <summary>
+    /// 泵关停收口：pendingRead 在关停时已完成并读到一条 item，但它从未进入任何批次——
+    /// 其 ack 已 MarkDeferred（broker 成功兜底已跳过），必须由泵补弃置，否则恒 unacked。
+    /// 构造：时间界先到 → 泵挂起 pendingRead 并进入 handler（阻塞）→ 第二条到达使
+    /// pendingRead 完成 → 取消 → handler 抛 OCE 走内层 Reject → 外层 finally 收 pendingRead。
+    /// </summary>
+    [Test]
+    public async Task SubscribeBatchAsync_ShutdownWithCompletedPendingRead_RejectsLeftoverDelivery(
+        CancellationToken cancellationToken)
+    {
+        var broker = new AckProbeBroker<string>();
+        IMessageBroker iface = broker;
+        var log = new List<string>();
+        var handlerEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource();
+
+        var subscription = await iface.SubscribeBatchAsync<string>(
+            async (batch, ack, token) =>
+            {
+                _ = batch;
+                _ = ack;
+                handlerEntered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            },
+            maxBatchSize: 64,
+            maxDelay: TimeSpan.FromMilliseconds(10),
+            cts.Token);
+
+        // 第一条：时间界先到 → 泵 break 出内层 while，pendingRead 保留，进入 handler 阻塞
+        await broker.PushAsync("m0", new RecordingAck(0, log), cancellationToken);
+        await handlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+        // 第二条：泵此刻在 handler 里，不读通道；这条由保留的 pendingRead 承接并完成
+        await broker.PushAsync("m1", new RecordingAck(1, log), cancellationToken);
+        await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+
+        await cts.CancelAsync();
+        await subscription.DisposeAsync();
+
+        // 两条都必须被弃置：m0 走内层 catch(OCE) 的整批 Reject，m1 走外层 finally 的收口
+        var settled = log.OrderBy(static s => s, StringComparer.Ordinal).ToArray();
+        await Assert.That(string.Join(",", settled)).IsEqualTo("reject-0-False,reject-1-False");
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, string message)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);

@@ -128,7 +128,9 @@ internal sealed class TimeoutBehavior<TRequest, TResponse> : IPipelineBehavior<T
                         }));
                 }
 #pragma warning disable CA1031 // 可观测动作的失败不得让原异常重新变成未观察异常
+#pragma warning disable RCS1075 // 空 catch 是有意设计：原异常已观察，事件记录失败不得再抛
                 catch (Exception)
+#pragma warning restore RCS1075
 #pragma warning restore CA1031
                 {
                     // Activity 事件记录失败（监听器抛异常等）时保持原语义：异常已被观察。

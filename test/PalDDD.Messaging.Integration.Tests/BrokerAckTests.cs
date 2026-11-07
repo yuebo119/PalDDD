@@ -879,4 +879,45 @@ public sealed class RabbitAckTests
 
         await Assert.That(meter.Measurements.Count).IsGreaterThanOrEqualTo(1);
     }
+
+    /// <summary>
+    /// v4 批 A Not-Tested 收口：prefetch 与 maxBatchSize 的组合语义。
+    /// usage.md 声明「prefetch 默认 10 会先于 maxBatchSize 生效」，本用例锁其反面：
+    /// prefetch(20) &gt;= maxBatchSize(20) 时整批能到 20，不被默认 10 截断。
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task BatchSubscription_PrefetchAboveBatchSize_AllowsFullBatch(CancellationToken cancellationToken)
+    {
+        const int batchSize = 20;
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger, prefetchCount: batchSize);
+        await using var broker = created.Item1;
+
+        var prefix = $"rmq-prefetch-{Guid.NewGuid():N}";
+        var fullBatch = new TaskCompletionSource<IReadOnlyList<ConsumedMessage<TestMessage>>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var sub = await broker.SubscribeBatchAsync<TestMessage>(
+            async (batch, ack, ct) =>
+            {
+                var mine = batch
+                    .Where(m => m.Message.Name.StartsWith(prefix, StringComparison.Ordinal))
+                    .ToList();
+                if (mine.Count >= batchSize && !fullBatch.Task.IsCompleted)
+                    fullBatch.TrySetResult(mine);
+                await ack.AcknowledgeAsync(ct);
+            },
+            maxBatchSize: batchSize,
+            // 时间界给足：20 条在 2s 内必达，超时则说明是 prefetch 截断而非时间不够
+            maxDelay: TimeSpan.FromSeconds(2),
+            cancellationToken);
+
+        for (var i = 0; i < batchSize; i++)
+            await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
+
+        var received = await fullBatch.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
+        await Assert.That(received.Count).IsEqualTo(batchSize);
+        await Assert.That(logger.WarningCount).IsEqualTo(0);
+    }
 }
