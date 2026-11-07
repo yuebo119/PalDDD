@@ -66,6 +66,25 @@
   特性段改「非 AOT——P/Invoke 原生二进制」，AOT 表拆分 Compression（✅，不含 Native）
   与 Compression.Native（❌）；`README.en.md` 同步。纯文档，无代码/行为变更。
 
+- **SagaCompensated 双计数（2026-11-07 审计后，P2-A）**：
+  `SagaCompensation.RunAsync` 补偿成功时计一次；超时车道经 `CompensateAllAsync → RunAsync`
+  也走该点，随后 `SagaProcessor.LogTerminalResult` 按 `compensationSucceeded` 再计一次——
+  同一补偿双重计数（重试耗尽车道不经该方法，口径分叉：超时 2 / 重试耗尽 1）。
+  修复：`LogTerminalResult` 移除计数（单一发射点留在 `RunAsync`），并清理死参数
+  （`CompensateTimedOutSagaAsync` 改 `void`、pending 元组简化为 `List<TState>`）。
+  验证：新增 `SagaCompensatedMetricTests`（超时车道 + 非空 `ExecutedStepKeys` / 重试耗尽
+  两车道各计 1）；现有 `CheckTimeoutsAsync_RecordsSagaCompensatedMetric` 补 `ExecutedStepKeys`
+  适配单一发射点；变异恢复 `LogTerminalResult` 计数 → 超时车道用例转红；公共 API 快照零变化。
+
+- **Specification 组合规约的 EF 翻译零回归网（2026-11-07 审计后，P2-B）**：
+  `SpecificationTests` 的「EF Core 集成」小节三个用例都只 `expr.Compile()` 内存求值，
+  而内存 Compile 对 `Expression.Invoke` 也能工作，无法捕获 EF 翻译回归。修复：
+  `PalDDD.Repository.EFCore.Tests` 新增 `SpecificationEfTranslationTests`（真实 SQLite
+  provider 执行 And/Or/Not 组合翻译 + 表达式树 Invoke 节点检测）；`SpecificationTests`
+  标题改「内存表达式可编译」并指路。变异：`ParameterReplacer` 改 `Expression.Invoke` →
+  `No_ExpressionInvoke` 转红（方案验收名为无下划线形态，实际方法名按仓库
+  `Method_Scenario` 命名规范加下划线）。
+
 - **Kafka 手动存储模式毒消息冻结 offset 水印（2026-11-06 全量审计 B3，P1）**：
   `EnableAutoOffsetStore=false` 下，消费线程先把每条已交付消息的 offset 播种进 `OffsetTracker`，
   但 `HandleMessageAsync` 的失败路径（handler 抛异常、非关停 OCE、反序列化返回 null）与

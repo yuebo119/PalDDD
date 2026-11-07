@@ -146,7 +146,10 @@ public class SpecificationTests
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // ToExpression — EF Core 集成
+    // ToExpression — 内存表达式可编译
+    // 注：以下用例只 expr.Compile() 内存求值；EF Core 真实翻译锁定在
+    // PalDDD.Repository.EFCore.Tests/SpecificationEfTranslationTests.cs
+    // （内存 Compile 对 Expression.Invoke 也能工作，无法捕获翻译回归——2026-11-07 P2-B）
     // ═══════════════════════════════════════════════════════════════
 
     [Test]

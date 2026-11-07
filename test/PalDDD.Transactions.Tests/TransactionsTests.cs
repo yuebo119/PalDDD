@@ -2091,6 +2091,10 @@ public sealed class SagaTimeoutProcessorTests
             CurrentState = "Waiting"
         };
         state.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        // 2026-11-07 审计 P2-A：补偿必须有已执行步骤才落 RunAsync 计数点。原 state 无
+        // ExecutedStepKeys（targets 为空，RunAsync 直接返回），修复前靠 LogTerminalResult
+        // 的补偿成功分支兜底计数 1；该分支移除后此处补步骤键，由 RunAsync 单一发射。
+        state.ExecutedStepKeys.Add("Waiting|OrderPlacedSagaEvent");
         var store = new RecordingSagaStateStore([state]);
         var processor = new SagaTimeoutProcessor<OrderSagaState>(
             store,
@@ -2363,7 +2367,7 @@ public sealed class SagaTimeoutProcessorTests
             => ValueTask.FromResult(sagas.Count);
     }
 
-    private sealed class RecordingSagaStateStore(IReadOnlyList<OrderSagaState>? states = null)
+    internal sealed class RecordingSagaStateStore(IReadOnlyList<OrderSagaState>? states = null)
         : ISagaStateStore<OrderSagaState>
     {
         public int BatchSize { get; private set; }
@@ -2424,7 +2428,7 @@ public sealed class SagaTimeoutProcessorTests
         }
     }
 
-    private sealed class TimedOutSaga : Saga<OrderSagaState>
+    internal sealed class TimedOutSaga : Saga<OrderSagaState>
     {
         public TimedOutSaga()
         {
