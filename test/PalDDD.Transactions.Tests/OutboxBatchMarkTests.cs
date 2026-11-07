@@ -385,6 +385,11 @@ public sealed class OutboxBatchMarkProcessorTests
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct) => ValueTask.FromResult(0);
 
+        // 批次 C 读侧方法：本替身不持久化消息（标记即只记录顺序），无状态可查——返回空即实况。
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
+
         public ValueTask<int> SaveChangesAsync(CancellationToken ct) => ValueTask.FromResult(0);
     }
 }

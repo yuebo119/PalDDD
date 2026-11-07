@@ -80,6 +80,28 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         return rows.Select(r => r.ToDomain()).ToList();
     }
 
+    /// <summary>
+    /// 按状态列举发件箱消息（批次 C，2026-11-04）——读侧补齐，供运维查询死信/积压。
+    /// </summary>
+    /// <remarks>
+    /// 观测语义——不取租约、不推进状态；读副本同 <see cref="GetPendingMessagesAsync"/>
+    /// （租约前的候选读，读副本陈旧只会让主库租约谓词不命中，无害空批）。
+    /// </remarks>
+    public async ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+        OutboxStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        StatusFilterGuard.EnsureDefined(status, nameof(OutboxStatus));
+
+        // 列名内联到 SQL 字面量（PalORM 要求 FormattableString 类型，字符串拼接会退化为 string）
+        var rows = await Session.QueryAsync<OutboxMessageRow>(
+            $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE status = {(int)status} ORDER BY id LIMIT {maxCount}",
+            readFromReplica: true, ct: ct).ConfigureAwait(false);
+        return rows.Select(r => r.ToDomain()).ToList();
+    }
+
     /// <inheritdoc />
     public async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
         int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)

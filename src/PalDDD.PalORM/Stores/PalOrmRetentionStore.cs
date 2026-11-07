@@ -37,7 +37,12 @@ public sealed class PalOrmRetentionStore<TProvider> : IRetentionStore
     /// <inheritdoc />
     public ValueTask<int> DeleteExpiredInboxAsync(
         DateTimeOffset cutoff, int batchSize, CancellationToken ct = default)
-        => ExecuteAsync(RetentionSql.InboxDelete(_dialect), cutoff, batchSize, ct);
+        => DeleteExpiredInboxAsync(cutoff, batchSize, includeFailed: false, ct);
+
+    /// <inheritdoc />
+    public ValueTask<int> DeleteExpiredInboxAsync(
+        DateTimeOffset cutoff, int batchSize, bool includeFailed, CancellationToken ct = default)
+        => ExecuteAsync(RetentionSql.InboxDelete(_dialect, includeFailed), cutoff, batchSize, ct);
 
     /// <inheritdoc />
     public ValueTask<int> DeleteExpiredIdempotencyAsync(

@@ -152,6 +152,12 @@ public sealed class IdempotencyEfCoreTests
         await Assert.That(loaded.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
         await Assert.That(loaded.ResponsePayload?.ToArray()).IsEquivalentTo("order-123"u8.ToArray());
         await Assert.That(loaded.Error).IsNull();
+
+        // v4 批 C（S6）：锁定既有 P2 声明的两半——① DB 终态由胜者写入（上方断言）；
+        // ② 败者 MarkFailedAsync 不抛异常（并发冲突被吞，调用方照常走成功路径）。
+        // ② 此前无断言，任何「把冲突改成抛出」的改动都会静默改变调用方语义。
+        // 入参终态不在本契约内（生产调用方只把 record 当局部变量，见 v4 §2.4）。
+        await Assert.That(staleRecord.Status).IsEqualTo(IdempotencyRecordStatus.Failed);
     }
 
     [Test]

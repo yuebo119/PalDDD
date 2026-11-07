@@ -23,7 +23,7 @@ public sealed class RetentionProcessorTests
 
         await Assert.That(async () => await dapper.DeleteExpiredOutboxAsync(DateTimeOffset.UtcNow, -1, false))
             .Throws<ArgumentOutOfRangeException>();
-        await Assert.That(async () => await dapper.DeleteExpiredInboxAsync(DateTimeOffset.UtcNow, 0))
+        await Assert.That(async () => await dapper.DeleteExpiredInboxAsync(DateTimeOffset.UtcNow, 0, includeFailed: false))
             .Throws<ArgumentOutOfRangeException>();
         await Assert.That(async () => await ef.DeleteExpiredIdempotencyAsync(DateTimeOffset.UtcNow, -5))
             .Throws<ArgumentOutOfRangeException>();
@@ -83,10 +83,77 @@ public sealed class RetentionProcessorTests
         await Assert.That(await CountAsync(conn, "outbox_messages")).IsEqualTo(2);
     }
 
+    /// <summary>
+    /// ADR-039 / 审计 A2/G4：Inbox 的 Failed（status=3）行默认保留，`includeFailed: true`
+    /// 才连它们一起删——此前 Failed 行永不清理且无 reset/requeue 入口（无界增长）。
+    /// </summary>
     [Test]
-    public async Task RetentionQueries_UseProcessedIndexes()
+    public async Task InboxDelete_IncludeFailed_ControlsWhetherFailedRowsAreRemoved()
     {
         await using var conn = new SqliteConnection("Data Source=:memory:");
+        await conn.OpenAsync();
+        await CreateSchemaAsync(conn);
+
+        var old = DateTimeOffset.UtcNow.AddDays(-60);
+        await InsertInboxAsync(conn, status: 2, old); // Processed（可删）
+        await InsertInboxAsync(conn, status: 3, old); // Failed（默认保留）
+        await InsertInboxAsync(conn, status: 3, old); // Failed（默认保留）
+
+        var store = new DapperRetentionStore(conn, DapperDbType.Sqlite);
+
+        // 默认口径：只删 Processed
+        var deleted = await store.DeleteExpiredInboxAsync(
+            DateTimeOffset.UtcNow, batchSize: 100, includeFailed: false);
+        await Assert.That(deleted).IsEqualTo(1);
+        await Assert.That(await CountAsync(conn, "inbox_messages")).IsEqualTo(2);
+
+        // 显式开启：连 Failed 一起删
+        var deletedAll = await store.DeleteExpiredInboxAsync(
+            DateTimeOffset.UtcNow, batchSize: 100, includeFailed: true);
+        await Assert.That(deletedAll).IsEqualTo(2);
+        await Assert.That(await CountAsync(conn, "inbox_messages")).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// ADR-039：DIM 默认实现 fail-visible——未覆写 4 参重载的实现者在
+    /// <c>includeFailed: true</c> 时抛 <see cref="NotSupportedException"/>（不静默按 false
+    /// 执行造成「Failed 已清理」的假成功）；<c>false</c> 转发旧成员、语义零变化。
+    /// </summary>
+    [Test]
+    public async Task DeleteExpiredInboxAsync_DefaultDim_FailsVisibleWhenIncludeFailedUnsupported()
+    {
+        var store = new LegacyRetentionStore();
+
+        // false：转发旧成员（返回旧成员的值），不抛
+        var forwarded = await ((IRetentionStore)store).DeleteExpiredInboxAsync(
+            DateTimeOffset.UtcNow, 10, includeFailed: false);
+        await Assert.That(forwarded).IsEqualTo(7);
+
+        // true：未覆写 → fail-visible
+        await Assert.That(async () => await ((IRetentionStore)store).DeleteExpiredInboxAsync(
+            DateTimeOffset.UtcNow, 10, includeFailed: true))
+            .Throws<NotSupportedException>();
+    }
+
+    /// <summary>只实现旧 3 参成员的存储——验证 DIM 的两条分支。</summary>
+    private sealed class LegacyRetentionStore : IRetentionStore
+    {
+        public ValueTask<int> DeleteExpiredOutboxAsync(
+            DateTimeOffset cutoff, int batchSize, bool includeDead, CancellationToken ct = default)
+            => ValueTask.FromResult(0);
+
+        public ValueTask<int> DeleteExpiredInboxAsync(
+            DateTimeOffset cutoff, int batchSize, CancellationToken ct = default)
+            => ValueTask.FromResult(7);
+
+        public ValueTask<int> DeleteExpiredIdempotencyAsync(
+            DateTimeOffset now, int batchSize, CancellationToken ct = default)
+            => ValueTask.FromResult(0);
+    }
+
+    [Test]
+    public async Task RetentionQueries_UseProcessedIndexes()
+    {        await using var conn = new SqliteConnection("Data Source=:memory:");
         await conn.OpenAsync();
         await CreateSchemaAsync(conn);
 

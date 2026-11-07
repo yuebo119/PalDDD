@@ -104,9 +104,38 @@ internal sealed class TimeoutBehavior<TRequest, TResponse> : IPipelineBehavior<T
     /// 观察被放弃任务的异常——超时路径下 handler 仍可能在后台失败，不观察会让异常
     /// 在 Finalizer 线程以 UnobservedTaskException 形式出现（噪声，且丢失原始堆栈上下文）。
     /// </summary>
+    /// <remarks>
+    /// v4 批 B（2026-11-07，独立 P3 可观测项）：原实现只 <c>_ = t.Exception</c> 静默吞掉，
+    /// 超时后 abandoned handler 的失败在日志与追踪里完全不可见。本项<b>不改变运行时行为</b>
+    /// （仍不重抛、不影响 504 时序），只把故障记到当前 Activity 事件，供采集侧观察。
+    /// 局限须明说：<c>OnlyOnFaulted</c> 续体只覆盖「失败收尾」，成功跑完的 abandoned 任务
+    /// 依然不可见——因此这是可观测补强，<b>不是 B4 根因修复</b>（根因是 scope 生命周期，
+    /// 见 <c>docs/decisions/038-timeout-abandoned-scope.md</c> 阶段 2）。
+    /// </remarks>
     private static void ObserveFault(Task task)
         => _ = task.ContinueWith(
-            static t => _ = t.Exception,
+            static t =>
+            {
+                // 先取出异常（观察），再记事件——事件记录失败不得让异常重新变成未观察。
+                var ex = t.Exception;
+                try
+                {
+                    System.Diagnostics.Activity.Current?.AddEvent(new(
+                        "pal.timeout.abandoned-handler-fault",
+                        tags: new System.Diagnostics.ActivityTagsCollection
+                        {
+                            ["error"] = ex?.GetBaseException().Message
+                        }));
+                }
+#pragma warning disable CA1031 // 可观测动作的失败不得让原异常重新变成未观察异常
+#pragma warning disable RCS1075 // 空 catch 是有意设计：原异常已观察，事件记录失败不得再抛
+                catch (Exception)
+#pragma warning restore RCS1075
+#pragma warning restore CA1031
+                {
+                    // Activity 事件记录失败（监听器抛异常等）时保持原语义：异常已被观察。
+                }
+            },
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);

@@ -37,7 +37,9 @@ public sealed class RetentionProcessor
             (cutoff, n, token) => _store.DeleteExpiredOutboxAsync(cutoff, n, options.DeleteDeadOutboxMessages, token),
             now - options.OutboxRetention, options, ct).ConfigureAwait(false);
         var inbox = await RunBatchesAsync(
-            (cutoff, n, token) => _store.DeleteExpiredInboxAsync(cutoff, n, token),
+            // ADR-039 / 审计 A2/G4：Failed 行默认保留（待人工处置）；需要清理由调用方
+            // 通过 options 显式开启（对齐 Outbox 的 DeleteDeadOutboxMessages）。
+            (cutoff, n, token) => _store.DeleteExpiredInboxAsync(cutoff, n, options.DeleteFailedInboxMessages, token),
             now - options.InboxRetention, options, ct).ConfigureAwait(false);
         var idempotency = await RunBatchesAsync(
             (cutoff, n, token) => _store.DeleteExpiredIdempotencyAsync(cutoff, n, token),

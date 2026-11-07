@@ -19,7 +19,7 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 | NuGet 包 | 编译期诊断 | 持久化栈 | 实测用例 |
 |:---:|:---:|:---:|:---:|
-| **35** 个 | **38** 条 | **3** 套 | **1502** 项¹ |
+| **36** 个 | **38** 条 | **3** 套 | **1502** 项¹ |
 
 ¹ 16 个测试项目，2026-10-08 本机全量实测：1434 通过 + 68 跳过——60 项 Docker 依赖（PalORM 多方言 46 + Integration 14，由 CI Testcontainers 执行）+ 8 项本机 broker 预检不可达；PalORM.Tests 与 Messaging.Integration.Tests 需 Docker。
 
@@ -62,9 +62,9 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 **消息版本演化与启动期契约验证**。`MessageEvolutionBuilder` 构建相邻版本逐步升级管线（消费侧显式执行），`AddPalMessageContractVerification` 在启动期校验升级路径完整性（链不完整拒绝启动，抛 `PalPlatformVerificationException`）。序列化可插拔：JSON（AOT 安全，默认）与 MemoryPack（更快，适配层非 AOT）。
 
-**可插拔压缩**。`ICompressionProvider` / `ICompressor` 抽象带两套实现：System 内置压缩与原生 LZ4/ZStandard 绑定（`PalDDD.Compression.Native`，AOT 安全），经 DI 替换。
+**可插拔压缩**。`ICompressionProvider` / `ICompressor` 抽象带两套实现：System 内置压缩与原生 LZ4/ZStandard 绑定（`PalDDD.Compression.Native`，非 AOT——P/Invoke 原生二进制），经 DI 替换。
 
-**内建可观测性**。`PalActivitySource`（12 个 Start 方法）+ `PalMetrics`（30 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测（命令分发/Saga 转换 Activity 为预留，尚未接线）。
+**内建可观测性**。`PalActivitySource`（14 个 Start 方法）+ `PalMetrics`（32 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测。**14 个 Activity 工厂中有 2 个预留未接线**（`StartCommandDispatch` / `StartSagaTransition`，ITM-627 家族，remarks 声明「保留供外部集成」），其余 12 个均有生产调用点（含 broker 发布/消费两跳）。
 
 **三栈持久化，按场景选型**。PalORM（真 AOT，源生成 SQL）/ Dapper（调用点级 AOT，手写 SQL）/ EF Core（Migration/LINQ/ChangeTracker 生态）平等共存、无废弃计划；五组 Store 能力三栈全量覆盖、行为由跨栈对照测试守护（[ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md)、[ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)）；支持环境事务与显式事务边界。
 
@@ -393,7 +393,8 @@ dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benc
 
 | 层 | 状态 | 说明 |
 |----|:--:|------|
-| PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` 全局继承 |
+| PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` 全局继承（不含 Compression.Native） |
+| PalDDD.Compression.Native | ❌ | P/Invoke 原生二进制（LZ4/ZStandard），显式 `IsAotCompatible=false` |
 | PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | 同上 |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **真 AOT** | 源生成 RowFactory/CommandFactory，`PublishAot=true` 验证通过（[PalOrmSample](samples/PalDDD.PalOrmSample/)） |
 | PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ 实测 | `[module:DapperAot]` 已启用——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 33/33（2026-10-21 补批量 EventLog 路径）；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持 |
@@ -515,7 +516,7 @@ flowchart TB
 | 文档 | 说明 |
 |------|------|
 | [架构说明](docs/architecture.md) | 分层、依赖方向、项目职责 |
-| [功能特性全景](docs/features.md) | 36 个项目的全量功能特性清单（源自源码分析，逐条带类型锚点） |
+| [功能特性全景](docs/features.md) | 37 个项目的全量功能特性清单（源自源码分析，逐条带类型锚点） |
 | [使用指南](docs/usage.md) | 各组件完整代码示例 |
 | [教程](docs/tutorial.md) | 从零构建 DDD 应用 |
 | [幂等设计说明](docs/idempotency-rationale.md) | 为什么这样设计：幂等执行的取舍与边界 |
@@ -525,9 +526,9 @@ flowchart TB
 | [性能记录](docs/performance.md) | 基准测试数据 |
 | [测试体系](docs/testing.md) | 测试金字塔、场景矩阵、BenchmarkDotNet 配置 |
 | [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
-| [踩坑目录](docs/pitfalls.md) | 87 条 DDD/AOT/并发实战踩坑 |
+| [踩坑目录](docs/pitfalls.md) | 88 条 DDD/AOT/并发实战踩坑 |
 | [开发流程](docs/development.md) | 开发环境、Git 钩子、测试运行 |
-| [架构决策](docs/decisions/) | 36 份 ADR |
+| [架构决策](docs/decisions/) | 40 份 ADR |
 | [部署性能旋钮](docs/deployment-performance.md) | GC 选型 / PG·MySQL 服务端旋钮实测与权衡 |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 

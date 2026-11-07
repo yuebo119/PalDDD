@@ -211,6 +211,13 @@ public static class SqlTemplates
         "SELECT * FROM outbox_messages WHERE status=@status AND retry_count<@maxRetryCount AND next_attempt_at<=@now ORDER BY next_attempt_at, created_at LIMIT @n";
 
     /// <summary>
+    /// 按状态列举发件箱消息（批次 C，2026-11-04）——读侧补齐，供运维查询死信/积压。
+    /// 💡 四栈语义统一：按主键 id 排序（ULID 字典序=创建序），走既有 (status) 索引。
+    /// </summary>
+    public const string OutboxSelectByStatus =
+        "SELECT * FROM outbox_messages WHERE status=@status ORDER BY id LIMIT @n";
+
+    /// <summary>
     /// 按租约标识回读刚锁定的消息。<br/>
     /// 💡 解决非 PG 路径的并发 Bug：子查询在 UPDATE 后重新评估会把锁定行排除。<br/>
     /// 改为按 <c>locked_by=@owner AND locked_until=@until</c> 回读，精确匹配本次租约。
@@ -234,6 +241,13 @@ public static class SqlTemplates
     /// </summary>
     public const string InboxSelect =
         "SELECT * FROM inbox_messages WHERE consumer_name=@c AND message_id=@m";
+
+    /// <summary>
+    /// 按状态列举收件箱消息（批次 C，2026-11-04）——读侧补齐，供运维查询失败/滞留列表。
+    /// 💡 四栈语义统一：按自增主键 id 排序=插入序，走既有 (status) 索引。
+    /// </summary>
+    public const string InboxSelectByStatus =
+        "SELECT * FROM inbox_messages WHERE status=@status ORDER BY id LIMIT @n";
 
     /// <summary>
     /// 开始处理消息 — 状态改为 Processing，尝试次数 +1。<br/>
@@ -268,7 +282,7 @@ public static class SqlTemplates
     /// 抢占 token 守卫，防止被抢占的旧 worker 写入失败态干扰新 worker。
     /// </summary>
     public const string InboxMarkFailed =
-        "UPDATE inbox_messages SET status=3,last_error=@err WHERE id=@id AND status=1 AND processing_started_at=@startedAt";
+        "UPDATE inbox_messages SET status=3,last_error=@err,processed_at=@processedAt WHERE id=@id AND status=1 AND processing_started_at=@startedAt";
 
     /// <summary>
     /// PostgreSQL conflict-safe INSERT 语法。<br/>
@@ -310,12 +324,21 @@ public static class SqlTemplates
     /// 查询活跃的 Saga 状态。<br/>
     /// 💡 返回 Active=0 与 AwaitingHumanDecision=5 的 Saga（三十四轮：中断态超时兜底——
     /// 中断态 Saga 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor 补偿，未配置则显式无限等待）；
-    /// Completed、Compensated、CompensationFailed、DeadLettered 为终态仍过滤。<br/>
+    /// Completed、Compensated、CompensationFailed 为终态仍过滤
+    ///（v5.0.0 批次 B：DeadLettered(4) 已从枚举移除，4 成为永久空洞——存量 status=4 的行
+    /// 会在水合时 fail-fast 而非被静默当作终态跳过，见 SagaStatusGuard）。<br/>
     /// 注：五表状态列均为 INT（v9 勘正：原"与 Outbox 的字符串状态不同"为 int 化前残留——三十八轮已统一）。
     /// Saga 侧另有版本号乐观并发控制（version 列），与状态列编码正交。
     /// </summary>
     public const string SagaActive =
         "SELECT * FROM saga_states WHERE status IN (0, 5) ORDER BY created_at LIMIT @n";
+
+    /// <summary>
+    /// 按生命周期状态列举 Saga（批次 B，2026-11-04）——读侧补齐，四栈同一语义
+    ///（按 <c>saga_id</c> 排序，ULID 字典序 = 创建序，使跨栈结果可比）。
+    /// </summary>
+    public const string SagaByStatus =
+        "SELECT * FROM saga_states WHERE status = @status ORDER BY saga_id LIMIT @n";
 
     /// <summary>
     /// 租约获取活跃 Saga，避免多 worker 重复处理。<br/>

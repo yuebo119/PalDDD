@@ -142,6 +142,7 @@ var manualTools = new Dictionary<string, string>(StringComparer.Ordinal)
     ["sister-axis"] = "姊妹轴对称核查，评审辅助",
     ["verify-action-items"] = "按参数校验指定清单文件，按需运行",
     ["review-coverage-report"] = "沉寂面报告（2026-09-25 增，Pal 会话审计立法）：git 沉寂时长推导定向抽查池，发布前/大迁移收尾后人工运行并读数字——报告工具无「失败」语义，退出码恒 0",
+    ["mutation-probe"] = "变异门禁可信度探针（v4 批 F，2026-11-07）：向被测源码注入语义存活体、跑目标测试项目、断言必须转红——证明「拒绝过吗」轴；不跑 Stryker、不计算 mutation score，批 A/B/C 的 Messaging/CQRS/Transactions.EFCore 文件零覆盖（两份 stryker-config 均不含）。stryker-config 扩面或目标源码漂移后运行",
     // 2026-10-08 C# 化增补：hook-pre-commit/hook-pre-push 由 .githooks 启动器引用（接线扫描
     // 识别为 WIRED，不进本表）；template-gate 无 .githooks/CI 引用点（.ai 侧文档引用不算接线），按设计人工按需。
     ["template-gate"] = "AI 模板编译探针门禁（2026-10-08 自 .ai/scripts/template-gate.sh C# 化迁入；.pal/prompts 模板改动后人工运行——.ai 独立裁决不进 CI）",

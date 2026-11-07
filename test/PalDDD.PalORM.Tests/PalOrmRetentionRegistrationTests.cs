@@ -21,7 +21,7 @@ public sealed class PalOrmRetentionRegistrationTests
 
         await Assert.That(async () => await store.DeleteExpiredOutboxAsync(DateTimeOffset.UtcNow, -1, false))
             .Throws<ArgumentOutOfRangeException>();
-        await Assert.That(async () => await store.DeleteExpiredInboxAsync(DateTimeOffset.UtcNow, 0))
+        await Assert.That(async () => await store.DeleteExpiredInboxAsync(DateTimeOffset.UtcNow, 0, includeFailed: false))
             .Throws<ArgumentOutOfRangeException>();
     }
 

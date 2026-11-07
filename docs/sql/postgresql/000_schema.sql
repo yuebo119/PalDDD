@@ -41,6 +41,13 @@ CREATE TABLE inbox_messages (
 CREATE UNIQUE INDEX idx_inbox_unique ON inbox_messages(consumer_name, message_id);
 -- 保留清理按 processed_at 分批删除已处理行；部分索引只覆盖 Processed。
 CREATE INDEX idx_inbox_processed ON inbox_messages(processed_at) WHERE status = 2;
+-- 2026-11-04（批次 C 读侧补齐）：IInboxStore.GetByStatusAsync 按 status 列举，
+-- 覆盖 Pending(0)/Processing(1)/Failed(3) 的运维查询——`idx_inbox_processed` 只覆盖
+-- status=2，其余三态在 PG 上会退化为顺序扫描。低基数列（4 值）上的 btree 写成本可忽略，
+-- 故建单一 (status) 索引而非三个部分索引（避免为同一列维护三份索引结构）。
+-- Outbox 无需新增：idx_outbox_due（status=0）与 idx_outbox_processed（status<>0）
+-- 两个互补部分索引已覆盖全部三个已定义状态（0/1/2）。
+CREATE INDEX idx_inbox_status ON inbox_messages(status);
 
 CREATE TABLE saga_states (
     saga_id       TEXT PRIMARY KEY,  -- Ulid 26 字符（代码传字符串，非 UUID 格式）

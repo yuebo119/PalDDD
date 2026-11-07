@@ -103,6 +103,11 @@ public sealed class DomainEventOutboxBridgeTests
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct) => ValueTask.FromResult(0);
 
+        // 批次 C 读侧方法：本替身模拟「存储故障」，读侧同样以故障表达（不静默返回空）。
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => throw new InvalidOperationException("simulated store failure");
+
         public ValueTask<int> SaveChangesAsync(CancellationToken ct) => ValueTask.FromResult(0);
     }
 }

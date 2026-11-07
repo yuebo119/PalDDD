@@ -150,5 +150,16 @@ internal sealed class SagaCompensation<TState>
         if (failures is not null)
             throw new AggregateException(
                 $"Compensation failed for {failures.Count} of {targets.Count} steps.", failures);
+
+        // v4 批 D（S4）：重试耗尽/故障补偿车道的成功补偿计数。此前只有 SagaProcessor 的超时
+        // 兜底车道计 SagaCompensated（PalDiagnostics.cs 的 description 写「Saga 补偿总数」，
+        // 与实际覆盖范围不符 → 计数器描述漂移）。此处补计数使两条车道同口径：
+        // 全部目标步骤补偿成功 = 一次补偿成功（按次计，不按步骤计，与超时车道一致）。
+        // 计数点在动作全部成功之后、调用方持久化之前——与 SagaCompensationFailed 的
+        // 「动作发生即记账」语义对齐（两者都不等持久化结果）。
+        // 2026-11-07 审计 P2-A：超时车道经 CompensateAllAsync → RunAsync 也走本计数点；
+        // SagaProcessor.LogTerminalResult 不再重复计（此前按 compensationSucceeded 二次发射，
+        // 而重试耗尽车道不经该方法，两条车道口径分叉）。
+        PalMetrics.SagaCompensated.Add(1);
     }
 }

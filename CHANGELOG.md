@@ -12,7 +12,181 @@
 
 ## [Unreleased]
 
+### Fixed 修复
+
+- **RabbitMQ 批量订阅 pre-ack 使批次确认契约失效（2026-11-06 全量审计 B2，P1）**：
+  批量泵只把逐条确认器入队、不结算，而 broker 在 `await handler(...)` 返回后按
+  `!ack.IsSettled` 兜底 ACK——handler 一入队就结算，批次 handler 成败与结算脱钩；
+  批次收尾 `AcknowledgeAsync` 落在已结算确认器上，每条刷
+  `Duplicate acknowledge ignored` Warning，`RejectAsync(requeue:true)` 在批量路径静默无操作。
+  修复：新增 `internal DeferredAckRegistry`（`ConditionalWeakTable`，零公共 API 变化）+
+  `PalDDD.Messaging` 对 RabbitMQ 的 IVT 一行；泵在 `channel.Writer.WriteAsync` **之前**
+  同步打移交标记（顺序硬约束：先写后标在关停竞态下会漏标）；broker 六分支精确判据——
+  `:514`/`:530`（从未入队）保留无条件 Nack，成功兜底与通用异常分支查
+  `!IsDeferred && !IsSettled`，两个 OCE 分支改为「已移交**且**入队已确认」才跳过；
+  泵在关停 `catch(OCE)` break 前对当前批补 `RejectAsync(requeue:false)`，防 delivery 悬空。
+  Kafka 侧 `finally` 判据只看 `IsSettled`，不读该标记，零行为变化。
+  验证：`dotnet build` 0 警告 0 错误；单元锁定测试
+  `SubscribeBatchAsync_AckPath_MarksDeferredBeforeBrokerHandlerReturns` /
+  `SubscribeBatchAsync_ShutdownDuringHandler_RejectsCurrentBatch`；真容器集成锁定
+  `BatchSubscription_DoesNotPreAcknowledge_UntilHandlerSettles`（prefetch=1，批次未结算时
+  第二条不投递且零 Duplicate Warning）/ `BatchSubscription_RejectWithRequeue_RedeliversSameMessage`；
+  变异三点红→绿（删 `MarkDeferred`、标记移到 `WriteAsync` 之后、删泵关停 `Reject`）；
+  公共 API 快照零变化。
+
+- **勘正（2026-11-07 审计后，P1-A）：Kafka 侧 `finally` 判据须并入 `IsDeferred`**：
+  上一条 B2 条目「Kafka 侧 `finally` 判据只看 `IsSettled`，不读该标记，零行为变化」**失实**——
+  `PalDDD.Messaging.csproj` 的 IVT 同时含 `PalDDD.Messaging.Kafka`（批 A 已加），且批量路径的
+  handler 是 `MessageBatchPump.EnqueueAsync`（只 `MarkDeferred` 不结算），`HandleMessageAsync`
+  的 `finally` 会抢先 `RejectAsync(requeue:false)` 占用 `KafkaMessageAck.TryClaim`，批次侧
+  `AcknowledgeAsync` / `RejectAsync(requeue:true)` 全被拦截：`EnableAutoOffsetStore=false`
+  下失败无法 Seek 重投，消息丢失。修复：判据并入 `!DeferredAckRegistry.IsDeferred(ack)`
+  （与 RabbitMQ 侧四处同构）。验证：新增真容器集成锁定
+  `KafkaBatchAckTests.UncommittedOffset_DoesNotAdvance`（批次未结算时 committed offset 不得前进）/
+  `Requeue_Redelivers` / `DirectSubscribe_Unaffected`（方案验收名为无下划线形态，
+  实际方法名按仓库 `Method_Scenario` 命名规范加下划线）；变异删判据 →
+  `UncommittedOffset_DoesNotAdvance` 转红（committed=1）；公共 API 快照零变化。
+
+- **Retention `includeFailed` 假 API（2026-11-07 审计后，P1-B）**：
+  ADR-039 的 A2 落地后仍清不掉 Failed 行——三栈 `MarkFailedAsync` 只写 `Status`/`LastError`，
+  不写 `ProcessedAt`（Failed 行 `processed_at` 恒 NULL），而 `RetentionSql.InboxDeleteAllSubquery`
+  与 `EfCoreRetentionStore.BuildInboxDelete` 的 `includeFailed` 谓词是
+  `status IN (2,3) AND processed_at IS NOT NULL AND processed_at < @cutoff`，NULL 永不命中。
+  修复：四栈 `MarkFailedAsync` 统一写 `ProcessedAt`（取处理开始时间，回退接收时间；store
+  无时间源且接口签名不改，避免公共 API 破坏），Dapper `InboxMarkFailed` 加 `processed_at`。
+  `InboxMessage.ProcessedAt` 语义扩展为「终态完成时间（Processed 或 Failed）」。
+  验证：`InboxCrossStackMatrixTests.MarkFailed_WritesProcessedAt`（四栈）+
+  `RetentionIncludeFailedTests`（Dapper/PalORM/EF 三栈 SQLite 端到端）；变异删 EF 赋值 →
+  四栈用例转红，`InboxDeleteAllSubquery` 谓词退回 `status = 2` → 三栈用例转红；
+  公共 API 快照零变化。
+
+- **README AOT 虚假声称（2026-11-07 审计后，P1-C）**：
+  特性段称 `PalDDD.Compression.Native`「AOT 安全」，但其 csproj 显式
+  `IsAotCompatible=false`（P/Invoke 原生二进制），AOT 表也未列入 ❌ 行。修复：
+  特性段改「非 AOT——P/Invoke 原生二进制」，AOT 表拆分 Compression（✅，不含 Native）
+  与 Compression.Native（❌）；`README.en.md` 同步。纯文档，无代码/行为变更。
+
+- **SagaCompensated 双计数（2026-11-07 审计后，P2-A）**：
+  `SagaCompensation.RunAsync` 补偿成功时计一次；超时车道经 `CompensateAllAsync → RunAsync`
+  也走该点，随后 `SagaProcessor.LogTerminalResult` 按 `compensationSucceeded` 再计一次——
+  同一补偿双重计数（重试耗尽车道不经该方法，口径分叉：超时 2 / 重试耗尽 1）。
+  修复：`LogTerminalResult` 移除计数（单一发射点留在 `RunAsync`），并清理死参数
+  （`CompensateTimedOutSagaAsync` 改 `void`、pending 元组简化为 `List<TState>`）。
+  验证：新增 `SagaCompensatedMetricTests`（超时车道 + 非空 `ExecutedStepKeys` / 重试耗尽
+  两车道各计 1）；现有 `CheckTimeoutsAsync_RecordsSagaCompensatedMetric` 补 `ExecutedStepKeys`
+  适配单一发射点；变异恢复 `LogTerminalResult` 计数 → 超时车道用例转红；公共 API 快照零变化。
+
+- **Specification 组合规约的 EF 翻译零回归网（2026-11-07 审计后，P2-B）**：
+  `SpecificationTests` 的「EF Core 集成」小节三个用例都只 `expr.Compile()` 内存求值，
+  而内存 Compile 对 `Expression.Invoke` 也能工作，无法捕获 EF 翻译回归。修复：
+  `PalDDD.Repository.EFCore.Tests` 新增 `SpecificationEfTranslationTests`（真实 SQLite
+  provider 执行 And/Or/Not 组合翻译 + 表达式树 Invoke 节点检测）；`SpecificationTests`
+  标题改「内存表达式可编译」并指路。变异：`ParameterReplacer` 改 `Expression.Invoke` →
+  `No_ExpressionInvoke` 转红（方案验收名为无下划线形态，实际方法名按仓库
+  `Method_Scenario` 命名规范加下划线）。
+
+- **Kafka 手动存储模式毒消息冻结 offset 水印（2026-11-06 全量审计 B3，P1）**：
+  `EnableAutoOffsetStore=false` 下，消费线程先把每条已交付消息的 offset 播种进 `OffsetTracker`，
+  但 `HandleMessageAsync` 的失败路径（handler 抛异常、非关停 OCE、反序列化返回 null）与
+  「handler 成功但未显式结算」都不结算确认器——连续前缀缺一环，`StoreOffset` 永不推进，
+  分区消费永久停摆且重启从最早位点全量重放。修复：`KafkaMessageAck` 提升到 `try` 外、
+  在反序列化之前构造，新增 `finally` 在四门控（`manualStore` / 未结算 / 非关停窗口 /
+  `CancellationToken.None`）下补 `RejectAsync(requeue:false)`；自动存储模式零状态变化，
+  EOF/tombstone 不结算，handler 已显式结算时不覆盖其决定。
+  验证：Kafka 项目 0 警告 0 错误；新增集成锁定测试
+  `PoisonHandlerFailure_AutoSettlesOffset_WatermarkAdvancesAfterRestart`（毒消息抛异常 →
+  健康消息确认 → 同 GroupId 重启两条均不重投，修复前水印冻结两条都重投转红）；
+  公共 API 无变化。
+
 ### Added
+
+- **五项 API 增补（2026-11-06 全量审计 A1–A5/G4，ADR-039）**：
+  **A1** 新增**能力子接口** `IEventLogVersionReader.GetStreamVersionAsync(streamName, ct)`
+  → `ValueTask<long>`（空流 -1，与 `ExpectedStreamVersion.NoStream` 对齐），四栈均实现
+  （InMemory/EF Core/Dapper/PalORM）。`IEventLog` **不变**——刻意不用 DIM 返回 -1（那会给出
+  「流不存在」的假结果），调用方显式 `is IEventLogVersionReader` 探测能力。
+  此前向已有流追加并要求 `Exact` 时只能全量物化算版本（10k 事件流付 10k 条物化）。
+  **A2/G4** `IRetentionStore` **保留**旧 3 参 `DeleteExpiredInboxAsync`，新增 4 参重载
+  （`bool includeFailed`，DIM 默认实现：`false` 转发旧成员、`true` 抛 `NotSupportedException`
+  fail-visible）；`RetentionSql` / `EfCoreRetentionStore` 同步扩面（`status = 2` vs `IN (2,3)`）；
+  `RetentionOptions.DeleteFailedInboxMessages` 默认 false——此前 Failed 行永不清理且无
+  reset/requeue 入口。
+  **A3** `MessagePublishContext` 保持 **4 位置参数主构造器**，新增
+  `IReadOnlyDictionary<string,string?>? ExtraHeaders { get; init; }`（ctor/Deconstruct 不变）；
+  两 broker 写侧按需追加，框架保留键名（traceparent 等）优先、业务头冲突静默跳过。
+  **A4** `Saga<TState>.GetRegisteredSteps()` 返回 `IReadOnlyList<SagaStepDescriptor>`
+  （Key / DispatchKind / Timeout），`Steps` 保持 protected——此前无公开枚举入口，
+  `DynamicStep.Route` 未知 key 零信号。
+  **A5** `PalActivitySource.StartBrokerPublish/StartBrokerConsume` 两工厂（12→14），
+  两 broker 发布/消费入口各接一个，跨进程链在 broker 两侧连续；两工厂走
+  `HasListeners` 快速返回 + `SetTag(string,string?)`，无 listener 零分配（Kafka 发布路径
+  有 1500B/条 分配预算）。
+  **兼容性：五项均为纯加法（Minor）**，无破坏性签名变更、无迁移成本。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；公共 API 快照为纯增量
+  （新增 `IEventLogVersionReader` 接口、`ExtraHeaders` init 属性、`DeleteExpiredInboxAsync`
+  4 参重载、`SagaStepDescriptor`、`StartBroker*` ×2、`DeleteFailedInboxMessages`、
+  `HeaderNames.IsKnown`；旧形态全部保留）；
+  A1 四栈矩阵各一用例（空流 -1 → 追加后末位版本）；A2 `InboxDelete_IncludeFailed_ControlsWhetherFailedRowsAreRemoved`
+  （默认删 1 / 开启删 2）；A3 `ExtraHeaders_WrittenByBothBrokers_FrameworkKeysTakePrecedence`
+  + `ExtraHeaders_Null_KeepsEmptyContextZeroAllocationPath`；A4 `SagaStepDescriptorTests` 2/2；
+  count-audit 16 项 84 处声明全一致（Activity 12→14、ADR 40 份、源文件 265）。
+
+- **2026-11-04 公共 API 缺口 C 批：Outbox / Inbox 读侧查询（新增公共 API）**：
+  `IPalOutboxStore.GetByStatusAsync(OutboxStatus, int, CancellationToken)` 与
+  `IInboxStore.GetByStatusAsync(InboxStatus, int, CancellationToken)`，四栈实现
+  （InMemory / EFCore / Dapper / PalORM）语义统一为 `WHERE status = @status ORDER BY id LIMIT @maxCount`
+  （Outbox 主键 ULID 字典序=创建序；Inbox 自增主键=插入序）。
+  补齐的背景：框架自己写入的状态（`OutboxStatus`/`InboxStatus`/`RetryCount`/`LastError`）此前
+  只能靠连库写裸 SQL 查——EF 栈暴露 `DbSet` 尚可，Dapper/PalORM 栈无任何入口，
+  `features.md` 声明的「三栈语义对齐」在读侧是破的。未定义为默认接口实现（DIM）：
+  DIM 返回空列表会让未更新的自定义存储静默给出「查无此状态」，与本轮要消灭的假 API 形态相同；
+  过滤值本身也校验（未定义枚举值抛 `ArgumentOutOfRangeException`）。
+  **索引核查（C5）**：四方言逐一核对——EF 有 `(status, ...)` 前导索引、MySQL/SQLite/通用 schema 有
+  `(status, processed_at)`、PG 的 `idx_outbox_due(status=0)` 与 `idx_outbox_processed(status<>0)`
+  两个互补部分索引已覆盖 Outbox 全部三态；**唯一缺口是 PG Inbox**（只有 `status=2` 的部分索引），
+  已在 `docs/sql/postgresql/000_schema.sql` 补 `idx_inbox_status` 并附迁移文档
+  `docs/sql/migration-2026-11-04-inbox-status-index.md`（纯新增索引，滚动升级安全，
+  大表建议 `CREATE INDEX CONCURRENTLY`）。
+  验证：InMemory 矩阵 9/9（两接口 × 状态隔离 / maxCount / 排序 / 空表 / 未定义值）；
+  EF 2/2、Dapper 2/2、PalORM 2/2（各覆盖两接口的状态隔离 + maxCount + 排序 + 未定义值）。
+  变异验证：InMemory Outbox 过滤改恒真 → 「状态隔离」用例转红（其余 8 例正确保持绿）；
+  Dapper `InboxSelectByStatus` 去掉 `WHERE status` → Dapper Inbox 矩阵转红。
+  公共 API 快照 +12 行（两接口 × 5 处方法 + 两个 SQL 常量）。
+
+- **2026-11-04 公共 API 缺口 B 批：Saga 读侧补齐 `GetByStatusAsync`（新增公共 API）**：
+  `ISagaStateStore<TState>` 增 `GetByStatusAsync(SagaStatus status, int maxCount, CancellationToken ct = default)`，
+  四栈实现（InMemory / EFCore `SagaStateDbContext` / Dapper / PalORM）语义统一为
+  `WHERE status = @status ORDER BY saga_id LIMIT @maxCount`（ULID 字典序=创建序，跨栈结果可比），走既有 `(status)` 索引。
+  补齐的背景：原有读方法只覆盖「活跃 + 等待人工决策」两态，其余四态无法从抽象层列举，运维只能连库写裸 SQL——
+  这打穿了「三栈语义对齐」承诺。**HITL 运营待办查询的正确入口即本方法 + `SagaStatus.AwaitingHumanDecision`。**
+  未定义为默认接口实现（DIM）：DIM 返回空列表会让未更新的自定义存储静默给出「查无此状态」，正是本轮要消灭的假 API 形态。
+  过滤值本身也校验——传已移除的 `(SagaStatus)4` 抛可行动异常，而非返回空列表让调用方误判「该状态没有数据」。
+
+- **2026-11-04 公共 API 缺口 A 批：消费确认契约（新增公共 API，向后兼容；含一处既有缺陷修复）**：
+  ①**`IMessageAck`**（Messaging）：`AcknowledgeAsync` / `RejectAsync(bool requeue)` 把「消费确认」补成订阅契约的一个维度。
+  配套 `NoOpMessageAck` 与两条新重载——`SubscribeAsync<T>(Func<TMessage, MessageConsumeContext?, IMessageAck, CancellationToken, ValueTask>)`
+  与 `SubscribeBatchAsync<T>(Func<IReadOnlyList<ConsumedMessage<TMessage>>, IMessageAck, CancellationToken, ValueTask>)`（批次级确认器）
+  ——两者的默认接口实现（DIM）都转发到旧重载并传 `NoOpMessageAck`，**不覆写的自定义 broker 仍是 at-most-once**（语义不静默升级）。
+  ②**Kafka 手动提交**（新增能力）：`EnableAutoOffsetStore=false` 时 `AcknowledgeAsync` 才真正 `StoreOffset`；
+  `RejectAsync(true)` 走 `Seek` + 指数退避（200ms 起、5s 上限，有进展即复位），`RejectAsync(false)` 存储 offset 跳过该条。
+  `IConsumer` 非线程安全，确认动作经线程内命令队列回送消费线程执行（消费线程改带超时 poll，消息到达延迟不变）；
+  并发消费（`ConsumerDispatchConcurrency>1`）下用 offset 水印只推进连续前缀——逐条乱序存储会让崩溃后的重启跳过仍在处理中的消息；
+  `EnableAutoCommit=false` 时补显式 `Commit`（否则「确认了却仍在重投」是静默失败）。
+  ③**RabbitMQ 确认器**：本栈原本就是 manual-ack，确认器把既有 `BasicAck`/`Nack` 交给 handler 决策；原子占位防重复结算
+  （重复 `BasicAck` 会以 `PRECONDITION_FAILED` 关闭 channel，波及同 channel 的其它订阅与发布）。handler 不结算时兜底规则不变。
+  ④**批量确认**：一个批次级确认器对应整批；handler 未结算时成功自动确认、异常整批 `Reject(false)`（与逐条 at-most-once 默认一致）。
+  `RejectAsync(true)` 逆序委派，使 Kafka 的 `Seek` 落在批内最早一条，整批重放。
+  ⑤**修复既有缺陷（含 context 的 `SubscribeAsync` DIM 无限递归）**：`IMessageBroker` 该默认实现的转发 lambda 原为三参，
+  重载决议把它重新绑定到成员自身 → 栈溢出；因两个内置 broker 都覆写了该成员，缺陷长期不可见，第三方只实现两参重载的 broker
+  一走 context 重载即崩。新增的四参重载测试首次触发并暴露它，现改为两参 lambda 正确转发。
+  ⑥**文档**：`IMessageBroker` 投递语义声明改写——旧文「关闭 EnableAutoOffsetStore 并在 handler 成功后 StoreOffset」在旧契约下
+  没有调用点（handler 拿不到 `IConsumer`），照做会让 offset 永不前进（重启后 `earliest` 全量重放 / `latest` 静默跳过未提交消息）。
+  验证：Messaging 单元 13/13（NoOp 不抛含已取消 token、DIM 传 NoOp、批次确认聚合/逆序/单次结算、泵兜底三分支）；
+  Messaging 集成 32/32 连跑三轮全绿（Kafka 确认前进/重投/跳过/退避四点 + RabbitMQ 三态，本机 wslc 真容器实跑）；
+  变异验证：注释 `StoreOffset` → `AckAdvancesOffset` 与 `RejectSkips` 转红，`RequeueRedelivers`/`RequeueBackoff` 保持绿。
+  测试基建顺带修掉既有随机失败根因（容器把 broker 通告为 `localhost`，rdkafka 先试 IPv6 `::1`，回落窗口叠加 5s 快速失败超时
+  → 同一二进制两次运行结果不同；现限定 `BrokerAddressFamily.V4`，三次连跑 32/32）。
+  公共 API 快照 +14 行（纯新增）；`docs/conventions.md` 源文件数 260→261。
 
 - **2026-11-04 管道能力分层定案 + 请求级超时行为（新增公共 API，向后兼容）**：
   ①**请求级超时**（CQRS / DependencyInjection）：`TimeoutBehavior<TRequest,TResponse>` 与 `AddPalTimeoutBehavior` 两个重载
@@ -61,6 +235,159 @@
   窗口；ITM-710 实证核心已由 2026-09-19 decision Option A 落地，SafeObserve 四件泛化收益为负保留）。
   ⑤配套：`coverage-baseline.json` 增设 `PalDDD.PalORM.Tests` 键（本地无 Docker 保守初值 0.3311，
   降幅门禁覆盖 16 模块；CI 全量待重录上调）。
+
+### Removed
+
+- **2026-11-04 公共 API 缺口 B 批：删除两处假 API / 死枚举（破坏性，5.0.0 窗口内）**：
+  ①**`ISagaManager.GetInterruptedSagasAsync` 删除**（含 `DefaultSagaManager` 实现、`ISagaManager` 过期 remarks）。
+  三条理由任一成立即够：(a) 类型上无法正确实现——`DefaultSagaManager` 是非泛型类，`ISagaStateStore<TState>` 是泛型接口，
+  非泛型 manager 拿不到 `TState`，只能靠反射（违反零反射约束）；(b) 原保留理由（接口含 internal 成员、外部无法替代实现）
+  已随 v5.0.0 `ISagaManager` 公开化失效；(c) 同需求已有更好的入口。
+  **迁移**：`manager.GetInterruptedSagasAsync(ct)` → `store.GetByStatusAsync(SagaStatus.AwaitingHumanDecision, n, ct)`
+  （`store` 为该 Saga 的具体 `ISagaStateStore<TState>`；原方法恒返空列表，照旧调用等于误判「无人工待办」）。
+  ②**`SagaStatus.DeadLettered` 删除**。语义位置已被 `CompensationFailed` 占据——DeadLetter 是消息中间件术语，
+  Saga 域的对应概念是补偿失败；留着只让每个使用者的 `switch` 多一个必须处理但永不进入的分支。
+  **升级前置检查（必做）**：`SELECT COUNT(*) FROM saga_states WHERE status = 4`——非 0 须先手工修正
+  （补偿失败用 `CompensationFailed=3`）再启动，否则该行水合时 fail-fast。
+  ⚠️ **数值契约**：`SagaStatus` 各成员改为显式编号，`AwaitingHumanDecision` 恒为 `5`、`4` 成为永久空洞（不得复用）。
+  若按「直接删中间成员、隐式重排」处理，`AwaitingHumanDecision` 会变成 4——库里 `status=4` 的存量行会被读成
+  「等待人工决策」、`status=5` 的行变成未定义，且 Dapper SQL 模板里三处硬编码的 `status IN (0, 5)` 同时失配。
+  ③**三栈水合点改用带定义域校验的映射**：Dapper / PalORM 的 `Materialize` 由 `(SagaStatus)row.Status` 改为
+  `SagaStatusGuard.FromPersisted(...)`；EF Core 的 int→enum 物化不做校验，故在四个读边界（`GetActiveSagasAsync` /
+  `GetByStatusAsync` / `GetByIdAsync` / 两条 `Lease*`）加复核。未定义值抛 `InvalidOperationException`，
+  文案含 sagaId、原始值与上述升级 SQL（此前强转会把 4 读成「不是任何已知状态」的实例，终态判定与 switch 全部落空且不报错）。
+
+### Changed
+
+- **可观测补强 + 计数声明对齐（2026-11-06 全量审计 S3/S4/S5/G2/G3/G5/G6/G7/S2，P2）**：
+  **S3**：新增 2 个 broker 计数器 `paldd.broker.consume_failed` / `paldd.broker.publish_failed`
+  （30→32），埋点在 Kafka 消费失败三路径 + `PublishSerializedAsync`、Rabbit 毒消息两路径 +
+  两条 `NO_ROUTE`——此前跨进程失败只能靠日志抓取。**S4**：`SagaCompensated` 补到重试耗尽/故障
+  补偿车道（`SagaCompensation` 成功路径），此前只覆盖超时兜底车道、计数器描述与实际覆盖不符。
+  **S5**：在线投影路径接入遥测（`ProjectionProcessor` 复用 `StartProjectionRebuild` 工厂 +
+  `ProjectionReplayed`/`ProjectionFailed` 计数器），重建有而稳态无的不对称消除。
+  **G2**：超时兜底补偿车道补两个观察点（补偿前 `OnCompensationStarted`、终态迁移
+  `OnStatusChanged`，均走隔离包装——Sink 异常不阻断补偿）。
+  **G3**：`docs/usage.md` 新增「归档与导入导出（JSON Lines）」子节（分组逐流、`NoStream`、
+  顺序、投影重建四条接线要点）。**G5/G7**：四处统一披露「12 个 Activity 工厂中 2 个预留未接线」。
+  **G6**：6 处包/项目计数对齐（35→36 可打包、36→37 项目）+ `count-audit` 正则补两个盲区
+  （README 概览表裸单元格、`ships N packages`）。**S2**：`docs/usage.md` 披露 Rabbit prefetch
+  默认 10 会先于 `maxBatchSize` 生效（有效批大小被截断）。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；公共 API 快照 +2 行（两计数器）；真容器
+  `ConsumeFailedCounter_IncrementsOnPoisonMessage`（毒消息 → 计数 ≥1）；RabbitAckTests 7/7；
+  count-audit 16 项 84 处声明全一致（新增 3 处由扩展正则覆盖）。
+
+- **RabbitMQ 健康态接入 + EF 终态写回退（2026-11-06 全量审计 S1/S6，P2）**：
+  **S1**：`RabbitMqBroker` 追加 `IMessageBrokerHealth`（公共 API 快照 +2 行），以
+  `IChannel.IsOpen == false` 判据在 `TryAckSafeAsync`/`TryNackSafeAsync`/`CancelConsumeSafeAsync`
+  的 catch 里置故障态——per-delivery 回调模型没有 Kafka 式「消费线程终止」观测点，可观测面只有
+  channel 关闭；普通 handler 失败（毒消息弃置）**不置位**；`DisposeAsync` 后**不**置位（正常关停，
+  与「注册即健康 → Degraded 会让 readiness 变红」的既有裁决一致）。
+  **S6**：`InboxDbContext.SaveTerminalStateAsync` 改返回 `bool`，`MarkProcessedAsync`/`MarkFailedAsync`
+  在持久化前保存 `(Status, ProcessedAt, LastError)` 快照，DB 拒绝（关系型 `affected==0` / 非关系型
+  `DbUpdateConcurrencyException`）时回退——此前 EF 只告警不回退，败者持「假终态」而 DB 仍是
+  Processing（Dapper/PalORM 栈有 `affected>0` 门控，EF 是唯一分叉）。
+  `IdempotencyDbContext` 的并发冲突分支补一条 Activity 事件（`pal.idempotency.terminal-state-concurrency-conflict`）
+  让「本方标记被抢先」可见，**不改返回值语义、不改入参终态、不加 IVT/RestoreFromStore**
+  （生产调用方只把 record 当局部变量，见 v4 §2.4 三行拆分定级）。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；公共 API 快照 +2 行（`IsConsumingHealthy`/
+  `LastFaultReason`）同提交；真容器 `Health_HealthyOnLiveBroker_UnhealthyAfterChannelFault`
+  （健康 → 毒消息仍健康 → 连接关闭后 Unhealthy）；`InboxEfCoreTests` 19/19（含新增 InMemory
+  并发冲突回退用例 + 既有 SQLite 用例扩断言入参回退）；`IdempotencyEfCoreTests` 10/10
+  （既有并发冲突用例补断言败者返回值语义）；变异红→绿（删回退 → InMemory 用例转红）。
+
+- **超时放弃的 handler 持已释放 scope：P1 登记与可观测补强（2026-11-06 全量审计 B4，P1）**：
+  `TimeoutBehavior` 超时后 abandoned handler 在请求 scope 释放后继续运行，触碰 scoped 依赖抛
+  `ObjectDisposedException` 且被 `ObserveFault` 静默吞掉；叠加「CQRS 请求面无幂等键」→ 504 重试
+  可能双写。**本轮不含根因修复**（阶段 1 只做登记与披露，见
+  [`docs/decisions/038-timeout-abandoned-scope.md`](docs/decisions/038-timeout-abandoned-scope.md)）：
+  ① `ObserveFault` 把 abandoned handler 失败记成 `pal.timeout.abandoned-handler-fault` Activity
+  事件（独立 P3 可观测项，不改运行时行为、不改 504 时序）；② `docs/usage.md` 超时小节披露 scope
+  已释放的后果与双写风险；③ `.ai/state.md` 登记 B4-P1 与阶段 2 立项条目，「CQRS 请求面无幂等键」
+  单列为独立条目。
+  验证：`PalDDD.CQRS` 0 警告 0 错误；新增锁定测试
+  `SlowNext_TimeoutDoesNotWaitForAbandonedHandler`（504 时序上界 ≤ timeout+50ms，锁死阶段 1 契约边界）
+  与 `SlowNext_AbandonedHandlerFault_IsRecordedAsActivityEvent`（删 Activity 事件即转红）；
+  `TimeoutBehaviorTests` 9/9。阶段 2（scope 生命周期归属）需独立 ADR + ADR-026 性能定案回退裁决。
+
+- **2026-11-04 公共 API 缺口 A 批：`IMessageBroker` 投递语义描述改写（纯文档，无行为变更）**：
+  原文写「Kafka 若需 at-least-once，请关闭 EnableAutoOffsetStore 并在 handler 成功后 StoreOffset」——
+  但旧订阅契约不向 handler 暴露 `IConsumer`，`StoreOffset` 没有任何调用点；照做只会让 offset 永不前进，
+  重启行为由 `AutoOffsetReset` 决定（`earliest` 全量重放 / `latest` 静默跳过全部未提交消息）。
+  现改为如实描述：默认 at-most-once；at-least-once 用携带 `IMessageAck` 的重载，
+  Kafka 侧还须关闭 `EnableAutoOffsetStore`。同步改写 `docs/features.md` 的「边界与刻意取舍」两条
+  （Broker 语义、`SagaStatus` 数值契约）。
+
+### Documentation
+
+- **2026-11-04 ADR-037：事件日志只追加不删除**（`docs/decisions/037-event-log-append-only.md`，37 份 ADR）：
+  把「框架不提供事件删除/归档/截断 API」从隐式事实升格为显式契约。四条理由：事件日志是事实记录非状态缓存、
+  框架不掌握保留期限的业务判据、删除入口会破坏读侧版本/位置序契约、真要收缩存储应导出冷存后自行处置。
+  合规删除权用加密擦除实现；归档用既有 `EventStreamJsonLines` 导出。**后果显式声明**：存储随业务量单调上升、
+  无自动收敛，payload 保留策略须在接入前决定。无代码变更、无 API 变更。
+  同步：`docs/features.md` 第 8 节改名「事件日志与投影」并加范围边界（聚合重放器与快照不在范围内，
+  与 `architecture.md:243` 的 Event Sourcing Adapter 外圈定位一致）；ADR 计数 36→37 四处
+  （README / README.en / AGENTS.md / pitfalls.md）。
+
+### Tests
+
+- **P3 卫生 18 项盘点（2026-11-06 全量审计附录 A，批 H）**：逐项标注闭合状态——
+  **已闭合 6 项**：⑬ 发布侧自定义头（批 G A3）、⑭ broker 层 Activity（批 G A5）、
+  ⑮ features.md at-most-once 表述（批 A）、⑯ usage.md ack/批量订阅（批 A）、
+  ⑰ 跨栈矩阵缺口（批 G A1 四栈 SQLite 格）、③ Saga 重试耗尽零信号（批 D+E S4 计数器）。
+  **未做 12 项**（①②④⑤⑥⑦⑧⑨⑩⑪⑫⑱），逐项给理由与建议载体：多数属**行为变更**
+  （schemaVersion 校验、ContentType 构造期校验、ProblemDetails 形态、新增公共 API）
+  或**新诊断/新计数器**（触发 count-audit 与诊断覆盖门禁联动），不是纯卫生；
+  ⑫ 的 remarks 修正需先核实原文与 HTTP 路径实际行为的精确差异（避免「改注释掩盖实现」，
+  项目已知陷阱 M3-3）。清单：`docs/review/batch-h-p3-inventory-2026-11-07.md`。
+  **明确声明**：`verify-conventions --quick` 只查结构/链接/TODO，查不到语义失实；
+  本盘点不宣称它覆盖语义正确性。
+
+- **变异门禁可信度（2026-11-06 全量审计 B5/J1，P2）**：`break=95` 的历史 success 建立在被
+  filter 吃掉后的个位数基数上（152 created→12 tested、2310 created→35 tested，422 CompileError），
+  「执行过」成立、「拒绝过吗」不成立。本批：① 两份 `stryker-config.json` 在**各自 project 内**
+  扩 mutate 面（Transactions 增 `RetryExecutor`/`OutboxWakeUpSignal`，Compression 增
+  `SystemCompressor`），不改 `project` 字段；② 新增 `scripts/mutation-probe.cs`——向被测源码注入
+  语义存活体、跑目标测试项目、断言必须转红，两个探针均实测转红（MySqlLeasePolicy 314 项中 2 失败、
+  CompressionProvider 49 项中 41 失败，均为真实测试拒绝而非编译错误）；③ `mutation.yml` 头部
+  明写**零覆盖边界**：批 A/B/C 的 Messaging/CQRS/Transactions.EFCore 文件不在这两份配置内，
+  B5 的「基数/覆盖率」另一半未解决；新增 Messaging/CQRS stryker 配置属放弃范围。
+  验证：`mutation-probe --selftest` 6/6；真实探针 2/2 转红；`gate-audit --inventory`
+  45 脚本（28 接线 OK / 17 TOOL / 0 REVIEW）。
+
+- **2026-11-05 批次 A 收尾：消费确认边界补齐与 A6 口径修正**：
+  ①**显式 Commit 路径集成用例**（此前 Not-Tested）：`EnableAutoOffsetStore=false` 且
+  `EnableAutoCommit=false` 时，`AcknowledgeAsync` 与 `RejectAsync(false)` 必须补发显式 `Commit`。
+  用例发两条（Ack 一条、Reject(false) 一条）、重启后断言均不重投——Confluent 在 auto.commit=false 下
+  `Close()` 不提交，重启不重投的唯一解释就是确认动作补发的 Commit。配套 `CreateBroker` 增
+  `enableAutoCommit` 参数；排障期给测试夹具 `CapturingLogger` 补 Warning 文本环形。
+  ②**A6 口径修正（实测）**：方案原文「连续 100 次 Reject 不超 10 秒」与 200ms→5s 退避算术冲突
+  （100 次最小 20 秒）；即便用内部测试缝把退避缩到 20ms→50ms，真容器实测每次迭代约 530-590ms——
+  **主导成本是 Seek 后的 broker 取回往返，不是退避**，10 秒口径在真实 broker 上不可达。改锁三个
+  可证伪性质：100 次有界完成（≤90s）、交付间隔不低于退避下限（快 broker 上退避是真实限速器）、
+  **进程 CPU 增量远小于实际耗时**（忙等自旋会把一个核烧满）。测试缝为
+  `KafkaBroker.SeekBackoffInitialMs`/`SeekBackoffMaxMs`（internal + IVT，须订阅前设置，生产行为不变）。
+  变异验证：把退避等待与 poll 超时同时变异成热循环后，CPU 断言精确转红（CPU 48.9s ≈ 实际耗时 55.1s），
+  恢复后 Messaging 集成 34/34 绿。
+  ③**默认退避下的 100 次连续拒绝实测（双档收口）**：`RequeueBackoff_100ConsecutiveRejects_BoundedAndRateLimited`
+  设 `PALDDD_TEST_BACKOFF_FULL=1` 走默认退避（200ms→5s，不触碰测试缝）按原方案口径实跑——
+  本机真容器 8m 18s 通过（退避和 481s + 取回往返，与理论一致；此前「约 20 分钟」为高估），
+  并锁定长程性质：第 6 次拒绝起间隔被截在 5s，此后 94 次不再增长也不跌破上限；
+  CPU 断言在全量档自旋会烧掉退避和（约 481s），120s 上限可分辨。未设环境变量时走测试缝快档
+  （56s），套件预算不受影响。配套把 `RequeueBackoff_GrowsAndIsCapped` 从 4 次拒绝扩到 6 次：
+  此前只走到 1600ms，5s 上限从未被任何用例触及；现第 6 个间隔锁定在 4.5-9s（上限存在且被尊重）。
+- **2026-11-05 测试基建勘正**：批次 C 的 saga 水合测试曾用
+  `session.ExecuteAsync($"... saga_id = '{id}'")` 改写存量行，语句无报错但 0 行生效——根因见下方
+  Documentation 的 PALORM-RT6，测试改用 store 自身写入并留注释防复发。
+
+### Documentation
+
+- **2026-11-05 pitfalls 增 PALORM-RT6（第十章 17 条，全文 88 条）**：
+  `ExecuteAsync($"... id = '{value}'")` 无报错但 0 行生效——`FormattableSqlFormatter.Format`
+  只参数化**引号字面量之外**的格式项，引号内的 `{0}` 逐字保留，SQL 实际匹配 `'{0}'`；
+  反编译 PalORM.Core 6.8.0 实证。规避：值洞不包引号（即参数化为 `@pN`），或走
+  `GetRawConnection()` + 手动 `DbCommand`；同族陷阱：整句 SQL 写进单个洞会整句退化为参数值
+  （DDL 静默不执行）。`MultiDialectFixture.ApplySchemaAsync` 注释同步勘正。
 
 ## [5.0.0-preview.1] — 2026-10-27
 

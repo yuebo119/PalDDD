@@ -93,7 +93,12 @@ public sealed class EfCoreRetentionStore : IRetentionStore
     /// <inheritdoc />
     public ValueTask<int> DeleteExpiredInboxAsync(
         DateTimeOffset cutoff, int batchSize, CancellationToken ct = default)
-        => ExecuteAsync(BuildInboxDelete(), cutoff, batchSize, ct);
+        => DeleteExpiredInboxAsync(cutoff, batchSize, includeFailed: false, ct);
+
+    /// <inheritdoc />
+    public ValueTask<int> DeleteExpiredInboxAsync(
+        DateTimeOffset cutoff, int batchSize, bool includeFailed, CancellationToken ct = default)
+        => ExecuteAsync(BuildInboxDelete(includeFailed), cutoff, batchSize, ct);
 
     /// <inheritdoc />
     public ValueTask<int> DeleteExpiredIdempotencyAsync(
@@ -112,15 +117,17 @@ public sealed class EfCoreRetentionStore : IRetentionStore
             : $"DELETE FROM {table} WHERE {id} IN (SELECT {id} FROM {table} WHERE {statusPredicate} AND {processed} IS NOT NULL AND {processed} < @cutoff ORDER BY {processed} LIMIT @n)";
     }
 
-    private string BuildInboxDelete()
+    private string BuildInboxDelete(bool includeFailed)
     {
         var table = Quote(_schema.InboxTable);
         var id = Quote(_schema.InboxId);
         var status = Quote(_schema.InboxStatus);
         var processed = Quote(_schema.InboxProcessedAt);
+        // ADR-039 / 审计 A2：与 RetentionSql.InboxDelete 同口径（Processed=2 / +Failed=3）
+        var statusPredicate = includeFailed ? $"{status} IN (2, 3)" : $"{status} = 2";
         return _dialect == RetentionDialect.MySql
-            ? $"DELETE FROM {table} WHERE {status} = 2 AND {processed} IS NOT NULL AND {processed} < @cutoff ORDER BY {processed} LIMIT @n"
-            : $"DELETE FROM {table} WHERE {id} IN (SELECT {id} FROM {table} WHERE {status} = 2 AND {processed} IS NOT NULL AND {processed} < @cutoff ORDER BY {processed} LIMIT @n)";
+            ? $"DELETE FROM {table} WHERE {statusPredicate} AND {processed} IS NOT NULL AND {processed} < @cutoff ORDER BY {processed} LIMIT @n"
+            : $"DELETE FROM {table} WHERE {id} IN (SELECT {id} FROM {table} WHERE {statusPredicate} AND {processed} IS NOT NULL AND {processed} < @cutoff ORDER BY {processed} LIMIT @n)";
     }
 
     private string BuildIdempotencyDelete()

@@ -34,6 +34,18 @@ public sealed class RetentionOptions
     /// <summary>是否同时删除 Dead 状态的 Outbox 行。默认 false：死信保留给运维处置。</summary>
     public bool DeleteDeadOutboxMessages { get; set; }
 
+    /// <summary>
+    /// 是否同时删除 Failed 状态的 Inbox 行。默认 false：失败行保留给运维处置
+    /// （ADR-039 / 审计 A2/G4——此前 Failed 行永不清理且无 reset/requeue 入口，
+    /// 只能连库裸 SQL；开启本项后按 InboxRetention 窗口清理）。
+    /// <para>
+    /// 2026-11-07 审计 P1-B：清理依赖 <c>processed_at IS NOT NULL</c>，故四栈
+    /// <c>MarkFailedAsync</c> 已统一写入 <c>InboxMessage.ProcessedAt</c>（取处理开始时间），
+    /// 否则本项开启后 Failed 行仍永不被清理。
+    /// </para>
+    /// </summary>
+    public bool DeleteFailedInboxMessages { get; set; }
+
     internal void Validate()
     {
         // MA0015：校验对象是属性而非方法参数；异常 paramName 由 CallerArgumentExpression 取到

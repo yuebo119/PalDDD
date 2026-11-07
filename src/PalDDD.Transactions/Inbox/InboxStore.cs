@@ -31,6 +31,31 @@ public interface IInboxStore
 
     /// <summary>标记消息处理失败。</summary>
     ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct);
+
+    /// <summary>
+    /// 按状态列举收件箱消息（批次 C，2026-11-04）——读侧补齐，供运维查询（失败列表、
+    /// 滞留处理中）与诊断。此前 IInboxStore 只有三个写方法，无任何读侧入口，
+    /// Dapper/PalORM 栈只能连库写裸 SQL（三栈语义对齐承诺在此处断裂）。
+    /// </summary>
+    /// <param name="status">目标状态（<see cref="InboxStatus.Pending"/> /
+    /// <see cref="InboxStatus.Processing"/> / <see cref="InboxStatus.Processed"/> /
+    /// <see cref="InboxStatus.Failed"/>）。
+    /// 必须是已定义值——传未定义值抛 <see cref="ArgumentOutOfRangeException"/>。</param>
+    /// <param name="maxCount">最多返回条数（正数）。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <remarks>
+    /// <para>
+    /// 四栈语义统一为 <c>WHERE status = @status ORDER BY id LIMIT @maxCount</c>，
+    /// 返回该状态下 id 最小的前 <paramref name="maxCount"/> 条（自增主键 = 插入序）。
+    /// 走既有 <c>(status)</c> 索引。
+    /// </para>
+    /// <para><b>为什么不给默认实现</b>：DIM 返回空列表会让未更新的自定义存储静默给出
+    /// 「查无此状态」，与本轮要消灭的假 API 形态相同。自定义实现必须显式提供。</para>
+    /// </remarks>
+    ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+        InboxStatus status,
+        int maxCount,
+        CancellationToken ct = default);
 }
 
 /// <summary>

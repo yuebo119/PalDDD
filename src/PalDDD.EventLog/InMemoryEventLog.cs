@@ -11,7 +11,7 @@ namespace PalDDD.EventLog;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>内存事件日志 — 用于测试和单进程原型。</summary>
-public sealed class InMemoryEventLog : IEventLog
+public sealed class InMemoryEventLog : IEventLog, IEventLogVersionReader
 {
     private readonly Lock _lock = new();
     private readonly Dictionary<string, List<RecordedEvent>> _streams = new(StringComparer.Ordinal);
@@ -198,6 +198,27 @@ public sealed class InMemoryEventLog : IEventLog
         {
             // v25 P3 指标族（D5）：pal.eventlog.read_count SetTag 移除——同 ReadStreamAsync
             PalMetrics.EventLogRead.Add(read);
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// ADR-039 / 审计 A1：内存栈直接取流列表末位版本（append-only 保证单调），零物化。
+    /// 与其余三栈同语义：流不存在或为空返回 -1。
+    /// </remarks>
+    public ValueTask<long> GetStreamVersionAsync(
+        string streamName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_lock)
+        {
+            return ValueTask.FromResult(
+                _streams.TryGetValue(streamName, out var stream) && stream.Count > 0
+                    ? stream[^1].StreamVersion
+                    : -1L);
         }
     }
 

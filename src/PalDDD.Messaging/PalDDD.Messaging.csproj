@@ -14,6 +14,8 @@
   <ItemGroup>
     </ItemGroup>
 
-  <ItemGroup><InternalsVisibleTo Include="PalDDD.DependencyInjection"/><InternalsVisibleTo Include="PalDDD.Messaging.Tests"/><InternalsVisibleTo Include="PalDDD.Messaging.Kafka"/></ItemGroup>
+  <!-- v4 批 A：RabbitMQ 需读取 internal DeferredAckRegistry 判定「结算已移交批次」，
+       仅程序集内部标记，不进公共 API 快照（零强命名，简单程序集名即可）。 -->
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.DependencyInjection"/><InternalsVisibleTo Include="PalDDD.Messaging.Tests"/><InternalsVisibleTo Include="PalDDD.Messaging.Kafka"/><InternalsVisibleTo Include="PalDDD.Messaging.RabbitMQ"/></ItemGroup>
   <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/></ItemGroup>
 </Project>

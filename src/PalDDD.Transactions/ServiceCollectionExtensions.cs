@@ -140,7 +140,17 @@ public static class ServiceCollectionExtensions
             .Validate(static options => !string.IsNullOrWhiteSpace(options.LeaseOwner), "Saga lease owner is required.")
             .ValidateOnStart();
         services.TryAddSingleton<TOrchestrator>();
-        services.TryAddSingleton<Saga<TState>>(sp => sp.GetRequiredService<TOrchestrator>());
+        // G1（2026-11-06）：SagaManager 是普通读写属性，DI 不会自动注入——只注册单例
+        // 不赋值时 ExecuteInterruptStep 的 `is DefaultSagaManager` 判定整体跳过，AWD 滞留
+        // 零改善。工厂 lambda 用 ??= 装配：保留用户派生构造函数里已有的显式赋值，
+        // 不覆盖自定义 manager。
+        services.TryAddSingleton<ISagaManager, DefaultSagaManager>();
+        services.TryAddSingleton<Saga<TState>>(sp =>
+        {
+            var saga = sp.GetRequiredService<TOrchestrator>();
+            saga.SagaManager ??= sp.GetRequiredService<ISagaManager>();
+            return saga;
+        });
         services.TryAddScoped<SagaTimeoutProcessor<TState>>();
         services.AddHostedService<SagaProcessor<TState>>();
         return services;

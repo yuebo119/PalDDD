@@ -142,8 +142,53 @@ public static class PalActivitySource
             ("pal.stream.query", queryType),
             ("pal.stream.item", itemType));
 
+    /// <summary>
+    /// broker 发布跳（ADR-039 / 审计 A5）：覆盖「消息发出」这一段——traceparent 头虽已传播，
+    /// 但发布跳本身此前无 span，跨进程链在 broker 边界断开。
+    /// </summary>
+    /// <param name="topicOrExchange">Kafka topic 或 RabbitMQ exchange 名（按消息类型名路由，低基数）。</param>
+    /// <param name="eventName">消息类型名（低基数；实例级 ID 按 ITM-229 纪律不入 tag）。</param>
+    /// <remarks>
+    /// <b>不走通用 <c>Start</c> 辅助</b>：通用版形参是 <c>ReadOnlySpan&lt;(string, object?)&gt;</c>，
+    /// 调用点会把 string 装箱为 object（v8 已记 int/long 同族问题）。Kafka 发布路径有
+    /// 1500B/条 的分配预算（`PublishAsync_SinglePayloadCopy_NoRedundantToArray`），
+    /// 装箱会直接推红。本方法用 <c>SetTag(string, string?)</c> 重载 + 无 listener 快速返回，
+    /// 无 listener 时零分配。
+    /// </remarks>
+    public static Activity? StartBrokerPublish(string topicOrExchange, string eventName)
+        => StartBrokerHop("Broker Publish", topicOrExchange, eventName);
+
+    /// <summary>
+    /// broker 消费跳（ADR-039 / 审计 A5）：覆盖「消息交付到 handler」这一段，
+    /// 与 <see cref="StartBrokerPublish"/> 配对，使跨进程链在 broker 两侧连续。
+    /// </summary>
+    /// <param name="topicOrExchange">Kafka topic 或 RabbitMQ exchange/队列名（低基数）。</param>
+    /// <param name="eventName">消息类型名（低基数）。</param>
+    public static Activity? StartBrokerConsume(string topicOrExchange, string eventName)
+        => StartBrokerHop("Broker Consume", topicOrExchange, eventName);
+
+    /// <summary>broker 两跳共用实现——无 listener 快速返回（零分配），有 listener 也不装箱。</summary>
+    private static Activity? StartBrokerHop(string name, string topicOrExchange, string eventName)
+    {
+        // 无 listener 时直接返回：避免 SetTag 与任何分配（发布路径有分配预算门禁）
+        if (!Source.HasListeners())
+            return null;
+
+        var activity = Source.StartActivity(name);
+        if (activity is null)
+            return null;
+
+        activity.SetTag("pal.broker.target", topicOrExchange);
+        activity.SetTag("pal.broker.event", eventName);
+        return activity;
+    }
+
     // ── 内部辅助 ──
-    // 12 个公共 Start* 方法遵循完全相同的模式：Source.StartActivity → SetTag → return。
+    // 12 个公共 Start* 方法走本辅助（Source.StartActivity → SetTag → return）；
+    // 另外 2 个 broker 跳工厂（StartBrokerPublish/Consume）刻意不走本辅助——它们的调用点在
+    // Kafka 发布热路径，而本辅助的 `(string, object?)` 元组会把 string 装箱（v8 勘正已记
+    // int/long 同族），撞 1500B/条的分配预算；broker 两跳用 `SetTag(string,string?)` 重载 +
+    // HasListeners 快速返回实现零装箱（见 StartBrokerHop）。
     // 使用 params ReadOnlySpan<(string,object?)>（C# 13+ / .NET 11）压缩重复代码，
     // 编译器对少量参数生成栈分配 span，消除原 params 数组的堆分配。注（v8 勘正）：int/long
     // tag 经元组构造仍存在装箱（listener 关闭也发生）——本优化消除的是数组分配而非全部 GC。
@@ -167,12 +212,14 @@ public static class PalActivitySource
 /// EventsConsumed/OutboxPending/SagaActive/BehaviorDuration）——声明但框架零调用，
 /// 误导用户认为会产出数据。需要这些指标时在调用方自行 Meter.CreateCounter 并 Add。
 /// <para>
-/// 📐 <b>零 tag 设计声明（v25 P3 勘正族 C11 · ITM-229 精神显式化）</b>：全部 30 个活 Counter
+/// 📐 <b>零 tag 设计声明（v25 P3 勘正族 C11 · ITM-229 精神显式化）</b>：全部 32 个活 Counter
 /// （计数沿革：v71 增 SagaScanFailed；v72 勘正同步为当时计数；v3.0.0 增
 /// <c>paldd.outbox.dead</c> 与 <c>paldd.outbox.persist_failed</c> 后此处计数再次未同步，
 /// 2026-09-23 复查修正为 23；2026-10-18 ADR-030 遥测接入增五个 <c>paldd.stream.*</c> 计数器
 /// 后为 28；2026-10-21 评审补计 ADR-031 的 <c>paldd.stream.attached</c> /
-/// <c>paldd.stream.gap</c> 后为 30）有意零 tag——框架层零分配纪律（无 tag 的 <c>Add(T)</c> 是零额外分配路径，带 tag 调用引入
+/// <c>paldd.stream.gap</c> 后为 30；2026-11-07 审计 S3 补计
+/// <c>paldd.broker.consume_failed</c> / <c>paldd.broker.publish_failed</c> 后为 32）
+/// 有意零 tag——框架层零分配纪律（无 tag 的 <c>Add(T)</c> 是零额外分配路径，带 tag 调用引入
 /// 键值对构造开销）+ 指标基数安全（事件类型/投影名/流名等维度随业务无界增长，tag 化会造成
 /// 时序库基数爆炸）。调用方需要维度时用自身 <c>Meter.CreateCounter</c> 自建带 tag Counter；
 /// Activity 侧 <c>pal.event</c> / <c>pal.projection.name</c> 等 tag 已提供 trace 维度。
@@ -321,4 +368,22 @@ public static class PalMetrics
     /// </remarks>
     public static readonly Counter<long> StreamGap = Meter.CreateCounter<long>(
         "paldd.stream.gap", description: "流式查询缓冲缺口总数（断线续跑：gap 帧写出次数）");
+
+    // ── 跨进程 broker（v4 批 D，2026-11-07）──
+    // 审计 S3：进程内派发有计数器、跨进程没有——broker 消费/发布失败此前只能靠日志抓取。
+    // 两个计数器覆盖两栈的共同故障面（Kafka 消费线程终止与 Rabbit channel 关闭都已由
+    // IMessageBrokerHealth 自述，本组补的是「失败发生的量」而非「链路状态」）。
+
+    /// <summary>broker 消费失败总数（handler 抛异常 / 反序列化失败 / 毒消息弃置）</summary>
+    /// <remarks>
+    /// 两栈共同语义：记录一次「已交付但处理失败」的消息。at-most-once 弃置路径也计入
+    /// （弃置是失败的结果，不是成功）；Kafka 手动存储模式下该计数与 offset 前缀推进
+    /// 解冻是同一时刻的两面。
+    /// </remarks>
+    public static readonly Counter<long> BrokerConsumeFailed = Meter.CreateCounter<long>(
+        "paldd.broker.consume_failed", description: "broker 消费失败总数（handler 异常/反序列化失败/毒消息弃置）");
+
+    /// <summary>broker 发布失败总数（路由失败 / 连接断 / 确认失败）</summary>
+    public static readonly Counter<long> BrokerPublishFailed = Meter.CreateCounter<long>(
+        "paldd.broker.publish_failed", description: "broker 发布失败总数（路由失败/连接断/确认失败）");
 }

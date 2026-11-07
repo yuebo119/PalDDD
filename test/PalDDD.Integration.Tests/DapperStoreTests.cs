@@ -225,6 +225,75 @@ public sealed class DapperStoreTests
         await Assert.That(pending[0].NextAttemptAt).IsEqualTo(msg.NextAttemptAt);
     }
 
+    /// <summary>
+    /// 批次 C（2026-11-04）读侧补齐：按状态列举——状态隔离、maxCount 生效、id 排序。
+    /// </summary>
+    [Test]
+    public async Task Outbox_GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndOrdersById(CancellationToken cancellationToken)
+    {
+        var store = new DapperOutboxStore(_conn, _dbType);
+        for (var i = 0; i < 3; i++)
+            await store.AddMessageAsync(CreateOutboxMessage($"pending.{i}"));
+        var dead = CreateOutboxMessage("dead");
+        await store.AddMessageAsync(dead);
+        await store.MarkDeadAsync(dead, "seeded dead", TimeProvider.System.GetUtcNow());
+        var processed = CreateOutboxMessage("processed");
+        await store.AddMessageAsync(processed);
+        await store.MarkProcessedAsync(processed, TimeProvider.System.GetUtcNow());
+
+        var deadRows = await store.GetByStatusAsync(OutboxStatus.Dead, 10, cancellationToken);
+        await Assert.That(deadRows).Count().IsEqualTo(1);
+        await Assert.That(deadRows[0].Type).IsEqualTo("dead");
+
+        await Assert.That((await store.GetByStatusAsync(OutboxStatus.Processed, 10, cancellationToken)).Count).IsEqualTo(1);
+
+        var all = await store.GetByStatusAsync(OutboxStatus.Pending, 100, cancellationToken);
+        await Assert.That(all).Count().IsEqualTo(3);
+        var ids = all.Select(static m => m.Id).ToList();
+        await Assert.That(ids.SequenceEqual(ids.OrderBy(static id => id))).IsTrue();
+
+        var capped = await store.GetByStatusAsync(OutboxStatus.Pending, 2, cancellationToken);
+        await Assert.That(capped).Count().IsEqualTo(2);
+        await Assert.That(capped[0].Id).IsEqualTo(ids[0]);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => store.GetByStatusAsync((OutboxStatus)99, 10, cancellationToken).AsTask());
+    }
+
+    /// <summary>
+    /// 批次 C（2026-11-04）读侧补齐：Inbox 按状态列举——状态隔离、maxCount、自增 id 排序。
+    /// </summary>
+    [Test]
+    public async Task Inbox_GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndOrdersById(CancellationToken cancellationToken)
+    {
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = TimeProvider.System.GetUtcNow();
+
+        var first = await store.TryStartProcessingAsync("orders", "message-1", now, TimeSpan.FromMinutes(5), cancellationToken);
+        var second = await store.TryStartProcessingAsync("orders", "message-2", now, TimeSpan.FromMinutes(5), cancellationToken);
+        var failed = await store.TryStartProcessingAsync("orders", "message-3", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await store.MarkProcessedAsync(first!, now.AddSeconds(1), cancellationToken);
+        await store.MarkFailedAsync(failed!, "seeded failure", cancellationToken);
+
+        var failedRows = await store.GetByStatusAsync(InboxStatus.Failed, 10, cancellationToken);
+        await Assert.That(failedRows).Count().IsEqualTo(1);
+        await Assert.That(failedRows[0].MessageId).IsEqualTo("message-3");
+
+        var processedRows = await store.GetByStatusAsync(InboxStatus.Processed, 10, cancellationToken);
+        await Assert.That(processedRows).Count().IsEqualTo(1);
+        await Assert.That(processedRows[0].MessageId).IsEqualTo("message-1");
+
+        var processingRows = await store.GetByStatusAsync(InboxStatus.Processing, 10, cancellationToken);
+        await Assert.That(processingRows).Count().IsEqualTo(1);
+        await Assert.That(processingRows[0].MessageId).IsEqualTo("message-2");
+
+        var capped = await store.GetByStatusAsync(InboxStatus.Processing, 1, cancellationToken);
+        await Assert.That(capped).Count().IsEqualTo(1);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => store.GetByStatusAsync((InboxStatus)99, 10, cancellationToken).AsTask());
+    }
+
     [Test]
     public async Task Outbox_NonPositiveMaxRetryCount_ThrowsArgumentOutOfRange()
     {
@@ -1134,6 +1203,62 @@ public sealed class DapperStoreTests
         await Assert.That(loaded.Status).IsEqualTo(SagaStatus.Completed);
     }
 
+    /// <summary>
+    /// 批次 B（2026-11-04）读侧补齐：按状态列举——状态隔离、maxCount 生效、saga_id 排序，
+    /// 以及未定义状态值的水合 fail-fast（存量 DeadLettered 行只能经裸 SQL 构造）。
+    /// </summary>
+    [Test]
+    public async Task Saga_GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndRejectsUnknownPersistedStatus(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var now = TimeProvider.System.GetUtcNow();
+
+        var active = new List<PalUlid>();
+        for (var i = 0; i < 3; i++)
+        {
+            var id = PalUlid.New();
+            active.Add(id);
+            await store.SaveChangesAsync(new TestSagaState
+            {
+                SagaId = id,
+                CurrentState = "Active",
+                Status = SagaStatus.Active,
+                CreatedAt = now.AddMinutes(i)
+            }, cancellationToken);
+        }
+
+        var failedId = PalUlid.New();
+        await store.SaveChangesAsync(new TestSagaState
+        {
+            SagaId = failedId,
+            CurrentState = "CompensationFailed",
+            Status = SagaStatus.CompensationFailed,
+            CreatedAt = now.AddMinutes(10)
+        }, cancellationToken);
+
+        // 状态隔离 + 未命中返回空
+        var failed = await store.GetByStatusAsync(SagaStatus.CompensationFailed, 10, cancellationToken);
+        await Assert.That(failed.Count).IsEqualTo(1);
+        await Assert.That(failed[0].SagaId).IsEqualTo(failedId);
+        await Assert.That((await store.GetByStatusAsync(SagaStatus.Compensated, 10, cancellationToken)).Count).IsEqualTo(0);
+
+        // maxCount 生效
+        await Assert.That((await store.GetByStatusAsync(SagaStatus.Active, 2, cancellationToken)).Count).IsEqualTo(2);
+
+        // 排序键 = saga_id
+        var all = await store.GetByStatusAsync(SagaStatus.Active, 100, cancellationToken);
+        await Assert.That(all.Count).IsEqualTo(3);
+        var ids = all.Select(static s => s.SagaId).ToList();
+        await Assert.That(ids.SequenceEqual(ids.OrderBy(static id => id))).IsTrue();
+
+        // 存量 DeadLettered 行（status=4）水合必须可见失败，不得静默读成非法枚举实例
+        await _conn.ExecuteAsync("UPDATE saga_states SET status = 4 WHERE saga_id = @id", new { id = failedId });
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.GetByIdAsync(failedId, cancellationToken).AsTask());
+        await Assert.That(ex!.Message.Contains('4')).IsTrue();
+        await Assert.That(ex.Message.Contains(failedId.ToString(), StringComparison.Ordinal)).IsTrue();
+    }
+
     [Test]
     public async Task Saga_GetActiveSagas_ReturnsOnlyActiveStates(CancellationToken cancellationToken)
     {
@@ -1166,13 +1291,6 @@ public sealed class DapperStoreTests
             CurrentState = "CompensationFailed",
             Status = SagaStatus.CompensationFailed,
             CreatedAt = now.AddMinutes(3)
-        }, cancellationToken);
-        await store.SaveChangesAsync(new TestSagaState
-        {
-            SagaId = PalUlid.New(),
-            CurrentState = "DeadLettered",
-            Status = SagaStatus.DeadLettered,
-            CreatedAt = now.AddMinutes(4)
         }, cancellationToken);
 
         var active = await store.GetActiveSagasAsync(10, cancellationToken);
@@ -1474,6 +1592,32 @@ public sealed class DapperStoreTests
             "SELECT recorded_at FROM events WHERE stream_name=$stream",
             ("$stream", "test-stream"));
         await Assert.That(recordedAt).IsEqualTo(now);
+    }
+
+    /// <summary>
+    /// ADR-039 / 审计 A1：Dapper 栈只读流版本——空流 -1，追加后末位版本（四栈矩阵的
+    /// Dapper 格；走与 AppendAsync 并发检查同一条 MAX 聚合 SQL）。
+    /// </summary>
+    [Test]
+    public async Task EventLog_GetStreamVersionAsync_UnknownStreamMinusOne_ThenLastVersion(
+        CancellationToken cancellationToken)
+    {
+        var log = new DapperEventLog(_conn, null, _dbType);
+
+        await Assert.That(await log.GetStreamVersionAsync("missing-stream", cancellationToken)).IsEqualTo(-1L);
+
+        await log.AppendAsync(
+            "version-stream",
+            ExpectedStreamVersion.NoStream,
+            [
+                new(PalUlid.New(), "test.event.v1", 1, "application/json",
+                    "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty),
+                new(PalUlid.New(), "test.event.v1", 1, "application/json",
+                    "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)
+            ],
+            cancellationToken);
+
+        await Assert.That(await log.GetStreamVersionAsync("version-stream", cancellationToken)).IsEqualTo(1L);
     }
 
     [Test]

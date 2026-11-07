@@ -251,10 +251,38 @@ public abstract class InboxDbContext(
         if (message.Status != InboxStatus.Processing)
             return;
         AttachIfDetached(message);
+        // v4 批 C（S6）：持久化前保存三字段快照——DB 拒绝（affected==0 / 并发冲突）时回退，
+        // 避免调用方持「假终态」而 DB 仍是 Processing（Dapper/PalORM 栈有 affected>0 门控，
+        // EF 此前只告警不回退，是唯一分叉）。
+        var snapshot = (message.Status, message.ProcessedAt, message.LastError);
         message.Status = InboxStatus.Processed;
         message.ProcessedAt = processedAt;
         message.LastError = null;
-        await SaveTerminalStateAsync(message, ct).ConfigureAwait(false);
+        if (!await SaveTerminalStateAsync(message, ct).ConfigureAwait(false))
+            (message.Status, message.ProcessedAt, message.LastError) = snapshot;
+    }
+
+    /// <summary>
+    /// 按状态列举（批次 C，2026-11-04）——读侧补齐，供运维查询失败/滞留列表。
+    /// </summary>
+    /// <remarks>
+    /// 与 Outbox 同口径：AsNoTracking 纯观测（突变不进 ChangeTracker），
+    /// 按自增主键 id 排序 = 插入序，走既有 (status) 索引。
+    /// </remarks>
+    public virtual async ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+        InboxStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        StatusFilterGuard.EnsureDefined(status, nameof(InboxStatus));
+
+        return await InboxMessages
+            .AsNoTracking()
+            .Where(m => m.Status == status)
+            .OrderBy(m => m.Id)
+            .Take(maxCount)
+            .ToListAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -274,9 +302,17 @@ public abstract class InboxDbContext(
         failureReason = Core.FailureReason.Truncate(failureReason, MaxFailureReasonLength);
 
         AttachIfDetached(message);
+        // v4 批 C（S6）：同 MarkProcessedAsync——失败时回退三字段快照
+        var snapshot = (message.Status, message.ProcessedAt, message.LastError);
         message.Status = InboxStatus.Failed;
         message.LastError = failureReason;
-        await SaveTerminalStateAsync(message, ct).ConfigureAwait(false);
+        // 2026-11-07 审计 P1-B：Failed 行写 ProcessedAt，否则 Retention 的 includeFailed
+        // （status IN (2,3) AND processed_at IS NOT NULL AND processed_at < @cutoff）
+        // 永远清不掉 Failed 行（processed_at = NULL）。时间取处理开始时间（store 无独立
+        // 时间源、接口签名不变；处理耗时远小于保留窗口，语义可接受），回退接收时间。
+        message.ProcessedAt = message.ProcessingStartedAt ?? message.ReceivedAt;
+        if (!await SaveTerminalStateAsync(message, ct).ConfigureAwait(false))
+            (message.Status, message.ProcessedAt, message.LastError) = snapshot;
     }
 
     /// <summary>配置收件箱实体 — MessageId 唯一约束是幂等的核心</summary>
@@ -311,7 +347,16 @@ public abstract class InboxDbContext(
             InboxMessages.Attach(message);
     }
 
-    private async ValueTask SaveTerminalStateAsync(InboxMessage message, CancellationToken ct)
+    /// <summary>
+    /// 终态标记持久化（MarkProcessedAsync / MarkFailedAsync 共享）。
+    /// </summary>
+    /// <returns>
+    /// 本地终态是否真正落库。<c>false</c> 表示行已被并发处理器推进（非关系型的
+    /// <see cref="DbUpdateConcurrencyException"/> 或关系型的 <c>affected == 0</c>），
+    /// 调用方须把入参回退到调用前快照——v4 批 C（S6）：此前 EF 只告警不回退，
+    /// 调用方会持「假终态」而 DB 仍是 Processing（Dapper/PalORM 栈有 affected&gt;0 门控）。
+    /// </returns>
+    private async ValueTask<bool> SaveTerminalStateAsync(InboxMessage message, CancellationToken ct)
     {
         // R12 H2：InMemory 不支持 ExecuteUpdate——跟踪实体 SaveChanges；ProcessingStartedAt
         // 并发令牌拒绝被抢占后的旧持有者。调用方（MarkProcessed/MarkFailed）已在
@@ -327,6 +372,8 @@ public abstract class InboxDbContext(
             catch (DbUpdateConcurrencyException)
             {
                 _logger?.Warning($"Inbox: terminal state for message {message.MessageId} (consumer {message.ConsumerName}) was overwritten by a concurrent processor; the record is detached without persisting the local terminal state.");
+                Entry(message).State = EntityState.Detached;
+                return false;
             }
             catch (Exception)
             {
@@ -334,7 +381,7 @@ public abstract class InboxDbContext(
                 throw;
             }
             Entry(message).State = EntityState.Detached;
-            return;
+            return true;
         }
 
         // F1b 修复（第五十四轮片4，2026-09-19）：终态写从 SaveChanges（仅并发令牌）改
@@ -344,7 +391,9 @@ public abstract class InboxDbContext(
         // SqlTemplates :226/:235 与 PalOrmInboxStore :190/:224 的 WHERE 形态。
         // 令牌等值可翻译（ITM-261）；affected=0 = 行已被并发推进，Detach 让位（与原
         // DbUpdateConcurrencyException 分支同语义，Warning 保留）。
-        int affected;
+        // v4 批 C（S6）：affected 提升到 try/finally 之外并显式初始化——finally 之后读取，
+        // 需满足 C# 明确赋值（ExecuteUpdate 抛出时不会走到下方 return）。
+        int affected = 0;
         try
         {
             affected = await InboxMessages
@@ -372,7 +421,10 @@ public abstract class InboxDbContext(
             // 记录被另一个消费者修改（例如被僵尸回收路径抢占）——分离实体并将此
             // 作为警告上报，以便运维人员关联同一 MessageId 上的并发处理。
             _logger?.Warning($"Inbox: terminal state for message {message.MessageId} (consumer {message.ConsumerName}) was overwritten by a concurrent processor; the record is detached without persisting the local terminal state.");
+            return false;
         }
+
+        return true;
     }
 
     /// <summary>

@@ -117,15 +117,17 @@ public sealed class DefaultSagaManager : ISagaManager
         // P2 修复（八轮）：重新派发——把中断恢复接回执行管线
         var resumedState = await entry.ResumeDispatch(decision, ct).ConfigureAwait(false);
 
-        // P2 修复（二十五轮）：补偿/死信终态的决策必然未被消费——超时兜底补偿
+        // P2 修复（二十五轮）：补偿终态的决策必然未被消费——超时兜底补偿
         // （SagaTimeoutProcessor）把中断 Saga 置 Compensated 后全程不触碰本 Manager
         // （条目滞留），迟到决策对终态状态无路由命中而宽容返回；若走 TryRemove+正常
-        // 返回即"静默吞弃+假报成功"，违反本方法"要么投递、要么可见失败"契约。三类
-        // 补偿/死信终态时先清理条目（终态不可恢复）再可见失败。
+        // 返回即"静默吞弃+假报成功"，违反本方法"要么投递、要么可见失败"契约。两补偿
+        // 终态时先清理条目（终态不可恢复）再可见失败。
         // Completed 不在此列：那是决策被消费后的正常完成路径（保持成功返回）；
         // 已完成 Saga 的重复决策宽容处理（幂等语义）。
-        if (resumedState.Status is SagaStatus.Compensated or SagaStatus.CompensationFailed
-            or SagaStatus.DeadLettered)
+        // v5.0.0 批次 B：原第三项 SagaStatus.DeadLettered 随该枚举值一并移除——它没有
+        // 任何赋值路径，是永不进入的分支（留着只让每个使用者的 switch 多一个必须处理
+        // 但永不命中的分支）。
+        if (resumedState.Status is SagaStatus.Compensated or SagaStatus.CompensationFailed)
         {
             _interrupted.TryRemove(new KeyValuePair<PalUlid, InterruptedSagaEntry>(sagaId, entry));
             throw new InvalidOperationException(
@@ -165,8 +167,8 @@ public sealed class DefaultSagaManager : ISagaManager
     /// Compensated/CompensationFailed 后调用，使迟到的决策走"无已注册的中断条目"
     /// 可见失败而非静默处理。
     /// <para>
-    /// v26 P1 修复背景：ResumeAsync 内的终态分支（Compensated/CompensationFailed/
-    /// DeadLettered 检查）依赖 resumedState 终态，但条目闭包捕获的是<b>中断时实例</b>，
+    /// v26 P1 修复背景：ResumeAsync 内的终态分支（Compensated/CompensationFailed 检查）
+    /// 依赖 resumedState 终态，但条目闭包捕获的是<b>中断时实例</b>，
     /// 补偿写的是 store 租约 successor（CloneForLease 后继实例）——旧实例永远停留在
     /// AwaitingHumanDecision，终态分支不可达，迟到决策会在已回滚 Saga 上执行副作用
     /// 并假成功。本方法把失效责任移到补偿侧（补偿持有 successor 真实状态），
@@ -215,16 +217,6 @@ public sealed class DefaultSagaManager : ISagaManager
             gate.Release();
             return ValueTask.CompletedTask;
         }
-    }
-
-    /// <inheritdoc/>
-    /// <remarks>M1-5（v2 审计 A-5，2026-09-19）：本实现**恒返回空列表**且接口含
-    /// internal 成员无法被外部替换——运营待办查询须经 ISagaStateStore 按状态过滤，
-    /// 详见接口 remarks 的完整表态。此处不抛 NotSupportedException：空返回的调用方
-    ///（如健康探测）不应崩，误用面由接口层 ⚠️ 声明拦截。</remarks>
-    public ValueTask<IReadOnlyList<SagaState>> GetInterruptedSagasAsync(CancellationToken ct)
-    {
-        return new([]);
     }
 
     /// <inheritdoc/>

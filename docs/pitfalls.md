@@ -4,7 +4,7 @@
 >
 > **本文件不是 ORM 302 项陷阱的复制**——ORM 项目（QueryBuilder/ChangeTracker/Schema 迁移/Provider 方言）的踩坑与 DDD 无关。本文件聚焦 DDD 项目实际涉及的领域：事件驱动、最终一致性、分布式事务、Async 异步、AOT 分层、消息序列化、Saga 补偿链。
 >
-> **真源**：`docs/architecture.md`（架构总览 + 稳定性约束）+ `docs/decisions/001-036`（36 ADR）+ `docs/review/action-items-*.md`（ITM 历史缺陷）+ `conventions.md` §10/§12/§14
+> **真源**：`docs/architecture.md`（架构总览 + 稳定性约束）+ `docs/decisions/`（40 ADR）+ `docs/review/action-items-*.md`（ITM 历史缺陷）+ `conventions.md` §10/§12/§14
 >
 > **状态标记**: ✅ 已修复/已实现 · ⚠️ 部分实现 · 🚫 架构层面避开
 
@@ -193,7 +193,7 @@
 
 ## 统计
 
-> 第一至九章共 71 条；第十章 PalORM 适配层另有 16 条（PALORM-SG1-5/RT1-5/MYSQL1-3/CSHARP1-2/SEC1），全文共 87 条（2026-09-04 勘正统计口径，2026-09-25 增补 PD9，2026-10-18 增补 A9/PD10/PD11，2026-11-04 增补 D8）。
+> 第一至九章共 71 条；第十章 PalORM 适配层另有 17 条（PALORM-SG1-5/RT1-6/MYSQL1-3/CSHARP1-2/SEC1），全文共 88 条（2026-09-04 勘正统计口径，2026-09-25 增补 PD9，2026-10-18 增补 A9/PD10/PD11，2026-11-04 增补 D8，2026-11-05 增补 PALORM-RT6）。
 
 | 章节 | 条数 | 来源 |
 |------|:----:|------|
@@ -243,6 +243,7 @@
 | PALORM-RT3 | Commit/Rollback 后 `ObjectDisposedException` | DataSession 内部 OperationState 仍持有已释放事务引用 | `CommitAsync`/`RollbackAsync` 后显式 `session.UseTransaction(null)` | ✅ |
 | PALORM-RT4 | 同一 DataSession 多 worker 并发抛"already has active operation" | AsyncLocal 门禁禁止重叠 await | 并发测试每 worker 创建独立 DataSession（共享文件型 SQLite） | ✅ |
 | PALORM-RT5 | `QueryFirstAsync<long?>` 编译失败 | 泛型约束 `T : class`，不接受值类型 | 标量查询用 `ScalarAsync<T>` 替代 | ✅ |
+| PALORM-RT6 | `ExecuteAsync($"... WHERE id = '{value}'")` 无报错但 0 行生效 | `FormattableSqlFormatter.Format` 只参数化**引号字面量之外**的格式项——进入引号态后 `{0}` 逐字保留，SQL 实际是 `WHERE id = '{0}'`，匹配不到任何行且无任何诊断（批次 C saga 水合测试实测：UPDATE 静默 0 行，反编译 PalORM.Core 6.8.0 实证） | 值洞**不包引号**（`WHERE id = {value}` 即正常参数化为 `@pN`）；或走 `GetRawConnection()` + 手动 `DbCommand`（`MultiDialectFixture.ApplySchemaAsync` 先例）。同族陷阱：整句 SQL 写进单个洞（`ExecuteAsync($"{ddl}")`）会整句退化为参数值，DDL 同样静默不执行 | ✅ |
 
 ### MySQL 方言特有约束
 

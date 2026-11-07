@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using PalDDD.Core.Diagnostics;
 using PalDDD.Core.Logging;
 using System.Diagnostics.CodeAnalysis;
+using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions;
 
@@ -165,7 +166,7 @@ TState>
         // SaveChangesAsync（EF 栈逐行保存还会重复扫描整个 ChangeTracker）。
         List<TState>? pendingBackfill = null;
         List<TState>? pendingNextCheck = null;
-        List<(TState State, bool CompensationSucceeded)>? pendingTerminal = null;
+        List<TState>? pendingTerminal = null;
 
         foreach (var sagaState in activeSagas)
         {
@@ -201,8 +202,8 @@ TState>
 
                     // ITM-709（2026-10-27 清零轮）：补偿段抽私有方法——CheckTimeoutsAsync 主体嵌套 7→3，
                     // 语句序与语义逐行保持（fence 获取/OCE 租约释放/终态失效化全部原样迁移）
-                    var compensationSucceeded = await CompensateTimedOutSagaAsync(sagaState, timedOutSteps, now, ct).ConfigureAwait(false);
-                    (pendingTerminal ??= []).Add((sagaState, compensationSucceeded));
+                    await CompensateTimedOutSagaAsync(sagaState, timedOutSteps, now, ct).ConfigureAwait(false);
+                    (pendingTerminal ??= []).Add(sagaState);
                 }
                 else
                 {
@@ -260,7 +261,7 @@ TState>
     /// fence 获取（拒新决策 + per-saga 互斥）、补偿 try/catch（OCE 租约释放/一般失败终态化）、
     /// 租约清理与中断条目失效化。返回是否补偿成功（供终态批量冲刷的指标口径使用）。
     /// </summary>
-    private async ValueTask<bool> CompensateTimedOutSagaAsync(
+    private async ValueTask CompensateTimedOutSagaAsync(
         TState sagaState,
         System.Collections.Generic.IReadOnlyList<SagaStep> timedOutSteps,
         DateTimeOffset now,
@@ -273,7 +274,6 @@ TState>
                 sagaState.SagaId, sagaState.CurrentState, step.Name);
         }
 
-        var compensationSucceeded = false;
         // v5.0 manager 侧 fencing（2026-10-27）：补偿开始前先取失效栅栏——写失效集拒新决策
         // + per-saga 互斥，与 ResumeAsync 决策派发全程互斥，根治「补偿进行中决策在
         // 正被回滚的 Saga 上产生副作用且假成功」窗口（v37 P2 声明的根治兑现）。
@@ -283,12 +283,22 @@ TState>
         {
             try
             {
+                // v4 批 D（G2）：超时兜底补偿车道此前零观察者事件——features.md 宣称
+                // 「五观察点贯穿全生命周期」，但补偿前无 OnCompensationStarted、终态迁移
+                // 无 OnStatusChanged（全仓唯一生产发射点曾是 InterruptStep 挂起）。
+                // 此处补两个观察点，隔离方式与 Saga.cs 的 SafeObserve 族一致：观察者异常
+                // 不得阻断真实补偿（记为 Activity 事件后继续）。
+                var observer = SagaExecutionObserver.Current;
+                var statusBefore = sagaState.Status;
+                await SafeObserveCompensationStartedAsync(
+                    observer, sagaState.SagaId, "timeout-compensation", ct).ConfigureAwait(false);
                 await _orchestrator.CompensateAsync(sagaState, ct).ConfigureAwait(false);
                 sagaState.Status = SagaStatus.Compensated;
                 sagaState.CompletedAt = now;
                 sagaState.CurrentState = SagaState.CompensatedStateName;
                 sagaState.NextCheckAt = null; // M1：终态不再参与超时扫描
-                compensationSucceeded = true;
+                await SafeObserveStatusChangedAsync(
+                    observer, sagaState.SagaId, statusBefore, SagaStatus.Compensated, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -351,8 +361,6 @@ TState>
         }
         // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消——收集到环后
         // 由批量冲刷以 CancellationToken.None 保存（与上方 OCE 路径语义对齐）
-
-        return compensationSucceeded;
     }
 
     /// <summary>
@@ -398,7 +406,7 @@ TState>
     /// 三者都以 <see cref="CancellationToken.None"/> 落库——它们是终态写入，不响应取消。
     /// </summary>
     private async ValueTask FlushTerminalAndReleaseAsync(
-        List<(TState State, bool CompensationSucceeded)>? pendingTerminal,
+        List<TState>? pendingTerminal,
         List<TState>? pendingNextCheck,
         List<TState>? pendingRelease,
         DateTimeOffset now,
@@ -481,44 +489,40 @@ TState>
         }
     }
 
-    /// <summary>补偿终态的批量落库；逐行结果决定告警与补偿指标。</summary>
-    private async ValueTask FlushTerminalAsync(List<(TState State, bool CompensationSucceeded)> pending)
+    /// <summary>补偿终态的批量落库；逐行结果决定告警（0 行 = 乐观锁冲突）。</summary>
+    private async ValueTask FlushTerminalAsync(List<TState> pending)
     {
-        var states = new TState[pending.Count];
-        for (var i = 0; i < pending.Count; i++)
-            states[i] = pending[i].State;
-
         if (_store is ISagaBatchStateStore<TState> batchStore)
         {
             try
             {
-                var results = await batchStore.SaveManyAsync(states, CancellationToken.None).ConfigureAwait(false);
+                var results = await batchStore.SaveManyAsync(pending, CancellationToken.None).ConfigureAwait(false);
                 for (var i = 0; i < results.Count; i++)
-                    LogTerminalResult(pending[i].State, pending[i].CompensationSucceeded, results[i]);
+                    LogTerminalResult(pending[i], results[i]);
             }
             catch (Exception ex)
             {
                 // R14：同 FlushBackfillAsync——None 调用下的 OCE 属 DB 超时映射，须记录而非静默跳过。
-                _logger.Error(ex, $"Saga compensated terminal batch save failed ({states.Length} sagas); leases will expire by LeaseDuration");
+                _logger.Error(ex, $"Saga compensated terminal batch save failed ({pending.Count} sagas); leases will expire by LeaseDuration");
             }
             return;
         }
 
-        foreach (var (state, compensationSucceeded) in pending)
+        foreach (var state in pending)
         {
             try
             {
                 var saved = await _store.SaveChangesAsync(state, CancellationToken.None).ConfigureAwait(false);
-                LogTerminalResult(state, compensationSucceeded, saved);
+                LogTerminalResult(state, saved);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.Error(ex, $"Saga {state.SagaId} compensated terminal save failed; lease will expire by LeaseDuration");
+                _logger.Error(ex, $"Saga {state.SagaId} compensated terminal save failed; leases will expire by LeaseDuration");
             }
         }
     }
 
-    private void LogTerminalResult(TState sagaState, bool compensationSucceeded, int saved)
+    private void LogTerminalResult(TState sagaState, int saved)
     {
         if (saved == 0)
         {
@@ -530,10 +534,9 @@ TState>
             // 同为重入风险但措辞通用，排障两处都看（v8 声明）。
             _logger.Warning($"Saga {sagaState.SagaId} compensated state save affected 0 rows (optimistic concurrency conflict); another instance may have compensated it too — double compensation detected, ensure SagaStep.CompensateAsync actions are idempotent");
         }
-        else if (compensationSucceeded)
-        {
-            PalMetrics.SagaCompensated.Add(1);
-        }
+        // 2026-11-07 审计 P2-A：SagaCompensated 计数单一发射点在 SagaCompensation.RunAsync
+        // （超时车道经 CompensateAllAsync → RunAsync 也走该点）。此前此处按 compensationSucceeded
+        // 再计一次，与 RunAsync 双重计数；重试耗尽车道不经此方法，两条车道口径分叉。
     }
 
     /// <summary>到期推进 NextCheckAt 的批量落库；无批量能力的存储回落逐条保存。</summary>
@@ -567,6 +570,48 @@ TState>
             {
                 _logger.Error(ex, $"Saga {state.SagaId} NextCheckAt advance failed; will be re-leased next tick");
             }
+        }
+    }
+
+    /// <summary>
+    /// v4 批 D（G2）：超时补偿车道的观察者隔离包装——Sink 异常不得阻断真实补偿，
+    /// 与 <c>Saga.SafeObserveCompensationStartedAsync</c> 同形态（异常记 Activity 事件）。
+    /// </summary>
+    private static async ValueTask SafeObserveCompensationStartedAsync(
+        SagaExecutionObserver? observer, PalUlid sagaId, string stepKey, CancellationToken ct)
+    {
+        if (observer is null) return;
+        try
+        {
+            await observer.OnCompensationStarted(sagaId, stepKey, ct).ConfigureAwait(false);
+        }
+        catch (Exception obsEx) when (obsEx is not OperationCanceledException)
+        {
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "saga.observer.compensation-started-failed",
+                tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = obsEx.Message, ["step"] = stepKey }));
+        }
+    }
+
+    /// <summary>v4 批 D（G2）：终态迁移观察的隔离包装（同 <see cref="SafeObserveCompensationStartedAsync"/>）。</summary>
+    private static async ValueTask SafeObserveStatusChangedAsync(
+        SagaExecutionObserver? observer, PalUlid sagaId, SagaStatus oldStatus, SagaStatus newStatus, CancellationToken ct)
+    {
+        if (observer is null) return;
+        try
+        {
+            await observer.OnStatusChanged(sagaId, oldStatus, newStatus, ct).ConfigureAwait(false);
+        }
+        catch (Exception obsEx) when (obsEx is not OperationCanceledException)
+        {
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "saga.observer.status-changed-failed",
+                tags: new System.Diagnostics.ActivityTagsCollection
+                {
+                    ["error"] = obsEx.Message,
+                    ["from"] = oldStatus.ToString(),
+                    ["to"] = newStatus.ToString()
+                }));
         }
     }
 }

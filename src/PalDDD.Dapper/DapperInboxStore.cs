@@ -63,6 +63,26 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         _transaction = transaction;
     }
 
+    /// <summary>
+    /// 按状态列举（批次 C，2026-11-04）——读侧补齐，供运维查询失败/滞留列表。
+    /// </summary>
+    /// <remarks>观测语义：不认领、不改状态、不加租约。</remarks>
+    public async ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+        InboxStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        StatusFilterGuard.EnsureDefined(status, nameof(InboxStatus));
+
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var rows = await conn.QueryAsync<InboxMessage>(
+                SqlTemplates.InboxSelectByStatus,
+                new { status = (int)status, n = maxCount },
+                Tx).ConfigureAwait(false);
+        return rows.AsList();
+    }
+
     public async ValueTask<InboxMessage?> TryStartProcessingAsync(
         string consumerName, string messageId, DateTimeOffset now,
         TimeSpan processingTimeout, CancellationToken ct)
@@ -208,14 +228,18 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         failureReason = FailureReason.Normalize(failureReason);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // 三十八轮 P2 修复：同 MarkProcessedAsync——processing_started_at 抢占 token 守卫
+        // 2026-11-07 审计 P1-B：Failed 行写 processed_at（否则 Retention 的 includeFailed
+        // 永远清不掉 Failed 行）；时间取处理开始时间，回退接收时间（store 无独立时间源）。
+        var failedAt = message.ProcessingStartedAt ?? message.ReceivedAt;
         var affected = await c.ExecuteAsync(
             SqlTemplates.InboxMarkFailed,
-                new { err = failureReason, id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, Tx).ConfigureAwait(false);
+                new { err = failureReason, id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value), processedAt = ToTimeParam(failedAt) }, Tx).ConfigureAwait(false);
         // R11 F16：同 MarkProcessed——命中时同步入参对象（0 行不清洗被抢占者快照）。
         if (affected > 0)
         {
             message.Status = InboxStatus.Failed;
             message.LastError = failureReason;
+            message.ProcessedAt = failedAt;
         }
     }
 

@@ -1,10 +1,22 @@
 // ─────────────────────────────────────────────────────────────
 // 📦 MessageBatchPump — 批量订阅的组批泵（数量界 + 时间界）
 // ─────────────────────────────────────────────────────────────
+//
+// 💡 2026-11-04（批次 A）：新增「批次级确认」通路。逐条订阅时把 broker 交付的
+//   ｜ IMessageAck 随批携带，flush 时聚合成一个批次级确认器交给 handler；
+//   ｜ handler 未显式结算时按 at-most-once 默认收尾（成功确认、异常弃置）。
+//   ｜ 无 ack 的旧重载走同一泵但收集到的确认器为空，兜底为纯无操作——行为零变化。
+// ─────────────────────────────────────────────────────────────
 using System.Diagnostics;
 using System.Threading.Channels;
 
 namespace PalDDD.Messaging;
+
+/// <summary>泵内单条项——消息 + 消费上下文 + 该次交付的确认器（旧重载路径为 <c>null</c>）。</summary>
+internal readonly record struct PumpItem<TMessage>(
+    TMessage Message,
+    MessageConsumeContext? Context,
+    IMessageAck? Ack);
 
 /// <summary>
 /// 批量订阅的组批泵 — 复用逐条 <see cref="IMessageBroker.SubscribeAsync{TMessage}(Func{TMessage, MessageConsumeContext?, CancellationToken, ValueTask}, CancellationToken)"/>，
@@ -12,9 +24,36 @@ namespace PalDDD.Messaging;
 /// </summary>
 internal static class MessageBatchPump
 {
-    public static async ValueTask<IAsyncDisposable> StartAsync<TMessage>(
+    /// <summary>无 ack 的批量订阅（旧重载）——不收集确认器，兜底动作全部为无操作。</summary>
+    public static ValueTask<IAsyncDisposable> StartAsync<TMessage>(
         IMessageBroker broker,
         Func<IReadOnlyList<ConsumedMessage<TMessage>>, CancellationToken, ValueTask> handler,
+        int maxBatchSize,
+        TimeSpan? maxDelay,
+        Action<Exception> onHandlerError,
+        CancellationToken ct)
+        => StartCoreAsync<TMessage>(
+            broker,
+            (batch, _, token) => handler(batch, token),
+            propagateAcks: false,
+            maxBatchSize,
+            maxDelay,
+            onHandlerError,
+            ct);
+
+    /// <summary>含批次级确认器的批量订阅（批次 A 重载）。</summary>
+    public static ValueTask<IAsyncDisposable> StartAsync<TMessage>(
+        IMessageBroker broker,
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, IMessageAck, CancellationToken, ValueTask> handler,
+        int maxBatchSize,
+        TimeSpan? maxDelay,
+        Action<Exception> onHandlerError,
+        CancellationToken ct)
+        => StartCoreAsync(broker, handler, propagateAcks: true, maxBatchSize, maxDelay, onHandlerError, ct);
+    private static async ValueTask<IAsyncDisposable> StartCoreAsync<TMessage>(
+        IMessageBroker broker,
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, IMessageAck, CancellationToken, ValueTask> handler,
+        bool propagateAcks,
         int maxBatchSize,
         TimeSpan? maxDelay,
         Action<Exception> onHandlerError,
@@ -37,7 +76,7 @@ internal static class MessageBatchPump
             throw new ArgumentOutOfRangeException(nameof(maxDelay),
                 "maxDelay must not exceed the Task.Delay limit (uint.MaxValue-1 milliseconds, about 49.7 days).");
 
-        var channel = Channel.CreateBounded<ConsumedMessage<TMessage>>(
+        var channel = Channel.CreateBounded<PumpItem<TMessage>>(
             new BoundedChannelOptions(Math.Max(maxBatchSize * 4, 16))
             {
                 SingleReader = true,
@@ -45,13 +84,25 @@ internal static class MessageBatchPump
                 FullMode = BoundedChannelFullMode.Wait
             });
 
-        var inner = await broker.SubscribeAsync<TMessage>(
-            async (message, context, token) =>
-            {
-                await channel.Writer.WriteAsync(
-                    new ConsumedMessage<TMessage>(message, context), token).ConfigureAwait(false);
-            },
-            ct).ConfigureAwait(false);
+        // 逐条订阅：ack 通路走四参重载把 broker 的真实确认器带进通道；旧通路仍走三参重载，
+        // 传 null 表示「本次交付无需结算」——两条通路的收件逻辑因此只差 Ack 字段。
+        // v4 批 A（B2）：标记必须在 WriteAsync 之前同步置位。broker 的 await handler(...) 返回
+        // 后立刻判定兜底 ACK，且泵在独立 Task.Run 上跑；标记若落在 WriteAsync 之后或 reader
+        // 侧，关停竞态会漏标，pre-ACK 与批次结算冲突（v4 §2.1 顺序硬约束）。
+        ValueTask EnqueueAsync(TMessage message, MessageConsumeContext? context, IMessageAck? ack, CancellationToken token)
+        {
+            if (ack is not null)
+                DeferredAckRegistry.MarkDeferred(ack);
+            return channel.Writer.WriteAsync(new PumpItem<TMessage>(message, context, ack), token);
+        }
+
+        var inner = propagateAcks
+            ? await broker.SubscribeAsync<TMessage>(
+                (message, context, ack, token) => EnqueueAsync(message, context, ack, token),
+                ct).ConfigureAwait(false)
+            : await broker.SubscribeAsync<TMessage>(
+                (message, context, token) => EnqueueAsync(message, context, null, token),
+                ct).ConfigureAwait(false);
 
         var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var pump = Task.Run(
@@ -63,20 +114,23 @@ internal static class MessageBatchPump
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "批量 handler 的任意异常由 onHandlerError 记录后继续后续批次，与逐条 broker 消费循环的异常隔离契约一致。")]
     private static async Task PumpAsync<TMessage>(
-        ChannelReader<ConsumedMessage<TMessage>> reader,
-        Func<IReadOnlyList<ConsumedMessage<TMessage>>, CancellationToken, ValueTask> handler,
+        ChannelReader<PumpItem<TMessage>> reader,
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, IMessageAck, CancellationToken, ValueTask> handler,
         int maxBatchSize,
         TimeSpan maxDelay,
         Action<Exception> onHandlerError,
         CancellationToken ct)
     {
+        // batch 是暴露给 handler 的视图，batchAcks 与之同序（用于聚合批次级确认器）。
+        // 两者在每轮 finally 中清空复用，不随批数增长。
         var batch = new List<ConsumedMessage<TMessage>>(maxBatchSize);
-        Task<ConsumedMessage<TMessage>>? pendingRead = null;
+        var batchAcks = new List<IMessageAck>(maxBatchSize);
+        Task<PumpItem<TMessage>>? pendingRead = null;
         try
         {
             while (!ct.IsCancellationRequested)
             {
-                ConsumedMessage<TMessage> first;
+                PumpItem<TMessage> first;
                 if (pendingRead is not null)
                 {
                     first = await pendingRead.ConfigureAwait(false);
@@ -94,14 +148,14 @@ internal static class MessageBatchPump
                     }
                 }
 
-                batch.Add(first);
+                Add(first, batch, batchAcks);
                 // 单调时间戳而非墙钟：组批窗口只度量相对间隔，不受系统时钟调整影响。
                 var deadline = Stopwatch.GetTimestamp() + (long)(maxDelay.TotalSeconds * Stopwatch.Frequency);
                 while (batch.Count < maxBatchSize)
                 {
                     if (reader.TryRead(out var next))
                     {
-                        batch.Add(next);
+                        Add(next, batch, batchAcks);
                         continue;
                     }
 
@@ -118,25 +172,57 @@ internal static class MessageBatchPump
                     if (completed != pendingRead)
                         break;
 
-                    batch.Add(await pendingRead.ConfigureAwait(false));
+                    Add(await pendingRead.ConfigureAwait(false), batch, batchAcks);
                     pendingRead = null;
                 }
 
+                var batchAck = batchAcks.Count == 0
+                    ? MessageBatchAck.Empty
+                    : new MessageBatchAck([.. batchAcks]);
                 try
                 {
-                    await handler(batch, ct).ConfigureAwait(false);
+                    await handler(batch, batchAck, ct).ConfigureAwait(false);
+                    // 兜底（批次 A）：handler 未显式结算时整批确认。空确认器（旧重载路径）
+                    // 下这是无操作，因此旧行为逐字不变。
+                    if (!batchAck.IsSettled)
+                        await batchAck.AcknowledgeAsync(ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
+                    // v4 批 A（B2）：关停时当前批已组好但 handler 未被结算，直接 break 会让
+                    // 整批 delivery 恒 unacked 占用 prefetch 名额（重造 RabbitMqBroker
+                    // :547-553 注释所记缺陷，且 broker 侧的 OCE 分支在「结算已移交」时
+                    // 不再兜底 Nack）。补一次整批弃置：requeue:false 与逐条关停语义一致，
+                    // CancellationToken.None 保证取消窗口内仍能落地。IsSettled 门控避免
+                    // 覆盖 handler 已显式作出的结算决定。
+                    if (!batchAck.IsSettled)
+                        await batchAck.RejectAsync(requeue: false, ct: CancellationToken.None).ConfigureAwait(false);
                     break;
                 }
                 catch (Exception ex)
                 {
                     onHandlerError(ex);
+                    // 兜底：整批弃置，与逐条路径的 at-most-once 默认一致；需要重投须由
+                    // handler 自己 catch 后显式 RejectAsync(requeue: true)。
+                    try
+                    {
+                        if (!batchAck.IsSettled)
+                            await batchAck.RejectAsync(requeue: false, ct: CancellationToken.None).ConfigureAwait(false);
+                    }
+#pragma warning disable CA1031 // 弃置动作的失败不得掩盖原始 handler 异常
+#pragma warning disable RCS1075 // 空 catch 是有意设计：原始 handler 异常已交给 onHandlerError，此处吞掉结算失败
+                    catch (Exception)
+#pragma warning restore RCS1075
+#pragma warning restore CA1031
+                    {
+                        // 结算失败（channel 已关/连接断开）由 broker 侧自身日志记录，
+                        // 此处不得再抛——原始 handler 异常已交给 onHandlerError。
+                    }
                 }
                 finally
                 {
                     batch.Clear();
+                    batchAcks.Clear();
                 }
             }
         }
@@ -154,7 +240,13 @@ internal static class MessageBatchPump
             {
                 try
                 {
-                    await pendingRead.ConfigureAwait(false);
+                    var leftover = await pendingRead.ConfigureAwait(false);
+                    // v4 批 A 收口（悬空窗口）：关停时 pendingRead 可能已完成并读到一条 item，
+                    // 但外层循环已退出、它从未进入任何批次——其 ack 已 MarkDeferred（broker 侧
+                    // 成功兜底已跳过），若不结算则恒 unacked 直到连接关闭。补一次弃置，
+                    // 与逐条关停语义一致（requeue:false）。
+                    if (leftover.Ack is not null)
+                        await leftover.Ack.RejectAsync(requeue: false, ct: CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is OperationCanceledException or ChannelClosedException or ObjectDisposedException)
                 {
@@ -162,6 +254,16 @@ internal static class MessageBatchPump
                 }
             }
         }
+    }
+
+    private static void Add<TMessage>(
+        PumpItem<TMessage> item,
+        List<ConsumedMessage<TMessage>> batch,
+        List<IMessageAck> batchAcks)
+    {
+        batch.Add(new ConsumedMessage<TMessage>(item.Message, item.Context));
+        if (item.Ack is not null)
+            batchAcks.Add(item.Ack);
     }
 
     private sealed class BatchSubscription(

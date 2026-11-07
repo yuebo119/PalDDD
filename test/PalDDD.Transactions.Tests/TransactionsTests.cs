@@ -480,6 +480,12 @@ public sealed class OutboxBatchProcessorTests
         public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([message]);
 
+        // 批次 C 读侧方法：单消息替身的状态即该消息的当前状态——如实过滤。
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>(
+                message.Status == status ? [message] : []);
+
         public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
             int batchSize,
             string owner,
@@ -553,6 +559,12 @@ public sealed class OutboxBatchProcessorTests
     {
         public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([poison, healthy]);
+
+        // 批次 C 读侧方法：如实按状态过滤内存中的两条消息（非空即实况）。
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>(
+                [.. new[] { poison, healthy }.Where(m => m.Status == status).Take(maxCount)]);
 
         public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
             int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
@@ -923,6 +935,58 @@ public sealed class OutboxBatchProcessorTests
         await Assert.That(hosted.Any(static h => h.GetType().Name.StartsWith("SagaProcessor", StringComparison.Ordinal))).IsTrue();
     }
 
+    /// <summary>
+    /// G1（2026-11-06 全量审计 P2）：AddPalSaga 此前只注册编排器单例，不装配
+    /// SagaManager（普通读写属性，DI 不自动注入）——ExecuteInterruptStep 的
+    /// `is DefaultSagaManager` 判定整体跳过，AWD 永久滞留。
+    /// 本用例锁死「DI 解析的 Saga 挂起后 manager 有条目、ResumeAsync 可达」：
+    /// 修复前 orchestrator.SagaManager 为 null，ResumeAsync 抛 InvalidOperationException → 转红。
+    /// 归属 Transactions.Tests（分母本就含 PalDDD.Transactions 全程序集），不落在
+    /// DependencyInjection.Tests——后者的插桩分母窄，新增 Saga 派生类会把单模块覆盖率
+    /// 从 24.39% 稀释到 15.54%（CI run 42244424678 实证，降幅 9.05pp > 5pp 容差）。
+    /// </summary>
+    [Test]
+    public async Task AddPalSaga_InjectsSagaManager_InterruptResumeReachable(CancellationToken ct)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalSaga<DiWiringSagaState, DiWiringSaga>();
+        await using var provider = services.BuildServiceProvider();
+
+        var saga = provider.GetRequiredService<Saga<DiWiringSagaState>>();
+        await Assert.That(saga.SagaManager).IsNotNull();
+        await Assert.That(saga.SagaManager).IsTypeOf<DefaultSagaManager>();
+
+        var state = new DiWiringSagaState();
+        var interrupted = await saga.ProcessEventAsync(state, new DiWiringKickoff(), ct);
+        await Assert.That(interrupted.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+
+        var manager = (DefaultSagaManager)saga.SagaManager!;
+        await manager.ResumeAsync(state.SagaId, "approved", ct);
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.Completed);
+        await Assert.That(state.CurrentState).IsEqualTo("Approved");
+    }
+
+    private sealed class DiWiringSagaState : SagaState;
+
+    private sealed record DiWiringKickoff;
+
+    private sealed class DiWiringSaga : Saga<DiWiringSagaState>
+    {
+        public DiWiringSaga()
+        {
+            When<DiWiringKickoff>("Initial",
+                new InterruptStep("await-approval", "di-wiring", typeof(string)));
+            When<string>("Initial", new SagaStep("apply-decision",
+                execute: static (s, _, _) =>
+                {
+                    s.CurrentState = "Approved";
+                    s.Status = SagaStatus.Completed;
+                    return new ValueTask<SagaState>(s);
+                }));
+        }
+    }
+
     /// <summary>只声明 IInboxStore 的转发包装——模拟 PalORM/EF 的批量能力缺口。</summary>
     private sealed class NonBatchInboxStore(IInboxStore inner) : IInboxStore
     {
@@ -935,6 +999,11 @@ public sealed class OutboxBatchProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => inner.MarkFailedAsync(message, failureReason, ct);
+
+        // 批次 C 读侧方法：纯转发包装，读侧同样转发（保持「批量能力缺口」替身的单一职责）。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => inner.GetByStatusAsync(status, maxCount, ct);
     }
 
     /// <summary>批量能力齐备、完成标记结果可控——锁定批量标记失败/部分命中的可观测口径（R9 D1）。</summary>
@@ -949,6 +1018,11 @@ public sealed class OutboxBatchProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => ValueTask.CompletedTask;
+
+        // 批次 C 读侧方法：本替身不持久化记录（每次认领都新建），无状态可查——返回空即实况。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>([]);
 
         public ValueTask<IReadOnlyList<InboxMessage>> TryStartProcessingManyAsync(
             string consumerName, IReadOnlyList<string> messageIds, DateTimeOffset now,
@@ -1754,6 +1828,12 @@ public sealed class InboxProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => throw new InvalidOperationException("The handler should not fail in this test.");
+
+        // 批次 C 读侧方法：单消息录制替身，状态即该消息的当前状态——如实过滤。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>(
+                _message is not null && _message.Status == status ? [_message] : []);
     }
 
     private sealed class DuplicateAwareInboxStore : IInboxStore
@@ -1791,6 +1871,12 @@ public sealed class InboxProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => throw new InvalidOperationException("The handler should not fail in this test.");
+
+        // 批次 C 读侧方法：本替身只保留「已处理」的键集合、不保留消息对象，
+        // 无法按状态列举——返回空即实况（非静默假数据：本就不持有可列举的行）。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>([]);
     }
 
     /// <summary>handler 成功但 MarkProcessed 失败的存储——驱动 pending-confirmation 路径。</summary>
@@ -1817,6 +1903,11 @@ public sealed class InboxProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => throw new InvalidOperationException("The handler succeeded; MarkFailed must not be called.");
+
+        // 批次 C 读侧方法：本替身不持久化（每次认领新建），无状态可查——返回空即实况。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>([]);
     }
 
     private sealed class FailingAwareInboxStore : IInboxStore
@@ -1851,6 +1942,12 @@ public sealed class InboxProcessorTests
             message.Status = InboxStatus.Failed;
             message.LastError = failureReason;
         }
+
+        // 批次 C 读侧方法：单消息替身，状态即该消息的当前状态——如实过滤。
+        public ValueTask<IReadOnlyList<InboxMessage>> GetByStatusAsync(
+            InboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>(
+                _message is not null && _message.Status == status ? [_message] : []);
     }
 
     /// <summary>Information 级可开关的间谍日志器——A-2 守卫测试专用（其余级别恒启用不干扰）。</summary>
@@ -1994,6 +2091,10 @@ public sealed class SagaTimeoutProcessorTests
             CurrentState = "Waiting"
         };
         state.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        // 2026-11-07 审计 P2-A：补偿必须有已执行步骤才落 RunAsync 计数点。原 state 无
+        // ExecutedStepKeys（targets 为空，RunAsync 直接返回），修复前靠 LogTerminalResult
+        // 的补偿成功分支兜底计数 1；该分支移除后此处补步骤键，由 RunAsync 单一发射。
+        state.ExecutedStepKeys.Add("Waiting|OrderPlacedSagaEvent");
         var store = new RecordingSagaStateStore([state]);
         var processor = new SagaTimeoutProcessor<OrderSagaState>(
             store,
@@ -2235,6 +2336,11 @@ public sealed class SagaTimeoutProcessorTests
         public ValueTask<OrderSagaState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
             => ValueTask.FromResult<OrderSagaState?>(null);
 
+        // 批次 B：读侧方法，本组用例不消费——按状态过滤返回空。
+        public ValueTask<IReadOnlyList<OrderSagaState>> GetByStatusAsync(
+            SagaStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OrderSagaState>>([]);
+
         public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
         {
             SavedTerminals.Add((state.SagaId, state.Status));
@@ -2261,7 +2367,7 @@ public sealed class SagaTimeoutProcessorTests
             => ValueTask.FromResult(sagas.Count);
     }
 
-    private sealed class RecordingSagaStateStore(IReadOnlyList<OrderSagaState>? states = null)
+    internal sealed class RecordingSagaStateStore(IReadOnlyList<OrderSagaState>? states = null)
         : ISagaStateStore<OrderSagaState>
     {
         public int BatchSize { get; private set; }
@@ -2287,6 +2393,11 @@ public sealed class SagaTimeoutProcessorTests
 
         public ValueTask<OrderSagaState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
             => ValueTask.FromResult<OrderSagaState?>(null);
+
+        // 批次 B：读侧方法，本组用例不消费——按状态过滤返回空。
+        public ValueTask<IReadOnlyList<OrderSagaState>> GetByStatusAsync(
+            SagaStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OrderSagaState>>([]);
 
         public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
         {
@@ -2317,7 +2428,7 @@ public sealed class SagaTimeoutProcessorTests
         }
     }
 
-    private sealed class TimedOutSaga : Saga<OrderSagaState>
+    internal sealed class TimedOutSaga : Saga<OrderSagaState>
     {
         public TimedOutSaga()
         {

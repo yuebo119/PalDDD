@@ -55,6 +55,29 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// 批次 C（2026-11-04）：读侧补齐。全量扫 <c>_messages</c> 后按 id 排序截断——
+    /// 本方法是运维查询，不在每 tick 路径上；<c>GetPending</c>/<c>Lease</c> 的既有形态不变。
+    /// </remarks>
+    public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+        OutboxStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        // 过滤值本身也校验：未定义状态应可见失败，而不是返回空列表让调用方误判「无数据」。
+        StatusFilterGuard.EnsureDefined(status, nameof(OutboxStatus));
+        ct.ThrowIfCancellationRequested();
+
+        lock (_lock)
+            return ValueTask.FromResult<IReadOnlyList<OutboxMessage>>(
+                _messages.Where(m => m.Status == status)
+                    .OrderBy(static m => m.Id)
+                    .Take(maxCount)
+                    .ToList());
+    }
+
+    /// <inheritdoc/>
     public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
         int batchSize,
         string owner,

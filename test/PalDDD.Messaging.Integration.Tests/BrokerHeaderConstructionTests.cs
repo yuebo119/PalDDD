@@ -60,4 +60,50 @@ public sealed class BrokerHeaderConstructionTests
         await Assert.That(value).IsTypeOf<byte[]>();
         await Assert.That(Encoding.UTF8.GetString((byte[])value!)).IsEqualTo(causationId.ToString());
     }
+
+    /// <summary>
+    /// ADR-039 / 审计 A3：自定义业务头必须写入两栈；框架保留键名冲突时框架头优先
+    /// （业务头静默跳过，不破坏追踪链）。
+    /// </summary>
+    [Test]
+    public async Task ExtraHeaders_WrittenByBothBrokers_FrameworkKeysTakePrecedence()
+    {
+        var extra = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["x-tenant"] = "tenant-42",
+            ["x-version"] = "v3",
+            // 保留键名：必须被跳过（框架头优先）
+            [MessageConsumeContext.HeaderNames.TraceParent] = "00-attacker",
+            ["x-blank"] = null
+        };
+        var context = new MessagePublishContext(null, null, "00-abc-def-01", null)
+        {
+            ExtraHeaders = extra
+        };
+
+        var kafka = PalDDD.Messaging.Kafka.KafkaBroker.CreateHeaders(context);
+        await Assert.That(kafka).IsNotEmpty();
+        var kafkaMap = kafka!.ToDictionary(h => h.Key, h => Encoding.UTF8.GetString(h.GetValueBytes()));
+        await Assert.That(kafkaMap["x-tenant"]).IsEqualTo("tenant-42");
+        await Assert.That(kafkaMap["x-version"]).IsEqualTo("v3");
+        // 框架头未被业务值覆盖
+        await Assert.That(kafkaMap[MessageConsumeContext.HeaderNames.TraceParent]).IsEqualTo("00-abc-def-01");
+        // null 值的业务头不写入
+        await Assert.That(kafkaMap.ContainsKey("x-blank")).IsFalse();
+
+        var rabbit = PalDDD.Messaging.RabbitMQ.RabbitMqBroker.CreateHeaders(context);
+        await Assert.That(rabbit).IsNotEmpty();
+        await Assert.That(Encoding.UTF8.GetString((byte[])rabbit!["x-tenant"]!)).IsEqualTo("tenant-42");
+        await Assert.That(Encoding.UTF8.GetString((byte[])rabbit["x-version"]!)).IsEqualTo("v3");
+        await Assert.That(rabbit.ContainsKey(MessageConsumeContext.HeaderNames.TraceParent)).IsTrue();
+        await Assert.That(rabbit.ContainsKey("x-blank")).IsFalse();
+    }
+
+    /// <summary>ADR-039：ExtraHeaders 为 null 时默认路径零分配（不构造字典）。</summary>
+    [Test]
+    public async Task ExtraHeaders_Null_KeepsEmptyContextZeroAllocationPath()
+    {
+        await Assert.That(PalDDD.Messaging.Kafka.KafkaBroker.CreateHeaders(MessagePublishContext.Empty)).IsNull();
+        await Assert.That(PalDDD.Messaging.RabbitMQ.RabbitMqBroker.CreateHeaders(MessagePublishContext.Empty)).IsNull();
+    }
 }

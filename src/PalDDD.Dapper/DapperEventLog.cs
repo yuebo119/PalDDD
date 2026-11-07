@@ -42,7 +42,7 @@ namespace PalDDD.Dapper;
 /// auto-open/close 兜底（事务场景连接必已 open）。
 /// v9 修复 P1-1：本注释原以行内 // 形式加在类声明行，把 ": IEventLog" 吞进注释行尾——
 /// 接口声明静默丢失（build/测试/快照三重缺口均未拦，验证轮 v9 抓出）；现移入 XML doc 并恢复声明。</remarks>
-public sealed class DapperEventLog : IEventLog
+public sealed class DapperEventLog : IEventLog, IEventLogVersionReader
 {
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;
@@ -790,6 +790,23 @@ public sealed class DapperEventLog : IEventLog
             // v25 P3 指标族（D5）口径：EventLogRead 计数保留，无 SetTag
             PalMetrics.EventLogRead.Add(read);
         }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// ADR-039 / 审计 A1：复用 <c>EventLogSql.MaxVersion</c> 单行聚合（与 AppendAsync 的
+    /// 并发检查同一条 SQL），零事件物化。流不存在返回 -1。
+    /// </remarks>
+    public async ValueTask<long> GetStreamVersionAsync(
+        string streamName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var max = await _connection.QueryFirstOrDefaultAsync<long?>(
+            EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
+        return max ?? -1L;
     }
 
     /// <summary>

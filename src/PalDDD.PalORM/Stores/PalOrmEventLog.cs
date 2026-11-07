@@ -41,7 +41,7 @@ namespace PalDDD.PalORM.Stores;
 /// 误译为并发异常」权衡自此关闭（PG 单条快路径此前已有同款探测）。
 /// </para>
 /// </summary>
-public class PalOrmEventLog<TProvider> : IEventLog
+public class PalOrmEventLog<TProvider> : IEventLog, IEventLogVersionReader
     where TProvider : IDbProvider
 {
     [SuppressMessage("Performance", "CA1051:Do not declare visible instance fields",
@@ -746,6 +746,24 @@ public class PalOrmEventLog<TProvider> : IEventLog
             // v25 P3 指标族（D5）：pal.eventlog.read_count SetTag 移除——同 ReadStreamAsync
             PalMetrics.EventLogRead.Add(read);
         }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// ADR-039 / 审计 A1：与 <see cref="AppendAsync"/> 的并发预检查同一条聚合 SQL，
+    /// 零事件物化。流不存在返回 -1。
+    /// </remarks>
+    public async ValueTask<long> GetStreamVersionAsync(
+        string streamName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var max = await Session.ScalarAsync<long?>(
+            $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
+            ct: cancellationToken).ConfigureAwait(false);
+        return max ?? -1L;
     }
 
     /// <summary>EventLogRow → RecordedEvent 领域类型（零拷贝路径，payload/metadata 直接引用 byte[]）。</summary>

@@ -103,6 +103,30 @@ public class PalOrmEventLogMultiDialectTests
         await Assert.That(read[^1].EventName).IsEqualTo("large.event.2499");
     }
 
+    /// <summary>
+    /// ADR-039 / 审计 A1：PalORM 栈只读流版本——空流 -1，追加后末位版本
+    /// （四栈矩阵的 PalORM 格；与 AppendAsync 并发预检查同一条 MAX 聚合 SQL）。
+    /// </summary>
+    [Test]
+    public async Task EventLog_Sqlite_GetStreamVersionAsync_UnknownMinusOne_ThenLastVersion()
+    {
+        await using var ts = await MultiDialectFixture.CreateSqliteAsync();
+        var log = new PalOrmEventLog<SqliteProvider>(ts.Session);
+
+        await Assert.That(await log.GetStreamVersionAsync("missing-stream", default)).IsEqualTo(-1L);
+
+        await log.AppendAsync(
+            "version-stream",
+            ExpectedStreamVersion.NoStream,
+            [
+                MultiDialectTestData.CreateEventData("version.event.0"),
+                MultiDialectTestData.CreateEventData("version.event.1")
+            ],
+            default);
+
+        await Assert.That(await log.GetStreamVersionAsync("version-stream", default)).IsEqualTo(1L);
+    }
+
     [Test]
     public async Task EventLog_Sqlite_BinaryMode_ReadsBinAndRejectsMissingBackfill()
     {

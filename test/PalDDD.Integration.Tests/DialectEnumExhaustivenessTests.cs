@@ -34,7 +34,8 @@ public sealed class DialectEnumExhaustivenessTests
         {
             await Assert.That(RetentionSql.OutboxDelete(dialect, includeDead: false)).IsNotEmpty();
             await Assert.That(RetentionSql.OutboxDelete(dialect, includeDead: true)).IsNotEmpty();
-            await Assert.That(RetentionSql.InboxDelete(dialect)).IsNotEmpty();
+            await Assert.That(RetentionSql.InboxDelete(dialect, includeFailed: false)).IsNotEmpty();
+            await Assert.That(RetentionSql.InboxDelete(dialect, includeFailed: true)).IsNotEmpty();
             await Assert.That(RetentionSql.IdempotencyDelete(dialect)).IsNotEmpty();
             // 时间编码不抛异常即视为该方言已登记（返回对象由后续存储层消费）。
             _ = RetentionSql.ToTimeParam(dialect, DateTimeOffset.UnixEpoch);

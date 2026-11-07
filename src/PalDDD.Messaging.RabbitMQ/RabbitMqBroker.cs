@@ -1,3 +1,4 @@
+using PalDDD.Core.Diagnostics;
 using PalDDD.Core.Logging;
 using PalDDD.Serialization;
 using Microsoft.Extensions.Logging;
@@ -38,9 +39,13 @@ namespace PalDDD.Messaging.RabbitMQ;
 /// </remarks>
 [SuppressMessage("Design", "CA1031:Do not catch general exception types",
     Justification = "Broker 消费回调需记录毒消息失败并执行合理 nack，需捕获 Exception 基类。")]
-public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
+public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessageBrokerHealth
 {
     private int _disposed;
+    // v4 批 C（S1）：channel 级不可恢复故障原因（健康检查读取；普通 handler 失败不置位）。
+    // Rabbit 无 Kafka 式「消费线程终止」观测点——per-delivery ReceivedAsync 回调模型下，
+    // 可观测的故障面只有 channel 关闭（BasicNack/BasicAck/BasicCancel 抛异常且 IsOpen=false）。
+    private volatile string? _consumeFaultReason;
     private readonly IChannel _channel;
     private readonly IConnection _connection;
     private readonly IPalLogger<RabbitMqBroker> _logger;
@@ -226,6 +231,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // publisherConfirmationTrackingEnabled:true) 创建，否则本 await 会静默"成功"。
         try
         {
+            // ADR-039 / 审计 A5：发布跳 span（与消费侧 StartBrokerConsume 配对）
+            using var publishActivity = PalActivitySource.StartBrokerPublish(descriptor.Name, descriptor.Name);
             await _channel.BasicPublishAsync(
                 exchange: cachedExchange,
                 routingKey: CachedString.Empty,
@@ -243,6 +250,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             _logger.Warning(
                 $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
                 $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
+            // v4 批 D（S3）：发布失败计数器（NO_ROUTE 是丢消息的直接原因，必须可见）
+            PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }
 
@@ -289,6 +298,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             _logger.Warning(
                 $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
                 $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
+            // v4 批 D（S3）：raw 发布路径同计
+            PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }
 
@@ -348,7 +359,25 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        // ADR-039 / 审计 A3：调用方自定义头；框架头优先（已知键名冲突静默跳过）
+        AddExtraHeaders(ref headers, context.ExtraHeaders);
         return headers;
+    }
+
+    /// <summary>ADR-039：追加 <see cref="MessagePublishContext.ExtraHeaders"/>（null/空零分配）。</summary>
+    private static void AddExtraHeaders(ref Dictionary<string, object?>? headers, IReadOnlyDictionary<string, string?>? extra)
+    {
+        if (extra is null || extra.Count == 0)
+            return;
+
+        foreach (var (name, value) in extra)
+        {
+            if (string.IsNullOrWhiteSpace(name)
+                || string.IsNullOrWhiteSpace(value)
+                || MessageConsumeContext.HeaderNames.IsKnown(name))
+                continue;
+            (headers ??= new Dictionary<string, object?>(StringComparer.Ordinal)).Add(name, Encoding.UTF8.GetBytes(value));
+        }
     }
 
     private static void AddHeader(ref Dictionary<string, object?>? headers, string name, string? value)
@@ -370,8 +399,26 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     /// 调用方使用 <c>await using var sub = await broker.SubscribeAsync&lt;T&gt;(handler);</c><br/>
     /// 消息未携带任何追踪头时 context 为 null。
     /// </remarks>
-    public override async ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+    public override ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)
+        // 批次 A（2026-11-04）：本重载不再承载传输核心——核心下沉到携带 IMessageAck 的四参
+        // 重载，本重载把 broker 提供的确认器丢弃。丢弃是安全的：handler 不持有确认器时
+        // 其 IsSettled 恒 false，兜底规则（成功 BasicAck / 异常 Nack(false)）与 v5.0.0-preview.1
+        // 逐字一致，旧调用方零行为变化。
+        => SubscribeAsync<TMessage>((message, context, _, token) => handler(message, context, token), ct);
+
+    /// <summary>
+    /// 异步订阅消息（含消费上下文与消费确认器）— 传输核心。
+    /// </summary>
+    /// <remarks>
+    /// 本 Broker 的队列本就是 manual-ack（成功 <c>BasicAck</c>、失败 <c>Nack(false)</c>），
+    /// 确认器只是把已有的确认动作交给 handler 决策：<c>AcknowledgeAsync</c> → <c>BasicAck</c>、
+    /// <c>RejectAsync(true)</c> → <c>Nack(requeue:true)</c>、<c>RejectAsync(false)</c> →
+    /// <c>Nack(requeue:false)</c>。每次交付一个确认器，重复结算被原子标志拦下并留 Warning
+    /// （重复 <c>BasicAck</c> 会以 channel 关闭的形式波及同 channel 的其它订阅与发布）。
+    /// </remarks>
+    public override async ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+        Func<TMessage, MessageConsumeContext?, IMessageAck, CancellationToken, ValueTask> handler, CancellationToken ct = default)
     {
         // v25 P3 守卫族：订阅侧 _disposed 守卫（descriptor 解析前，对齐 KafkaBroker 订阅侧
         // P3-SRC-402 守卫）——Broker 释放后订阅会在已 DisposeAsync 的 channel 上声明
@@ -456,6 +503,15 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         }
         consumer.ReceivedAsync += async (_, ea) =>
         {
+            // 批次 A（2026-11-04）：每次交付一个确认器——handler 显式结算时由它调 broker API，
+            // 未结算时下方兜底分支按既有规则收尾（成功 BasicAck / 异常 Nack(false)）。
+            var ack = new RabbitMqMessageAck(this, consumerChannel, ea.DeliveryTag, queueName);
+            // v4 批 A（B2）：入队确认——只有泵的四参 handler 正常返回才置 true。
+            // 批量路径的 handler 就是 MessageBatchPump.EnqueueAsync：它先同步打 deferred
+            // 标记，再 WriteAsync 入通道。WriteAsync 在关停/通道关闭时抛 OCE 或
+            // ChannelClosedException，item 未入通道，泵永远看不到这条确认器、不会结算，
+            // broker 必须自行 Nack——否则 delivery 恒 unacked 占用 prefetch 名额。
+            var enqueueConfirmed = false;
             try
             {
                 // 2026-10-19 性能实施轮：泛型反序列化，免运行时 Type 查找与值类型装箱。
@@ -495,10 +551,18 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                     }
                     using (deliveryCts)
                     {
-                        await handler(message, consumeContext, deliveryCts.Token).ConfigureAwait(false);
-                        // 手动确认 — 仅在处理成功后 ACK
+                        // ADR-039 / 审计 A5：消费跳 span（与发布侧 StartBrokerPublish 配对）
+                        using var consumeActivity = PalActivitySource.StartBrokerConsume(exchange, typeof(TMessage).Name);
+                        await handler(message, consumeContext, ack, deliveryCts.Token).ConfigureAwait(false);
+                        // v4 批 A（B2）：handler 正常返回 = 泵已把 item 写入通道并入批。
+                        enqueueConfirmed = true;
+                        // 兜底确认 — handler 未显式结算时按处理成功 ACK（旧行为）
                         // P3 修复：ACK 与 Nack 同样加保护——channel 已关时异常逃逸进消费者回调
-                        await TryAckSafeAsync(consumerChannel, ea.DeliveryTag, queueName).ConfigureAwait(false);
+                        // v4 批 A（B2）：批量泵在 WriteAsync 之前把结算权移交批次，此处必须显式
+                        // 查 IsDeferred——CWT 标记不置 ack.IsSettled，只查 IsSettled 会提前 ACK，
+                        // 与批次收尾结算冲突（pre-ACK 主缺陷就在此分支）。
+                        if (!DeferredAckRegistry.IsDeferred(ack) && !ack.IsSettled)
+                            await TryAckSafeAsync(consumerChannel, ea.DeliveryTag, queueName).ConfigureAwait(false);
                     }
                 }
                 else
@@ -518,7 +582,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // 误标为关停 Warning；CTS.IsCancellationRequested 属性在 Dispose 后读取安全（不抛），
                 // 句柄释放（linkedCts.Dispose）后的飞行中 OCE 同样落回通用 catch 记 Error
                 _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled during shutdown, discarding: {queueName}");
-                await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                // v4 批 A（B2）：批量路径下若确认器已移交批次**且** item 已确认入通道
+                // （enqueueConfirmed），结算权归泵的批次收尾，此处跳过以免二次 Nack。
+                // WriteAsync 抛 OCE 时 item 未入通道、泵看不到这条 ack，必须由 broker 兜底
+                // Nack，否则 delivery 恒 unacked 占用 prefetch 名额（红队 A-2 实证）。
+                if (!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed)
+                    await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is OperationCanceledException)
             {
@@ -529,16 +598,27 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // consumer_timeout（默认 30 分钟）触发 PRECONDITION_FAILED 关闭 channel，
                 // 共用 _channel 的全部订阅与发布一并瘫痪。本分支记 Error + nack 弃置
                 //（与 ITM-008 at-most-once 对齐），消费继续
+                // v4 批 A（B2）：判据同上方的关停分支——已移交且入队确认才交给批次结算。
+                // v4 批 D（S3）：非关停 OCE 按消费失败计（关停窗口不计）
+                PalMetrics.BrokerConsumeFailed.Add(1);
                 _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, discarding: {queueName}");
-                await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                if (!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed)
+                    await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                // v4 批 D（S3）：handler 异常按消费失败计
+                PalMetrics.BrokerConsumeFailed.Add(1);
                 _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message, discarding (anonymous queue): {queueName}");
                 // P2 定案：exclusive 队列的消费者只有本连接——requeue:true 会立即重投给自己，
                 // 持续失败时形成无退避热循环。与 Kafka 路径 ITM-008 对齐：记录后弃置（at-most-once）。
                 // 需要失败重试语义的应用应使用持久队列 + DLX，由自身的 Broker 配置承载。
-                await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                // 批次 A：handler 已显式结算（含 RejectAsync(true)）时不覆盖其决定。
+                // v4 批 A（B2）：已移交且入队确认的确认器由泵的批次收尾结算；WriteAsync 抛
+                // ChannelClosedException 等异常时 item 未入通道，必须由 broker 兜底 Nack——
+                // 只查 IsDeferred 会跳过而悬空（v4 §2.1 表 :564 判据的实施轮补强）。
+                if ((!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed) && !ack.IsSettled)
+                    await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
         };
 
@@ -607,6 +687,18 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         return subscription;
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// v4 批 C（S1）：Rabbit 的健康态定义为「channel 级不可恢复故障」——per-delivery
+    /// <c>ReceivedAsync</c> 回调模型没有 Kafka 式「消费线程终止」观测点，可观测的故障面是
+    /// channel 关闭（结算/取消的安全包装抛异常且 <c>IChannel.IsOpen == false</c>）。
+    /// 普通 handler 失败（毒消息弃置）<b>不置位</b>——那是 at-most-once 弃置，不是链路终止。
+    /// </remarks>
+    public bool IsConsumingHealthy => _consumeFaultReason is null;
+
+    /// <inheritdoc />
+    public string? LastFaultReason => _consumeFaultReason;
+
     public async ValueTask DisposeAsync()
     {
         // P2 修复（所有权契约）：IConnection 由调用方创建并注入——可能被多个 Channel/Broker
@@ -636,6 +728,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicNack failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
+            MarkChannelFaultIfClosed(channel, ex, queueName);
         }
     }
 
@@ -652,6 +745,82 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicAck failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
+            MarkChannelFaultIfClosed(channel, ex, queueName);
+        }
+    }
+
+    /// <summary>
+    /// v4 批 C（S1）：channel 关闭即置健康故障态。判据用 <c>IChannel.IsOpen</c>（RabbitMQ.Client
+    /// 7.x 公开属性）而非具体异常类型——全仓零 <c>AlreadyClosedException</c> 引用，无现成依据；
+    /// channel 仍 open 时的失败（如瞬时协议错误）不置位，避免把可恢复故障误报成链路终止。
+    /// </summary>
+    private void MarkChannelFaultIfClosed(IChannel channel, Exception ex, string queueName)
+    {
+        // IsOpen 在 channel 已释放后读取安全（返回 false，不抛）
+        if (channel.IsOpen)
+            return;
+
+        // 记录原因不含凭据：异常类型 + 消息 + 队列名即可定位
+        _consumeFaultReason ??= $"{ex.GetType().Name}: {ex.Message} ({queueName})";
+    }
+
+    /// <summary>
+    /// 单次投递的消费确认器（批次 A，2026-11-04）——把既有 manual-ack 动作交给 handler 决策。
+    /// </summary>
+    /// <remarks>
+    /// 嵌套在 Broker 内以复用 <see cref="TryAckSafeAsync"/>/<see cref="TryNackSafeAsync"/> 的
+    /// 安全包装（channel 已关时抛异常会中断消费者），因此不作为公共 API 暴露——调用方只能
+    /// 通过订阅重载拿到实例。
+    /// <para>
+    /// <b>重复结算防护</b>：<see cref="TryClaim"/> 是原子占位，只有胜者真正调用 broker API；
+    /// 败者留 Warning 后静默返回。需要这层防护的原因是 RabbitMQ 对同一 deliveryTag 二次
+    /// <c>BasicAck</c> 会以 <c>PRECONDITION_FAILED</c> 关闭整个 channel——共用该 channel 的
+    /// 其它订阅与发布一起瘫痪。异常不外抛同样是刻意的：确认器在 handler 内被调用，
+    /// 抛出会打断业务逻辑，而结算失败本身已由安全包装记 Warning。
+    /// </para>
+    /// <para>
+    /// <c>ct</c> 不参与结算：AMQP 的 ack/nack 是通道级单帧写，无法在中途取消，且结算
+    /// 必须尽可能完成（取消语义交由调用方在调用前判断）。
+    /// </para>
+    /// </remarks>
+    private sealed class RabbitMqMessageAck(
+        RabbitMqBroker broker,
+        IChannel channel,
+        ulong deliveryTag,
+        string queueName) : IMessageAck
+    {
+        private int _settled;
+
+        /// <summary>本次投递是否已结算（兜底分支据此避免二次 ack/nack）。</summary>
+        public bool IsSettled => Volatile.Read(ref _settled) != 0;
+
+        /// <summary>原子占位：首次返回 <c>true</c>。</summary>
+        public bool TryClaim() => Interlocked.Exchange(ref _settled, 1) == 0;
+
+        /// <inheritdoc />
+        public async ValueTask AcknowledgeAsync(CancellationToken ct = default)
+        {
+            if (!TryClaim())
+            {
+                broker._logger.Warning(
+                    $"Duplicate acknowledge ignored (already settled): {queueName}, deliveryTag={deliveryTag}");
+                return;
+            }
+
+            await broker.TryAckSafeAsync(channel, deliveryTag, queueName).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc />
+        public async ValueTask RejectAsync(bool requeue, CancellationToken ct = default)
+        {
+            if (!TryClaim())
+            {
+                broker._logger.Warning(
+                    $"Duplicate reject ignored (already settled): {queueName}, deliveryTag={deliveryTag}, requeue={requeue}");
+                return;
+            }
+
+            await broker.TryNackSafeAsync(channel, deliveryTag, requeue, queueName).ConfigureAwait(false);
         }
     }
 
@@ -668,6 +837,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicCancel failed (channel closed?): {queueName}, consumerTag={consumerTag}: {ex.Message}");
+            MarkChannelFaultIfClosed(channel, ex, queueName);
         }
     }
 

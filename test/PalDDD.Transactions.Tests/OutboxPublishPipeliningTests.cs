@@ -320,6 +320,11 @@ public sealed class OutboxPublishPipeliningTests
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct) => new(0);
 
+        // 批次 C 读侧方法：本替身只构造本次租约的内存消息，无历史状态可查——返回空即实况。
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetByStatusAsync(
+            OutboxStatus status, int maxCount, CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
+
         public ValueTask<int> SaveChangesAsync(CancellationToken ct) => new(messageCount);
     }
 }

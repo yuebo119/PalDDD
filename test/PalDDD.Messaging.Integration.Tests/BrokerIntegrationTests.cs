@@ -177,6 +177,12 @@ public sealed class BrokerFixture : IAsyncDisposable
     private bool _triedTestcontainers;
     private readonly SemaphoreSlim _initializeLock = new(1, 1);
 
+    /// <summary>
+    /// Kafka BootstrapServers（批次 A 消费确认测试自建 catalog/producer 时需要）。
+    /// Testcontainers 路径取已启动容器地址，远程路径取配置值。
+    /// </summary>
+    public string KafkaBootstrap => _remoteKafkaBootstrap ?? _kafka!.GetBootstrapAddress();
+
     public (KafkaBroker, JsonMessageSerializer) CreateKafkaBroker()
         => CreateKafkaBroker(NullPalLogger<KafkaBroker>.Instance);
 
@@ -190,14 +196,21 @@ public sealed class BrokerFixture : IAsyncDisposable
             // 二十八轮修复：broker 不可达时 ProduceAsync 默认 5 分钟才抛
             // ProduceException（MessageTimeoutMs 默认 300000）——3 条测试各白等
             // 5 分钟，套件无谓耗时 15 分钟。5s 快速失败让环境故障立即可见。
-            MessageTimeoutMs = 5000
+            MessageTimeoutMs = 5000,
+            // 2026-11-04 批次 A：容器把 broker 通告为 "localhost:9092"，rdkafka 先解析到
+            // IPv6 ::1（本机 ::1:9092 不可达）再回落到 127.0.0.1；回落期间 producer 会进入
+            // 「1/1 brokers are down」，与上面的 5s 快速失败叠加成随机
+            // 「Local: Message timed out」——同一二进制连跑两次，一次 5/5 一次 2 失败，
+            // 属既有环境随机性（与消费侧改动无关）。显式限定 IPv4 消除解析分支。
+            BrokerAddressFamily = Confluent.Kafka.BrokerAddressFamily.V4
         };
         var consumerConfig = new Confluent.Kafka.ConsumerConfig
         {
             BootstrapServers = bootstrap,
             GroupId = $"paldd-test-{Guid.NewGuid():N}",
             AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest,  // Earliest 确保 consumer join 后能读到已发消息
-            AllowAutoCreateTopics = true
+            AllowAutoCreateTopics = true,
+            BrokerAddressFamily = Confluent.Kafka.BrokerAddressFamily.V4
         };
         var broker = new KafkaBroker(producerConfig, consumerConfig,
             logger,
@@ -229,8 +242,23 @@ public sealed class BrokerFixture : IAsyncDisposable
     }
 
     public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync(IPalLogger<RabbitMqBroker> logger)
+        => await CreateRabbitMqBrokerAsync(logger, prefetchCount: 10);
+
+    /// <summary>
+    /// v4 批 A 锁定测试用：可控 prefetch 的 broker 工厂。prefetch=1 时「批次 handler
+    /// 成功前 delivery 恒 unacked」可直接由「第二条不投递」观测（v4 §3 批 A 验收）。
+    /// </summary>
+    public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync(
+        IPalLogger<RabbitMqBroker> logger, ushort prefetchCount)
+        => await CreateRabbitMqBrokerAsync(logger, prefetchCount, await CreateRabbitConnectionAsync());
+
+    /// <summary>
+    /// v4 批 C 锁定测试用：调用方自持 connection 的 broker 工厂——健康态测试需要主动
+    /// 关闭连接来制造「channel 级不可恢复故障」（v4 §2.3 置位判据）。
+    /// </summary>
+    public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync(
+        IPalLogger<RabbitMqBroker> logger, ushort prefetchCount, IConnection connection)
     {
-        var connection = await CreateRabbitConnectionAsync();
         // ITM-651：改走 CreateAsync 工厂——channel 启用 publisher confirms + confirmation
         // tracking（原裸 CreateChannelAsync() 的 channel 无 confirms，mandatory:true 的
         // basic.return 不会被客户端转成 PublishException，集成面从未覆盖 confirms 路径）。
@@ -240,7 +268,8 @@ public sealed class BrokerFixture : IAsyncDisposable
             connection,
             logger,
             _catalogAndSerializer.Serializer,
-            _catalogAndSerializer.Catalog);
+            _catalogAndSerializer.Catalog,
+            prefetchCount);
         return (broker, _catalogAndSerializer.Serializer);
     }
 
@@ -271,7 +300,10 @@ internal sealed class CapturingLogger<T> : IPalLogger<T>
     // 三十轮重设计：诊断黑盒修复——原实现只计数不记文本，Kafka 消费循环失败时
     // 测试只能报裸 TimeoutException，无法区分"broker 断连/join 卡死/业务异常"。
     // 环形保留最近 5 条错误全文，失败时随断言输出。
+    // 2026-11-05 增 Warning 文本环形（批次 A 显式 Commit 路径排障）：Commit 失败走
+    // broker 的 Warning 安全包装，只有计数无文本时无法定位根因。
     private readonly Queue<string> _recentErrors = new();
+    private readonly Queue<string> _recentWarnings = new();
     private readonly Lock _lock = new();
 
     public string RecentErrorsSummary
@@ -282,9 +314,25 @@ internal sealed class CapturingLogger<T> : IPalLogger<T>
         }
     }
 
+    public string RecentWarningsSummary
+    {
+        get
+        {
+            lock (_lock) return _recentWarnings.Count == 0 ? "（无）" : string.Join(" | ", _recentWarnings);
+        }
+    }
+
     public void Debug(string message) { }
     public void Information(string message) { }
-    public void Warning(string message) => Interlocked.Increment(ref WarningCount);
+    public void Warning(string message)
+    {
+        Interlocked.Increment(ref WarningCount);
+        lock (_lock)
+        {
+            _recentWarnings.Enqueue(message);
+            while (_recentWarnings.Count > 5) _recentWarnings.Dequeue();
+        }
+    }
     public void Error(Exception ex, string message)
     {
         Interlocked.Increment(ref ErrorCount);

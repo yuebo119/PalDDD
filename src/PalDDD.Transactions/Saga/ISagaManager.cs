@@ -6,7 +6,7 @@ using PalUlid = ByteAether.Ulid.Ulid;
 namespace PalDDD.Transactions;
 
 /// <summary>
-/// Saga 管理器——用于恢复中断的 Saga、查询待决策 Saga、以及执行子 Saga。
+/// Saga 管理器——用于恢复中断的 Saga、以及执行子 Saga。
 /// </summary>
 /// <remarks>
 /// v5.0 接口公开化（2026-10-27，兑现 v65 P3 声明的「破坏性变更中开放外部实现」窗口）：
@@ -18,6 +18,13 @@ namespace PalDDD.Transactions;
 /// <see cref="InvalidateInterrupted"/>/<see cref="AcquireInvalidationFenceAsync"/> 为 DIM
 /// 空默认（无进程内中断条目语义的实现可直接放行）。外部程序集可实现本接口提供持久化
 /// manager；进程内语义（中断条目、失效集、决策栅栏）见 <see cref="DefaultSagaManager"/>。
+/// <para>
+/// ⚠️ <b>v5.0.0 批次 B（2026-11-04）删除 <c>GetInterruptedSagasAsync</c></b>：默认实现
+/// 恒返回空列表（v2 审计 A-5 自认「误信 = 静默假空」），而类型上无法正确实现——
+/// <c>DefaultSagaManager</c> 是非泛型类，<c>ISagaStateStore&lt;TState&gt;</c> 是泛型接口，
+/// 非泛型 manager 拿不到 <c>TState</c>，只能靠反射（违反零反射约束）。该查询改用
+/// <c>ISagaStateStore&lt;TState&gt;.GetByStatusAsync(SagaStatus.AwaitingHumanDecision, n)</c>。
+/// </para>
 /// </remarks>
 public interface ISagaManager
 {
@@ -38,19 +45,6 @@ public interface ISagaManager
     /// </remarks>
     ValueTask ResumeAsync<TDecision>(PalUlid sagaId, TDecision decision, CancellationToken ct)
         where TDecision : notnull;
-
-    /// <summary>
-    /// 获取所有处于 <see cref="SagaStatus.AwaitingHumanDecision"/> 状态的 Saga。
-    /// </summary>
-    /// <remarks>
-    /// ⚠️ <b>M1-5 表态（v2 审计 A-5，2026-09-19）：默认实现恒返回空列表</b>——
-    /// <see cref="DefaultSagaManager"/> 为进程内实现，无持久化查询能力；且本接口含
-    /// internal 成员，外部程序集无法提供替代实现。当前架构下 HITL 运营待办查询
-    /// <b>不经由此 API</b>——生产运营面须直接查询 Saga 状态存储
-    ///（<c>ISagaStateStore</c> 按 <see cref="SagaState.Status"/> 过滤）。
-    /// 误信本 API 的空返回 = 误判「无人工待办」（静默假空）。
-    /// </remarks>
-    ValueTask<IReadOnlyList<SagaState>> GetInterruptedSagasAsync(CancellationToken ct);
 
     /// <summary>
     /// 执行子 Saga——将子 Saga 作为父 Saga 的一个步骤执行。

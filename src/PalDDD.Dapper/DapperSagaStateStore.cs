@@ -669,6 +669,24 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
         return conn;
     }
 
+    /// <inheritdoc/>
+    public async ValueTask<IReadOnlyList<TState>> GetByStatusAsync(
+        SagaStatus status,
+        int maxCount,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCount);
+        // 过滤值本身也校验：传未定义状态（如已移除的 4）应可见失败，而非返回空列表。
+        SagaStatusGuard.EnsureDefined(status, sagaId: null);
+
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var rows = await conn.QueryAsync<SagaStateRow>(
+            SqlTemplates.SagaByStatus,
+            new { status = (int)status, n = maxCount },
+            Tx).ConfigureAwait(false);
+        return rows.Select(Materialize).ToList();
+    }
+
     private TState Materialize(SagaStateRow row)
     {
         // v3 轮姊妹收口（对齐 PalOrmSagaStateStore ITM-228/P3c 同款 fail-fast）：saga_data 为
@@ -684,7 +702,9 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
             : new TState { SagaId = row.SagaId, CreatedAt = row.CreatedAt };
 
         state.CurrentState = row.CurrentState;
-        state.Status = (SagaStatus)row.Status;
+        // 批次 B：未定义状态值（如已移除的 4）在这里 fail-fast——强转会把库里 4 读成
+        // 「不是任何已知状态」的实例，终态判定与 switch 全部落空且不报错。
+        state.Status = SagaStatusGuard.FromPersisted(row.Status, row.SagaId);
         state.CompletedAt = row.CompletedAt;
         state.Error = row.Error;
         state.ErrorAt = row.ErrorAt;

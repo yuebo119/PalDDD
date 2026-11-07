@@ -48,11 +48,17 @@ internal static class RetentionSql
             : (includeDead ? OutboxDeleteAllSubquery : OutboxDeleteProcessedSubquery);
     }
 
-    /// <summary>Inbox 已处理行删除 SQL。</summary>
-    public static string InboxDelete(RetentionDialect dialect)
+    /// <summary>Inbox 终态行删除 SQL。</summary>
+    /// <param name="includeFailed">
+    /// ADR-039 / 审计 A2：<c>true</c> 时连 <c>Failed</c>（status=3）一起删——
+    /// 对齐 <see cref="OutboxDelete"/> 的 <c>includeDead</c> 形态。
+    /// </param>
+    public static string InboxDelete(RetentionDialect dialect, bool includeFailed)
     {
         ValidateDialect(dialect);
-        return dialect == RetentionDialect.MySql ? InboxDeleteMySql : InboxDeleteSubquery;
+        return dialect == RetentionDialect.MySql
+            ? (includeFailed ? InboxDeleteAllMySql : InboxDeleteProcessedMySql)
+            : (includeFailed ? InboxDeleteAllSubquery : InboxDeleteProcessedSubquery);
     }
 
     /// <summary>幂等过期记录删除 SQL。</summary>
@@ -102,8 +108,11 @@ internal static class RetentionSql
     private const string OutboxDeleteAllSubquery =
         "DELETE FROM outbox_messages WHERE id IN (SELECT id FROM outbox_messages WHERE status IN (1, 2) AND processed_at IS NOT NULL AND processed_at < @cutoff ORDER BY processed_at LIMIT @n)";
 
-    private const string InboxDeleteSubquery =
+    private const string InboxDeleteProcessedSubquery =
         "DELETE FROM inbox_messages WHERE id IN (SELECT id FROM inbox_messages WHERE status = 2 AND processed_at IS NOT NULL AND processed_at < @cutoff ORDER BY processed_at LIMIT @n)";
+
+    private const string InboxDeleteAllSubquery =
+        "DELETE FROM inbox_messages WHERE id IN (SELECT id FROM inbox_messages WHERE status IN (2, 3) AND processed_at IS NOT NULL AND processed_at < @cutoff ORDER BY processed_at LIMIT @n)";
 
     private const string OutboxDeleteProcessedMySql =
         "DELETE FROM outbox_messages WHERE status = 1 AND processed_at IS NOT NULL AND processed_at < @cutoff ORDER BY processed_at LIMIT @n";
@@ -111,8 +120,11 @@ internal static class RetentionSql
     private const string OutboxDeleteAllMySql =
         "DELETE FROM outbox_messages WHERE status IN (1, 2) AND processed_at IS NOT NULL AND processed_at < @cutoff ORDER BY processed_at LIMIT @n";
 
-    private const string InboxDeleteMySql =
+    private const string InboxDeleteProcessedMySql =
         "DELETE FROM inbox_messages WHERE status = 2 AND processed_at IS NOT NULL AND processed_at < @cutoff ORDER BY processed_at LIMIT @n";
+
+    private const string InboxDeleteAllMySql =
+        "DELETE FROM inbox_messages WHERE status IN (2, 3) AND processed_at IS NOT NULL AND processed_at < @cutoff ORDER BY processed_at LIMIT @n";
 
     private const string IdempotencyDeletePostgreSql =
         "DELETE FROM idempotency_records WHERE ctid IN (SELECT ctid FROM idempotency_records WHERE expires_at < @cutoff ORDER BY expires_at LIMIT @n)";

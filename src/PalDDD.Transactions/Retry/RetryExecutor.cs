@@ -46,8 +46,12 @@ public sealed class RetryOptions
 
     internal void Validate()
     {
+        // MA0015：Validate() 无参，两条 guard 校验的是选项属性值，paramName 无可映射形参
+        //（同族先例 IdempotencyPolicy.Validate/ RetentionOptions.Validate 的定点抑制）。
+#pragma warning disable MA0015
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetries);
         ArgumentNullException.ThrowIfNull(BackoffPolicy);
+#pragma warning restore MA0015
     }
 }
 
@@ -75,7 +79,11 @@ public static class RetryExecutor
         options.Validate();
         var clock = timeProvider ?? TimeProvider.System;
 
-        for (var attempt = 1; ; attempt++)
+        // S1994：原 for(;;) 的停止增量在条件里未被测试，分析器误报为可疑循环。
+        // 改 while(true) 并把增量移到迭代末尾——终点保持不可达（每条路径 return/throw/异常逃逸），
+        // 泛型重载不会触发 CS0161（v1 条件化 for 的致命错误已在方案轮实测排除）。
+        var attempt = 1;
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
@@ -92,6 +100,7 @@ public static class RetryExecutor
                 await Task.Delay(ComputeDelaySafely(options.BackoffPolicy, failures), clock, cancellationToken)
                     .ConfigureAwait(false);
             }
+            attempt++;
         }
     }
 
@@ -108,7 +117,8 @@ public static class RetryExecutor
         options.Validate();
         var clock = timeProvider ?? TimeProvider.System;
 
-        for (var attempt = 1; ; attempt++)
+        var attempt = 1;
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
@@ -124,6 +134,7 @@ public static class RetryExecutor
                 await Task.Delay(ComputeDelaySafely(options.BackoffPolicy, failures), clock, cancellationToken)
                     .ConfigureAwait(false);
             }
+            attempt++;
         }
     }
 

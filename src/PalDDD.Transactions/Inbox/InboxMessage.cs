@@ -18,7 +18,15 @@ public sealed class InboxMessage
     /// <summary>接收时间 — 由 store 在插入时显式赋值（InboxDbContext.TryStartProcessingAsync）</summary>
     public DateTimeOffset ReceivedAt { get; set; }
 
-    /// <summary>处理时间</summary>
+    /// <summary>
+    /// 终态完成时间（Processed 或 Failed）。
+    /// <para>
+    /// 2026-11-07 审计 P1-B 前 Failed 行不写本字段（恒 null），导致 Retention 的
+    /// <c>includeFailed</c>（<c>status IN (2,3) AND processed_at IS NOT NULL</c>）永远
+    /// 清不掉 Failed 行；现四栈 <c>MarkFailedAsync</c> 统一写入（取处理开始时间，
+    /// 回退接收时间）。
+    /// </para>
+    /// </summary>
     public DateTimeOffset? ProcessedAt { get; set; }
 
     /// <summary>处理开始时间 — 用于检测僵尸 Processing</summary>

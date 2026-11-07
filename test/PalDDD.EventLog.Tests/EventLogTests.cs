@@ -268,6 +268,27 @@ public sealed class EventLogTests
             metadata: ReadOnlyMemory<byte>.Empty,
             EventAuditMetadata.Empty);
 
+    /// <summary>
+    /// ADR-039 / 审计 A1：内存栈只读流版本——空流 -1，追加后末位版本；
+    /// 与 EF Core / Dapper / PalORM 同语义（四栈矩阵的内存格）。
+    /// </summary>
+    [Test]
+    public async Task GetStreamVersionAsync_ReturnsMinusOneForUnknownStream_AndLastVersionAfterAppend(
+        CancellationToken cancellationToken)
+    {
+        var log = new InMemoryEventLog();
+
+        await Assert.That(await log.GetStreamVersionAsync("missing", cancellationToken)).IsEqualTo(-1L);
+
+        await log.AppendAsync(
+            "ordering-order-1",
+            ExpectedStreamVersion.NoStream,
+            [CreateEvent("orders.order-submitted.v1", "one"), CreateEvent("orders.order-paid.v1", "two")],
+            cancellationToken);
+
+        await Assert.That(await log.GetStreamVersionAsync("ordering-order-1", cancellationToken)).IsEqualTo(1L);
+    }
+
     private static async Task<List<RecordedEvent>> ReadAllAsync(IAsyncEnumerable<RecordedEvent> events)
     {
         var result = new List<RecordedEvent>();

@@ -120,4 +120,39 @@ public class PalOrmInboxStoreTests
         await Assert.That(ex!.ParamName).IsEqualTo("message");
         await Assert.That(ex.Message).Contains("ProcessingStartedAt");
     }
+
+    /// <summary>
+    /// 批次 C（2026-11-04）读侧补齐：Inbox 按状态列举——状态隔离、maxCount、自增 id 排序。
+    /// </summary>
+    [Test]
+    public async Task Inbox_GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndOrdersById()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteInboxStore(session);
+        var now = DateTimeOffset.UtcNow;
+
+        var first = await store.TryStartProcessingAsync("orders", "message-1", now, TimeSpan.FromMinutes(5), default);
+        var second = await store.TryStartProcessingAsync("orders", "message-2", now, TimeSpan.FromMinutes(5), default);
+        var failed = await store.TryStartProcessingAsync("orders", "message-3", now, TimeSpan.FromMinutes(5), default);
+        await store.MarkProcessedAsync(first!, now.AddSeconds(1), default);
+        await store.MarkFailedAsync(failed!, "seeded failure", default);
+
+        var failedRows = await store.GetByStatusAsync(InboxStatus.Failed, 10, default);
+        await Assert.That(failedRows).Count().IsEqualTo(1);
+        await Assert.That(failedRows[0].MessageId).IsEqualTo("message-3");
+
+        var processedRows = await store.GetByStatusAsync(InboxStatus.Processed, 10, default);
+        await Assert.That(processedRows).Count().IsEqualTo(1);
+        await Assert.That(processedRows[0].MessageId).IsEqualTo("message-1");
+
+        var processingRows = await store.GetByStatusAsync(InboxStatus.Processing, 10, default);
+        await Assert.That(processingRows).Count().IsEqualTo(1);
+        await Assert.That(processingRows[0].MessageId).IsEqualTo("message-2");
+
+        var capped = await store.GetByStatusAsync(InboxStatus.Processing, 1, default);
+        await Assert.That(capped).Count().IsEqualTo(1);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => store.GetByStatusAsync((InboxStatus)99, 10, default).AsTask());
+    }
 }

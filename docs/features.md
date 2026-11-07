@@ -6,7 +6,7 @@
 
 ## 总览
 
-`src/` 下共 36 个项目（35 个可打包 NuGet 包 + 1 个共享源码目录），另有 `test/` 下 16 个测试项目。产品面按清洁架构分为 7 层：
+`src/` 下共 37 个项目（36 个可打包 NuGet 包 + 1 个共享源码目录），另有 `test/` 下 16 个测试项目。产品面按清洁架构分为 7 层：
 
 | 层 | 项目 | 职责 |
 |---|---|---|
@@ -32,7 +32,7 @@
 | 工作单元端口 | Begin/Commit/Rollback/SaveChanges，不支持嵌套（ADR-023），模板方法扩展 | `IUnitOfWork`（IUnitOfWork.cs） |
 | 强类型标识 | `IPalIdentity<TKey>` 契约 + Ulid 生成器抽象（RFC 9562 合规实现） | `IPalIdGenerator`（Identity/） |
 | 日志门面 | 五成员接口隔离具体日志后端，空实现 NullPalLogger | `IPalLogger<T>`（Logging/） |
-| 可观测门面 | 30 个指标计数器 + 12 个 Activity 工厂（命令/事件/Saga/Outbox/Inbox/幂等/投影/事件日志读写/流式查询） | `PalDiagnostics`（PalDiagnostics.cs） |
+| 可观测门面 | 32 个指标计数器 + 14 个 Activity 工厂（命令/事件/Saga/Outbox/Inbox/幂等/投影/事件日志读写/流式查询/broker 发布与消费；**其中 2 个 Activity 工厂预留未接线**：`StartCommandDispatch`/`StartSagaTransition`，其余 12 个有生产调用点） | `PalDiagnostics`（PalDiagnostics.cs） |
 | 失败原因归一 | 五处理器共用：截断 2000 字符 + UTF-16 代理对完整性守卫 | `FailureReason`（FailureReason.cs） |
 | 契约标记 | GenerateId / GenerateEnum / GenerateMessage / BoundedContext / ProcessManager 五个 Attribute | Attributes.cs |
 
@@ -65,7 +65,7 @@
 
 | 特性 | 说明 | 锚点 |
 |---|---|---|
-| 消息代理契约 | `IMessageBroker` 泛型/非泛型发布 + 逐条订阅 + 批量订阅（数量/时间界组批，`ConsumedMessage<T>` 携带含 `MessageId` 的消费上下文）；接口 remarks 显式声明投递语义（当前两实现均为 at-most-once、不保证顺序、多订阅者语义分叉），消费幂等由 Inbox 保证 | MessageBroker.cs、MessageBatchPump.cs |
+| 消息代理契约 | `IMessageBroker` 泛型/非泛型发布 + 逐条订阅 + 批量订阅（数量/时间界组批，`ConsumedMessage<T>` 携带含 `MessageId` 的消费上下文；含批次级 `IMessageAck` 的重载把整批结算权交给 handler，逐条兜底让位于批次结算）；接口 remarks 显式声明投递语义（当前两实现均为 at-most-once、不保证顺序、多订阅者语义分叉），消费幂等由 Inbox 保证 | MessageBroker.cs、MessageBatchPump.cs |
 | 追踪信封闭环 | 发布侧 W3C TraceParent/CorrelationId/CausationId，消费侧 FromHeaders 还原，头键名常量锁定读写一致 | MessagePublishContext.cs、MessageConsumeContext.cs |
 | 空实现 | 单节点模式零发送 | `NullMessageBroker` |
 | Kafka 适配器 | 按消息类型名路由同名 Topic、后台线程阻塞消费循环、订阅句柄幂等释放 + Flush 排空、librdkafka 错误/统计/日志接线 | `KafkaBroker`（KafkaBroker.cs） |
@@ -123,7 +123,14 @@
 
 **配置面**：`OutboxOptions`（BatchSize=100、LeaseDuration=2min、PollInterval=500ms、MaxRetryCount=10、DeliveryMode=Auto、BatchMarkFlushInterval=1s 等）、`InboxOptions`、`SagaProcessorOptions`，全部 ValidateOnStart 校验。DI 入口：`AddPalOutbox` / `AddPalInbox` / `AddPalSaga<TState,TOrchestrator>`（Transactions/ServiceCollectionExtensions.cs）。
 
-## 8. 事件溯源与投影
+## 8. 事件日志与投影
+
+> **范围边界（2026-11-04 收窄）**：本节的能力只到**日志层**——追加、乐观并发、游标读、
+> 导入导出。**聚合重放器与快照不在范围内**（需要「聚合重放 + 快照」最小 API 形状与实际消费方
+> 才能立项，见 [ADR-037](decisions/037-event-log-append-only.md) 与
+> [架构文档](architecture.md) 中列为未来可选外圈的 Event Sourcing Adapter）。
+> 事件日志**只追加不删除**：框架刻意不提供删除/归档/截断 API，合规删除权用加密擦除实现，
+> 详见 [ADR-037](decisions/037-event-log-append-only.md)。
 
 | 特性 | 说明 | 锚点 |
 |---|---|---|
@@ -197,14 +204,14 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 ## 横切能力
 
 - **AOT 分层矩阵**：抽象层（Core/CQRS/Messaging/Serialization/Compression/EventLog/Idempotency/Projections/Transactions 抽象面）零反射；基础设施 4 包（Kafka、RabbitMQ、Compression.Native、Serialization.MemoryPack）加 Transactions 的子 Saga 反射路径显式豁免，豁免均有 csproj/注释理由。详见 [AOT 指南](aot.md)。
-- **可观测统一**：12 个 Activity 工厂 + 30 个指标计数器贯穿全部处理器；五处理器共用的 FailureReason 归一化。
+- **可观测统一**：14 个 Activity 工厂 + 32 个指标计数器贯穿全部处理器（含跨进程 broker 发布/消费两跳与失败计数）；**14 个 Activity 工厂中 2 个预留未接线**（`StartCommandDispatch` / `StartSagaTransition`，ITM-627），其余 12 个有生产调用点；五处理器共用的 FailureReason 归一化。
 - **并发防护三形态**：Outbox 用租约 token + RetryCount 快照；Saga 用 Version 换代乐观锁；Checkpoint/Idempotency 用单调 Revision CAS。
 - **全端口 InMemory 替身**：事件日志、Outbox、Inbox、Saga、检查点、幂等存储均有内存实现（替身与真实实现的语义分叉均以注释定案）。
 
 ## 边界与刻意取舍
 
-1. Broker 层投递语义是 at-most-once，at-least-once 由应用侧 Inbox/幂等组合达成（`IMessageBroker` remarks 明示）。
-2. `SagaStatus.DeadLettered` 枚举在案但框架内无赋值路径，Saga 实际失败终态为 Compensated/CompensationFailed。
+1. Broker 层默认投递语义是 at-most-once；需要 at-least-once 时用携带 `IMessageAck` 的订阅重载显式确认/拒绝（Kafka 侧还须 `EnableAutoOffsetStore=false`），业务侧幂等仍由 Inbox/幂等存储承担（`IMessageBroker` remarks 明示）。批量订阅的批次级确认器语义是「整批一次结算」：逐条兜底让位于批次结算，handler 未结算时按成功确认 / 异常弃置收尾，需要整批重投须在 handler 内显式 `RejectAsync(requeue: true)`。
+2. `SagaStatus` 的数值即持久化契约：`AwaitingHumanDecision=5`，`4` 是 v5.0.0 移除 `DeadLettered` 后的永久空洞（不得复用）——存量 `status=4` 的行会在水合时 fail-fast，升级前须按 `SELECT COUNT(*) FROM saga_states WHERE status = 4` 核对并修正。
 3. `AddPalFullStack` 已在 v5.0 契约窗口移除，统一入口为 `AddPalCoreStack`（原名字易被误解为包含基础设施）。
 4. SQLite 时间列编码在 PalORM 栈与 Dapper 栈互不兼容，同一物理库只能单选一个适配器族（双侧对称声明）。
 5. `SqlServerOutboxDbContext` 已随 v5.0.0 移除（零测试覆盖的未验证方言，2026-08-26 精炼裁决兑现；需要 SQL Server 支持请自行派生 `OutboxDbContext` 并补测试）。

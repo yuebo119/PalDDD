@@ -4,6 +4,18 @@ name: Mutation
 # - 每周一 schedule + workflow_dispatch：全仓变异成本高，不进入每次 push 主路径；
 # - 两个 curated 基线（CompressionProvider、Transactions/MySqlLeasePolicy）均 100%；
 # - break=95：出现存活体即失败；JSON/HTML 报告上传 artifact 供趋势与复盘。
+#
+# 2026-11-07（v4 批 F）扩面与已知边界：
+# - mutate 面在各自 project 内扩展（Transactions 增 RetryExecutor/OutboxWakeUpSignal，
+#   Compression 增 SystemCompressor）——不改 `project` 字段，不跨程序集；
+# - **零覆盖（必须明说）**：批 A/B/C 的 Messaging / CQRS / Transactions.EFCore 改动文件
+#   不在这两份配置内，B5 的「基数/覆盖率」另一半未解决；那些改动的回归证据由各自的
+#   锁定测试与变异反事实承载，**不由本工作流承载**；
+# - CompileError 形态不计入有效信号（历史实测 422 个 CompileError 曾把基数压到个位数）；
+# - 「break 真能红」的证据走 `scripts/mutation-probe.cs`（注入存活体 → 目标测试转红），
+#   不依赖本工作流的 schedule；
+# - 新增 Messaging/CQRS 测试工程的 stryker 配置 + 本文件 step 属**放弃范围**（新外部行为，
+#   超出修复方案 v4 边界）。
 on:
   workflow_dispatch:
   schedule:

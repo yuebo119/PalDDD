@@ -164,6 +164,8 @@ services.AddPalTimeoutBehavior<CreateOrderCommand, OrderId>(TimeSpan.FromSeconds
 
 超时只**放弃等待**，不中断 handler——管道 next 委托不接收 `CancellationToken`（状态机用派发时的原始 token 调 handler），超时后原工作可能仍在后台跑完。调用方取消仍按 `OperationCanceledException` 传播，只有超时转 `TimeoutException`，由 `UsePalExceptionHandler()` 映射为 504。超时行为与验证 / 日志正交（互斥检测显式排除），注册顺序不影响解析结果。流式读（`MapStreamQuery`）不经管道，超时由 `DetachedStreamOptions.MaxRunDuration` 独立控制。
 
+⚠️ **超时后的 scope 后果（已知 P1 缺口，见 [ADR-038](decisions/038-timeout-abandoned-scope.md)）**：HTTP 路径复用请求的 `RequestServices`（ADR-026 性能定案，避免每请求两个 DbContext）。504 响应写出后 ASP.NET 随即释放请求 scope，此时仍在后台运行的 handler 若再触碰 scoped 依赖（`DbContext`、`IUnitOfWork`、仓储等）会抛 `ObjectDisposedException`。该异常不再静默——`TimeoutBehavior.ObserveFault` 会把它记成 `pal.timeout.abandoned-handler-fault` Activity 事件，但**handler 的后续工作已无法完成**。此外 CQRS 请求面没有幂等键，客户端收到 504 后重试可能造成双写：handler 应自身保证幂等，或在超时预算内完成副作用。根因修复（scope 生命周期归属）需 ADR 与性能裁决，尚未实施。
+
 ### 与 HTTP 请求验证的分工（两层，别混）
 
 Pal.DDD 的验证在 **CQRS 管线**里（`IPalValidator<T>` + `ValidationBehavior`），因此覆盖**所有分发路径**——HTTP 端点、Kafka / RabbitMQ 消费者、后台任务触发的同一条命令都走同一套验证。
@@ -535,6 +537,27 @@ services.AddScoped<IEventLog>(sp => sp.GetRequiredService<AppEventLogDbContext>(
 `ReadStreamAsync` 和 `ReadAllAsync` 分别会发出 `EventLog ReadStream` / `EventLog ReadAll` span（无高基数 tag——起始 stream version / global position 与读取数量均已按 ITM-229 标准移除）。
 
 完整枚举读取结果后还会记录 `paldd.eventlog.read` metric，应用层可用于观察审计回放、投影修复和跨上下文诊断的事件读取吞吐。
+
+### 归档与导入导出（JSON Lines）
+
+`EventStreamJsonLines` 是 ADR-037 指定的合规归档路径：事件日志只追加不删除，长期留存靠导出到文件系统/对象存储。两个方法都在 `PalDDD.Projections.EventLog` 程序集：
+
+```csharp
+// 导出：逐事件写 JSON Lines（一行一个 RecordedEvent，含 stream name/version/payload/metadata）
+await EventStreamJsonLines.ExportAsync(log.ReadAllAsync(ct: ct), stream, ct);
+
+// 导入：读回同一文件，逐流按版本顺序 Append
+await EventStreamJsonLines.ImportAsync(stream, ct);
+```
+
+导入的接线要点（**不是**「一把梭 AppendAsync」）：
+
+1. **分组逐流**：文件是全局追加序，`AppendAsync` 要求同一次调用内的事件属于同一流。导入时按 `streamName` 分组，组内按 `streamVersion` 升序。
+2. **期望版本用 `NoStream`**：目标库为空时用 `ExpectedStreamVersion.NoStream`，一旦该流已存在则整组拒绝（这正是「导入即重建」的语义——不静默追加到已有流）。
+3. **顺序**：先导出后清空目标库（或导入到新库），否则同流二次导入必然撞 `NoStream` 冲突。
+4. **投影重建**：导入完成后投影 checkpoint 需要重置，走 `ProjectionRebuilder.RebuildAsync`（重放期间事件读路径与在线投影共用同一 `IEventLog`）。
+
+> 上述 1–4 是 ADR-037 与 `EventStreamJsonLines` 实现共同确定的约束，但此前无使用文档（审计 G3）。接入细节不随版本演进保证不变——以 `IEventLog`/`EventStreamJsonLines` 的 XML remarks 为准。
 
 ## 使用 SQLite FTS5 与 JSON1
 
@@ -1042,3 +1065,31 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 ```
 
 Outbox processor 会使用 `OutboxMessage.Id` 作为 `messageId`，并把 `OutboxMessage` 上的 correlation/causation/trace metadata 作为 `MessagePublishContext` 传给 broker。消息 payload 不需要实现基础设施 marker interface；wire name、schema version 和 content type 来自 `MessageDescriptor`。
+
+### 消费确认与批量订阅
+
+逐条订阅用携带 `IMessageAck` 的重载显式确认或拒绝；Kafka 侧须同时关闭自动存储（`EnableAutoOffsetStore=false`）确认才真正存储 offset，否则 `AcknowledgeAsync` 是无操作：
+
+```csharp
+await using var sub = await broker.SubscribeAsync<OrderCreated>(async (message, context, ack, ct) =>
+{
+    await HandleAsync(message, ct);
+    await ack.AcknowledgeAsync(ct);            // 成功：RabbitMQ BasicAck / Kafka 存 offset
+    // await ack.RejectAsync(requeue: true, ct); // 失败要重投：Kafka Seek 退避 / RabbitMQ Nack(true)
+}, ct);
+```
+
+批量订阅把**整批**交给 handler，批次级确认器一次结算全部：`AcknowledgeAsync` 整批确认，`RejectAsync` 整批拒绝（Kafka 逆序 seek 使重投从批内最早一条开始）。批内不支持部分确认——需要逐条差异化处置请用逐条订阅：
+
+```csharp
+await using var sub = await broker.SubscribeBatchAsync<OrderCreated>(async (batch, ack, ct) =>
+{
+    foreach (var item in batch)
+        await HandleAsync(item.Message, ct);
+    await ack.AcknowledgeAsync(ct);   // handler 不结算时泵按成功确认兜底；抛异常则整批弃置
+}, maxBatchSize: 64, maxDelay: TimeSpan.FromMilliseconds(50), ct);
+```
+
+批量路径的结算权归批次：broker 的逐条兜底 ACK 会让位于批次结算（内部移交标记，零公共 API 变化），因此批次 handler 返回之前 delivery 保持 unacked——这正是「批次成败决定结算」的前提。若某条消息在入队前就失败（关停或通道关闭），泵看不到它，broker 仍自行 Nack 兜底，不会留下悬空 delivery。
+
+⚠️ RabbitMQ 的 prefetch 默认 10（`BasicQos` 上限）会先于 `maxBatchSize` 生效：批量泵在整批结算前保持全部 delivery unacked，故有效批大小实际被 prefetch 截断在 10 以内。需要更大批次时调高 `prefetchCount`（broker 构造参数），两者需匹配。

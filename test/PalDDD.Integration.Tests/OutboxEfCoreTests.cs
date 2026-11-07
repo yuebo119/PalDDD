@@ -224,6 +224,42 @@ public sealed class OutboxEfCoreTests
         await Assert.That(loaded.LockedUntil).IsEqualTo(expectedLockedUntil);
     }
 
+    /// <summary>
+    /// 批次 C（2026-11-04）读侧补齐：按状态列举——状态隔离、maxCount 生效、id 排序。
+    /// </summary>
+    [Test]
+    public async Task GetByStatusAsync_FiltersByStatus_AppliesMaxCount_AndOrdersById(CancellationToken cancellationToken)
+    {
+        await using var db = new TestOutboxDbContext(CreateOptions(), FixedNow);
+        var store = (IPalOutboxStore)db;
+        for (var i = 0; i < 3; i++)
+            await store.AddMessageAsync(CreateMessage($"pending.{i}", FixedNow.AddMinutes(i)), cancellationToken);
+        await store.AddMessageAsync(CreateMessage("dead", FixedNow.AddMinutes(9), OutboxStatus.Dead), cancellationToken);
+        await store.AddMessageAsync(CreateMessage("processed", FixedNow.AddMinutes(10), OutboxStatus.Processed), cancellationToken);
+        await store.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var dead = await store.GetByStatusAsync(OutboxStatus.Dead, 10, cancellationToken);
+        await Assert.That(dead).Count().IsEqualTo(1);
+        await Assert.That(dead[0].Type).IsEqualTo("dead");
+
+        await Assert.That((await store.GetByStatusAsync(OutboxStatus.Processed, 10, cancellationToken)).Count).IsEqualTo(1);
+        await Assert.That((await store.GetByStatusAsync(OutboxStatus.Dead, 2, cancellationToken)).Count).IsEqualTo(1);
+
+        var all = await store.GetByStatusAsync(OutboxStatus.Pending, 100, cancellationToken);
+        await Assert.That(all).Count().IsEqualTo(3);
+        var ids = all.Select(static m => m.Id).ToList();
+        await Assert.That(ids.SequenceEqual(ids.OrderBy(static id => id))).IsTrue();
+
+        var capped = await store.GetByStatusAsync(OutboxStatus.Pending, 2, cancellationToken);
+        await Assert.That(capped).Count().IsEqualTo(2);
+        await Assert.That(capped[0].Id).IsEqualTo(ids[0]);
+
+        // 未定义状态过滤值可见失败
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => store.GetByStatusAsync((OutboxStatus)99, 10, cancellationToken).AsTask());
+    }
+
     private static readonly DateTimeOffset FixedNow = DateTimeOffset.Parse(
         "2026-05-31T00:00:00Z",
         CultureInfo.InvariantCulture);

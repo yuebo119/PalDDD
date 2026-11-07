@@ -35,6 +35,35 @@ public interface ISagaStateStore<TState> where TState : SagaState
     /// <summary>根据 ID 获取 Saga 状态</summary>
     ValueTask<TState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct);
 
+    /// <summary>
+    /// 按生命周期状态列举 Saga（批次 B，2026-11-04）——读侧补齐：原有读方法只覆盖
+    /// 「活跃 + 等待人工决策」两个状态，其余四态无法从抽象层列举，运维只能连库写裸 SQL。
+    /// </summary>
+    /// <param name="status">目标状态。必须为已定义值——传未定义值抛
+    /// <see cref="InvalidOperationException"/>（拒绝静默返回空结果）。</param>
+    /// <param name="maxCount">最多返回条数（正数）。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <remarks>
+    /// <para>
+    /// 四栈语义统一为 <c>WHERE status = @status ORDER BY saga_id LIMIT @maxCount</c>
+    ///（按 <c>saga_id</c> 排序使结果在跨栈、跨轮次之间可比；ULID 字典序即创建序）。
+    /// 走既有 <c>(status)</c> 索引。
+    /// </para>
+    /// <para>
+    /// <b>HITL 运营待办</b>的正确入口是本方法加
+    /// <see cref="SagaStatus.AwaitingHumanDecision"/>——v5.0.0 删除了原先恒返回空列表的
+    /// <c>ISagaManager.GetInterruptedSagasAsync</c>（误信其空返回等于「无人工待办」）。
+    /// </para>
+    /// <para>
+    /// <b>为什么不给默认实现</b>：DIM 返回空列表会让未更新的自定义存储静默给出「查无此状态」，
+    /// 正是本批次要消灭的假 API 形态。自定义实现必须显式提供。
+    /// </para>
+    /// </remarks>
+    ValueTask<IReadOnlyList<TState>> GetByStatusAsync(
+        SagaStatus status,
+        int maxCount,
+        CancellationToken ct = default);
+
     /// <summary>持久化 Saga 状态更改。</summary>
     /// <param name="state">被修改的状态实例。
     /// Dapper 适配器：必需，无变更跟踪。

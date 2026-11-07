@@ -23,7 +23,7 @@ namespace PalDDD.EventLog;
 public abstract class EventLogDbContext(
     DbContextOptions options,
     TimeProvider? timeProvider = null,
-    EventLogPositionReserver? positionReserver = null) : DbContext(options), IEventLog
+    EventLogPositionReserver? positionReserver = null) : DbContext(options), IEventLog, IEventLogVersionReader
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly EventLogPositionReserver _positionReserver = positionReserver ?? new EventLogPositionReserver();  // P2-4: Scoped 下 Hi/Lo 缓存不可达，生产推荐 Singleton
@@ -207,6 +207,24 @@ public abstract class EventLogDbContext(
             // maxCount 无界，高基数命中 ITM-229 清理标准；计数保留在 EventLogRead 指标
             PalMetrics.EventLogRead.Add(read);
         }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// ADR-039 / 审计 A1：单行聚合走 <c>(StreamName, StreamVersion)</c> 唯一索引，
+    /// 零事件物化。流不存在返回 -1（与 <see cref="ExpectedStreamVersion.NoStream"/> 对齐）。
+    /// </remarks>
+    public virtual async ValueTask<long> GetStreamVersionAsync(
+        string streamName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
+
+        var max = await Events
+            .Where(e => e.StreamName == streamName)
+            .MaxAsync(e => (long?)e.StreamVersion, cancellationToken)
+            .ConfigureAwait(false);
+        return max ?? -1L;
     }
 
     /// <summary>按读取模式投影：文本模式只拉 EventId，二进制模式只拉 EventIdBin。</summary>
