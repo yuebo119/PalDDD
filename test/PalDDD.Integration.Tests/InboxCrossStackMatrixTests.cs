@@ -63,6 +63,64 @@ public sealed class InboxCrossStackMatrixTests
         }
     }
 
+    /// <summary>
+    /// 2026-11-07 审计 P1-B：<c>MarkFailedAsync</c> 必须写 <c>ProcessedAt</c>（四栈同口径）。
+    /// <para>
+    /// 修复前 Failed 行 <c>processed_at</c> 恒 null，而 Retention 的 <c>includeFailed</c>
+    /// 谓词是 <c>status IN (2,3) AND processed_at IS NOT NULL AND processed_at &lt; @cutoff</c>
+    /// ——Failed 行永远清不掉，<see cref="RetentionOptions.DeleteFailedInboxMessages"/>
+    /// 开启后仍是假 API。
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task MarkFailed_WritesProcessedAt(CancellationToken ct)
+    {
+        await AssertFailedWritesProcessedAtAsync(new InMemoryInboxStore(), ct);
+
+        await using (var conn = new SqliteConnection("Data Source=:memory:"))
+        {
+            await conn.OpenAsync(ct);
+            await ExecuteAsync(conn, ct);
+            await AssertFailedWritesProcessedAtAsync(new DapperInboxStore(conn, DapperDbType.Sqlite), ct);
+        }
+
+        await using (var session = await DataSession<SqliteProvider>.CreateAsync(
+            DbOptions.Development("Data Source=:memory:"), ct))
+        {
+            var conn = session.GetRawConnection();
+            if (conn.State != ConnectionState.Open)
+                await conn.OpenAsync(ct);
+            await ExecuteAsync(conn, ct);
+            await AssertFailedWritesProcessedAtAsync(new SqliteInboxStore(session), ct);
+        }
+
+        // SQLite 内存库按连接隔离：必须复用同一个打开的连接（同 Inbox_FourStacks 用例）。
+        await using (var conn = new SqliteConnection("Data Source=:memory:"))
+        {
+            await conn.OpenAsync(ct);
+            var options = new DbContextOptionsBuilder<ProbeInboxDbContext>()
+                .UseSqlite(conn)
+                .Options;
+            await using var context = new ProbeInboxDbContext(options);
+            await context.Database.EnsureCreatedAsync(ct);
+            await AssertFailedWritesProcessedAtAsync(context, ct);
+        }
+    }
+
+    private static async Task AssertFailedWritesProcessedAtAsync(IInboxStore store, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var message = await store.TryStartProcessingAsync("matrix", "m-fail", now, TimeSpan.FromMinutes(5), ct);
+        await Assert.That(message).IsTypeOf<InboxMessage>();
+        await Assert.That(message!.ProcessedAt).IsNull();
+
+        await store.MarkFailedAsync(message, "boom", ct);
+
+        // 精确断言写入值（不用 IsNotNull——弱断言棘轮只许下调）：四栈统一取处理开始时间。
+        await Assert.That(message.ProcessedAt).IsEqualTo(message.ProcessingStartedAt ?? message.ReceivedAt)
+            .Because("MarkFailedAsync 必须写 ProcessedAt，否则 Retention includeFailed 永远清不掉 Failed 行");
+    }
+
     private static async Task AssertContractAsync(IInboxStore store, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;

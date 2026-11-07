@@ -282,7 +282,7 @@ public static class SqlTemplates
     /// 抢占 token 守卫，防止被抢占的旧 worker 写入失败态干扰新 worker。
     /// </summary>
     public const string InboxMarkFailed =
-        "UPDATE inbox_messages SET status=3,last_error=@err WHERE id=@id AND status=1 AND processing_started_at=@startedAt";
+        "UPDATE inbox_messages SET status=3,last_error=@err,processed_at=@processedAt WHERE id=@id AND status=1 AND processing_started_at=@startedAt";
 
     /// <summary>
     /// PostgreSQL conflict-safe INSERT 语法。<br/>

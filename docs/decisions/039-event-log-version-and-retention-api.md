@@ -66,3 +66,25 @@
 1. **A1 的四栈实现形态**：EF/PalORM/Dapper 用 `MAX(stream_version)` 单行查询（走 `(StreamName, StreamVersion)` 唯一索引），InMemory 直接读列表末位。四栈语义须一致（空流 = -1）。
 2. **A2 的 EF Core 实现**：`EfCoreRetentionStore.BuildInboxDelete()` 需与 `RetentionSql` 两方言形态对齐（MySQL 直删 / 其他子查询）。
 3. **A5 的 tag 基数**：topic/exchange 与事件名属低基数（按消息类型而非实例），符合 ITM-229 的零高基数 tag 纪律。
+
+## 勘正（2026-11-07 审计后，P1-B）
+
+A2 落地后仍是假 API：三栈 `MarkFailedAsync` 只写 `Status`/`LastError`，不写 `ProcessedAt`
+（`InboxMessage.ProcessedAt` 是 `DateTimeOffset?`，Failed 行恒 null），而
+`RetentionSql.InboxDeleteAllSubquery` / `EfCoreRetentionStore.BuildInboxDelete` 的谓词是
+`status IN (2,3) AND processed_at IS NOT NULL AND processed_at < @cutoff`——Failed 行
+`processed_at = NULL`，永远清不掉，`DeleteFailedInboxMessages` 开启后仍无效果。
+
+**修法**：四栈（InMemory / Dapper / PalORM / EF）`MarkFailedAsync` 统一写
+`message.ProcessedAt = message.ProcessingStartedAt ?? message.ReceivedAt`；Dapper
+`SqlTemplates.InboxMarkFailed` 加 `processed_at=@processedAt`，PalORM 内联 SQL 同步。
+
+**时间源取舍**：store 构造函数无时间源，且 `MarkFailedAsync` 接口签名不改（避免公共 API
+破坏与快照变更），故取处理开始时间（回退接收时间）。处理耗时远小于保留窗口（默认 30 天），
+语义可接受。`InboxMessage.ProcessedAt` 语义随之扩展为「终态完成时间（Processed 或 Failed）」。
+
+**锁定测试**：`InboxCrossStackMatrixTests.MarkFailed_WritesProcessedAt`（四栈 Failed 行
+`ProcessedAt` 非 null）；`RetentionIncludeFailedTests`（Dapper / PalORM / EF 三栈 SQLite：
+`includeFailed:false` 只删 Processed 旧行、`true` 再删 Failed 旧行、窗口外保留）。
+变异验证：删 EF 赋值 → 四栈用例转红；`InboxDeleteAllSubquery` 谓词退回 `status = 2` →
+三栈用例转红。

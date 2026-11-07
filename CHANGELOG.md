@@ -47,6 +47,19 @@
   实际方法名按仓库 `Method_Scenario` 命名规范加下划线）；变异删判据 →
   `UncommittedOffset_DoesNotAdvance` 转红（committed=1）；公共 API 快照零变化。
 
+- **Retention `includeFailed` 假 API（2026-11-07 审计后，P1-B）**：
+  ADR-039 的 A2 落地后仍清不掉 Failed 行——三栈 `MarkFailedAsync` 只写 `Status`/`LastError`，
+  不写 `ProcessedAt`（Failed 行 `processed_at` 恒 NULL），而 `RetentionSql.InboxDeleteAllSubquery`
+  与 `EfCoreRetentionStore.BuildInboxDelete` 的 `includeFailed` 谓词是
+  `status IN (2,3) AND processed_at IS NOT NULL AND processed_at < @cutoff`，NULL 永不命中。
+  修复：四栈 `MarkFailedAsync` 统一写 `ProcessedAt`（取处理开始时间，回退接收时间；store
+  无时间源且接口签名不改，避免公共 API 破坏），Dapper `InboxMarkFailed` 加 `processed_at`。
+  `InboxMessage.ProcessedAt` 语义扩展为「终态完成时间（Processed 或 Failed）」。
+  验证：`InboxCrossStackMatrixTests.MarkFailed_WritesProcessedAt`（四栈）+
+  `RetentionIncludeFailedTests`（Dapper/PalORM/EF 三栈 SQLite 端到端）；变异删 EF 赋值 →
+  四栈用例转红，`InboxDeleteAllSubquery` 谓词退回 `status = 2` → 三栈用例转红；
+  公共 API 快照零变化。
+
 - **Kafka 手动存储模式毒消息冻结 offset 水印（2026-11-06 全量审计 B3，P1）**：
   `EnableAutoOffsetStore=false` 下，消费线程先把每条已交付消息的 offset 播种进 `OffsetTracker`，
   但 `HandleMessageAsync` 的失败路径（handler 抛异常、非关停 OCE、反序列化返回 null）与

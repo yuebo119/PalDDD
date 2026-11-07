@@ -242,6 +242,9 @@ public sealed class InMemoryInboxStore : IInboxStore, IBatchInboxStore
 
             message.Status = InboxStatus.Failed;
             message.LastError = failureReason;
+            // 2026-11-07 审计 P1-B：Failed 行写 ProcessedAt（否则 Retention 的 includeFailed
+            // 永远清不掉 Failed 行）；时间取处理开始时间，回退接收时间（与三栈持久化实现同口径）。
+            message.ProcessedAt = message.ProcessingStartedAt ?? message.ReceivedAt;
         }
         return ValueTask.CompletedTask;
     }

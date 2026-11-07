@@ -233,14 +233,17 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 在并发场景抛异常
         // WHERE status=Processing(1) 守卫，防止覆盖已 Processed 的记录（与 Dapper 实现一致）
         // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫（对齐 Dapper 版同款）
+        // 2026-11-07 审计 P1-B：Failed 行写 processed_at（否则 Retention 的 includeFailed
+        // 永远清不掉 Failed 行）；时间取处理开始时间（上方已 fail-fast 保证非 null）。
         var affected = await Session.ExecuteAsync(
-            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Failed}, last_error = {reason} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing} AND processing_started_at = {message.ProcessingStartedAt}",
+            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Failed}, last_error = {reason}, processed_at = {message.ProcessingStartedAt} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing} AND processing_started_at = {message.ProcessingStartedAt}",
             ct).ConfigureAwait(false);
         // ITM-168 修复：affected > 0 才变更本地对象（同 MarkProcessedAsync 陈旧语义修复）。
         if (affected > 0)
         {
             message.Status = InboxStatus.Failed;
             message.LastError = reason;
+            message.ProcessedAt = message.ProcessingStartedAt;
         }
     }
 }

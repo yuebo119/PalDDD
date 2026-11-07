@@ -306,6 +306,11 @@ public abstract class InboxDbContext(
         var snapshot = (message.Status, message.ProcessedAt, message.LastError);
         message.Status = InboxStatus.Failed;
         message.LastError = failureReason;
+        // 2026-11-07 审计 P1-B：Failed 行写 ProcessedAt，否则 Retention 的 includeFailed
+        // （status IN (2,3) AND processed_at IS NOT NULL AND processed_at < @cutoff）
+        // 永远清不掉 Failed 行（processed_at = NULL）。时间取处理开始时间（store 无独立
+        // 时间源、接口签名不变；处理耗时远小于保留窗口，语义可接受），回退接收时间。
+        message.ProcessedAt = message.ProcessingStartedAt ?? message.ReceivedAt;
         if (!await SaveTerminalStateAsync(message, ct).ConfigureAwait(false))
             (message.Status, message.ProcessedAt, message.LastError) = snapshot;
     }
