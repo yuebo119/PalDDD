@@ -158,9 +158,13 @@
 | 项 | 状态 |
 |----|------|
 | 方案 | 本文档（2026-11-07） |
-| 实施 | 未启动 |
-| 验证 | 未启动 |
+| 实施 | **已完成**（批 1~4，提交 `b8e1692` / `dfe4cb8` / `2b14cf2` / `bbad98b`） |
+| 验证 | **已完成**（各批 build 0 警告 0 错误 + 红→绿 + 变异反事实；批 1 Kafka 真容器 3/3；批 2 SQLite 三栈矩阵 + PG/MySQL 真库 Retention 2/2；批 3 grep 验收；批 4 两车道计数 + EF 翻译） |
 | 待决 | 无（修法定案已完成，红队复核已收敛） |
+
+**实施映射**：验收表的部分测试名按仓库 `Method_Scenario` 命名规范调整（详见
+§1.1 实施映射表与各批提交信息）；`MarkFailed_WritesProcessedAt` / `RetentionIncludeFailedTests`
+/ `SagaCompensatedMetricTests.*` / `SpecificationEfTranslationTests.*` 为实际落地名称。
 
 ## 6. 明确不做（红队复核后撤回或降级项）
 
