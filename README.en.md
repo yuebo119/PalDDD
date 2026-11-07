@@ -62,7 +62,7 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 
 **Message version evolution with startup contract verification**. `MessageEvolutionBuilder` builds adjacent-version step-by-step upgrade pipelines (executed explicitly on the consumer side); `AddPalMessageContractVerification` verifies upgrade-path completeness at startup (an incomplete chain refuses to start with `PalPlatformVerificationException`). Serialization is pluggable: JSON (AOT-safe, default) vs MemoryPack (faster, adapter not AOT).
 
-**Pluggable compression**. `ICompressionProvider` / `ICompressor` abstractions with two implementations: the System built-in compressor and the native LZ4/ZStandard binding (`PalDDD.Compression.Native`, AOT-safe), swappable via DI.
+**Pluggable compression**. `ICompressionProvider` / `ICompressor` abstractions with two implementations: the System built-in compressor and the native LZ4/ZStandard binding (`PalDDD.Compression.Native`, not AOT — P/Invoke native binaries), swappable via DI.
 
 **Built-in observability**. `PalActivitySource` (14 Start methods) + `PalMetrics` (32 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything. **2 of the 14 Activity factories are reserved and not wired** (`StartCommandDispatch` / `StartSagaTransition`, ITM-627 family, remarks say "reserved for external integration"); the other 12 all have production call sites (including the broker publish/consume hops).
 
@@ -397,7 +397,8 @@ For full data, the MediumRun formal baselines, and the historical archive, see [
 
 | Layer | Status | Description |
 |----|:--:|------|
-| PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` globally inherited |
+| PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` globally inherited (excluding Compression.Native) |
+| PalDDD.Compression.Native | ❌ | P/Invoke native binaries (LZ4/ZStandard), explicit `IsAotCompatible=false` |
 | PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | Same as above |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **True AOT** | Source-generated RowFactory/CommandFactory, `PublishAot=true` verification passed ([PalOrmSample](samples/PalDDD.PalOrmSample/)) |
 | PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ Measured | `[module:DapperAot]` enabled — 34 call-site interceptors, three-dialect NativeAOT measured 33/33 (batch EventLog path added 2026-10-21); boundary: bypassing wrappers to raw Dapper API is not AOT-safe |

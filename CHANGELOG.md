@@ -60,6 +60,12 @@
   四栈用例转红，`InboxDeleteAllSubquery` 谓词退回 `status = 2` → 三栈用例转红；
   公共 API 快照零变化。
 
+- **README AOT 虚假声称（2026-11-07 审计后，P1-C）**：
+  特性段称 `PalDDD.Compression.Native`「AOT 安全」，但其 csproj 显式
+  `IsAotCompatible=false`（P/Invoke 原生二进制），AOT 表也未列入 ❌ 行。修复：
+  特性段改「非 AOT——P/Invoke 原生二进制」，AOT 表拆分 Compression（✅，不含 Native）
+  与 Compression.Native（❌）；`README.en.md` 同步。纯文档，无代码/行为变更。
+
 - **Kafka 手动存储模式毒消息冻结 offset 水印（2026-11-06 全量审计 B3，P1）**：
   `EnableAutoOffsetStore=false` 下，消费线程先把每条已交付消息的 offset 播种进 `OffsetTracker`，
   但 `HandleMessageAsync` 的失败路径（handler 抛异常、非关停 OCE、反序列化返回 null）与

@@ -62,7 +62,7 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 **消息版本演化与启动期契约验证**。`MessageEvolutionBuilder` 构建相邻版本逐步升级管线（消费侧显式执行），`AddPalMessageContractVerification` 在启动期校验升级路径完整性（链不完整拒绝启动，抛 `PalPlatformVerificationException`）。序列化可插拔：JSON（AOT 安全，默认）与 MemoryPack（更快，适配层非 AOT）。
 
-**可插拔压缩**。`ICompressionProvider` / `ICompressor` 抽象带两套实现：System 内置压缩与原生 LZ4/ZStandard 绑定（`PalDDD.Compression.Native`，AOT 安全），经 DI 替换。
+**可插拔压缩**。`ICompressionProvider` / `ICompressor` 抽象带两套实现：System 内置压缩与原生 LZ4/ZStandard 绑定（`PalDDD.Compression.Native`，非 AOT——P/Invoke 原生二进制），经 DI 替换。
 
 **内建可观测性**。`PalActivitySource`（14 个 Start 方法）+ `PalMetrics`（32 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测。**14 个 Activity 工厂中有 2 个预留未接线**（`StartCommandDispatch` / `StartSagaTransition`，ITM-627 家族，remarks 声明「保留供外部集成」），其余 12 个均有生产调用点（含 broker 发布/消费两跳）。
 
@@ -393,7 +393,8 @@ dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benc
 
 | 层 | 状态 | 说明 |
 |----|:--:|------|
-| PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` 全局继承 |
+| PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` 全局继承（不含 Compression.Native） |
+| PalDDD.Compression.Native | ❌ | P/Invoke 原生二进制（LZ4/ZStandard），显式 `IsAotCompatible=false` |
 | PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | 同上 |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **真 AOT** | 源生成 RowFactory/CommandFactory，`PublishAot=true` 验证通过（[PalOrmSample](samples/PalDDD.PalOrmSample/)） |
 | PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ 实测 | `[module:DapperAot]` 已启用——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 33/33（2026-10-21 补批量 EventLog 路径）；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持 |
