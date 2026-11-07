@@ -8,7 +8,7 @@
 //   ｜ 标记以确认器实例为 key 存在 ConditionalWeakTable：条目随确认器回收，不泄漏；
 //   ｜ 无需改动 IMessageAck 公共接口，也不给 Kafka 侧引入观察者。
 //   ｜ RabbitMQ 经 PalDDD.Messaging.csproj 的 InternalsVisibleTo 只读本表；Kafka 的
-//   ｜ HandleMessageAsync finally 判据只看 IsSettled，零行为变化。
+//   ｜ HandleMessageAsync finally 判据已并入 IsDeferred 判定（v4 批 A 遗漏，2026-11-07 本轮补）。
 // ─────────────────────────────────────────────────────────────
 using System.Runtime.CompilerServices;
 

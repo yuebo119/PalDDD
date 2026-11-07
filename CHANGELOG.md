@@ -34,6 +34,19 @@
   变异三点红→绿（删 `MarkDeferred`、标记移到 `WriteAsync` 之后、删泵关停 `Reject`）；
   公共 API 快照零变化。
 
+- **勘正（2026-11-07 审计后，P1-A）：Kafka 侧 `finally` 判据须并入 `IsDeferred`**：
+  上一条 B2 条目「Kafka 侧 `finally` 判据只看 `IsSettled`，不读该标记，零行为变化」**失实**——
+  `PalDDD.Messaging.csproj` 的 IVT 同时含 `PalDDD.Messaging.Kafka`（批 A 已加），且批量路径的
+  handler 是 `MessageBatchPump.EnqueueAsync`（只 `MarkDeferred` 不结算），`HandleMessageAsync`
+  的 `finally` 会抢先 `RejectAsync(requeue:false)` 占用 `KafkaMessageAck.TryClaim`，批次侧
+  `AcknowledgeAsync` / `RejectAsync(requeue:true)` 全被拦截：`EnableAutoOffsetStore=false`
+  下失败无法 Seek 重投，消息丢失。修复：判据并入 `!DeferredAckRegistry.IsDeferred(ack)`
+  （与 RabbitMQ 侧四处同构）。验证：新增真容器集成锁定
+  `KafkaBatchAckTests.UncommittedOffset_DoesNotAdvance`（批次未结算时 committed offset 不得前进）/
+  `Requeue_Redelivers` / `DirectSubscribe_Unaffected`（方案验收名为无下划线形态，
+  实际方法名按仓库 `Method_Scenario` 命名规范加下划线）；变异删判据 →
+  `UncommittedOffset_DoesNotAdvance` 转红（committed=1）；公共 API 快照零变化。
+
 - **Kafka 手动存储模式毒消息冻结 offset 水印（2026-11-06 全量审计 B3，P1）**：
   `EnableAutoOffsetStore=false` 下，消费线程先把每条已交付消息的 offset 播种进 `OffsetTracker`，
   但 `HandleMessageAsync` 的失败路径（handler 抛异常、非关停 OCE、反序列化返回 null）与

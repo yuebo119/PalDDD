@@ -867,11 +867,17 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                 finally
                 {
                     // B3（v2 §2.1）：失败路径统一结算，解冻 OffsetTracker 前缀推进。
-                    // 四门控：
+                    // 五门控：
                     //  · manualStore —— 自动存储模式不结算（RejectSkip 本就早退，但 TryClaim
                     //    会置 _settled；门控后零状态变化，保持既有 at-most-once 语义）；
                     //  · ack is { IsSettled: false } —— handler 已显式结算（Ack/Reject/Seek）
                     //    时不覆盖其决定；EOF/tombstone 的 ack=null 由模式匹配天然跳过；
+                    //  · !DeferredAckRegistry.IsDeferred(ack) —— 批量路径已把结算移交批次泵
+                    //    （MessageBatchPump 在入队前同步 MarkDeferred），finally 不抢占：
+                    //    抢先 RejectAsync 会占用 KafkaMessageAck.TryClaim，批次侧
+                    //    AcknowledgeAsync / RejectAsync(requeue:true) 全被拦截，
+                    //    EnableAutoOffsetStore=false 下失败无法 Seek 重投 → 消息丢失。
+                    //    v4 批 A 遗漏此判据（RabbitMQ 侧四处已查），本轮补（2026-11-07 审计 P1-A）；
                     //  · !tokenSnapshot.IsCancellationRequested —— 关停窗口不结算：
                     //    EnqueueAsync 的 WaitAsync(ct) 在已取消 token 上立即抛 OCE，且消费线程
                     //    finally 已放弃队列命令，补结算必然异常逃逸；关停走 at-least-once 重启重放；
@@ -880,7 +886,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                     // 注：handler 成功但未显式结算时补 RejectSkip 与 Acknowledge 等价——两者在
                     // DrainAckCommands（:577-593）走同一分支（前缀推进 + 复位退避），
                     // 因此不会误伤「成功未结算」路径，反而闭合了成功却漏 ack 的推进缺口。
-                    if (manualStore && ack is { IsSettled: false } && !tokenSnapshot.IsCancellationRequested)
+                    if (manualStore && ack is { IsSettled: false } && !DeferredAckRegistry.IsDeferred(ack) && !tokenSnapshot.IsCancellationRequested)
                         await ack.RejectAsync(requeue: false, CancellationToken.None).ConfigureAwait(false);
                 }
             }
