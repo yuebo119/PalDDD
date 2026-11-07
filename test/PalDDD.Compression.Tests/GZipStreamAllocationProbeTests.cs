@@ -44,11 +44,16 @@ public sealed class GZipStreamAllocationProbeTests
         return (GC.GetAllocatedBytesForCurrentThread() - baseline) / iterations;
     }
 
+    // 正向对照的逃逸槽：数组写到静态字段，JIT 才不能把分配当死代码消除。
+    // Linux CI（Release）实测：裸 `_ = new byte[64*1024]` 的返回值被丢弃且未逃逸，
+    // JIT 消除分配使 perOp ≈ 0，仪器自证反而失败（2026-11-07 main CI 实证）。
+    private static byte[]? _positiveControlSink;
+
     [Test]
     public async Task Measure_PositiveControl_ReportsExpectedMagnitude()
     {
         // 仪器自证（对齐 SystemCompressionTests 同款）：必然分配须测出预期量级
-        var perOp = MeasurePerOpAllocation(static () => _ = new byte[64 * 1024], 2_000);
+        var perOp = MeasurePerOpAllocation(() => _positiveControlSink = new byte[64 * 1024], 2_000);
         await Assert.That(perOp > 60 * 1024).IsTrue();
     }
 
