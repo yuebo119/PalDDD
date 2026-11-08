@@ -109,9 +109,20 @@ public sealed class DomainEventOutboxBridge
                 await outboxStore.AddMessageAsync(message, ct).ConfigureAwait(false);
         }
 
-        // 只在写入成功后清理——写入抛异常时事件保留在聚合上，调用方可重试。
+        // FIX-014（2026-11-08）：事件清理移出——调用方在事务提交成功后调用
+        // ClearDomainEvents，避免「outbox 写入成功但提交回滚」时事件丢失（修前在
+        // PersistAsync 内清理，CommitAsync 失败时 outbox 写入回滚但事件已清 → 重试丢事件）。
+        return messages.Count;
+    }
+
+    /// <summary>
+    /// 清理聚合领域事件——调用方在 <c>IUnitOfWork.CommitAsync</c> 成功后调用
+    /// （FIX-014：提交失败回滚时事件保留，重试不丢）。
+    /// </summary>
+    public static void ClearDomainEvents(IReadOnlyList<Entity> aggregates)
+    {
+        ArgumentNullException.ThrowIfNull(aggregates);
         foreach (var aggregate in aggregates)
             aggregate.ClearDomainEvents();
-        return messages.Count;
     }
 }

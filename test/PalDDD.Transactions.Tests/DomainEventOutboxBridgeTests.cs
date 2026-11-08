@@ -15,7 +15,7 @@ public sealed class DomainEventOutboxBridgeTests
         BridgeJsonContext.Default.BridgeEvent, "test.bridge.v1", schemaVersion: 1);
 
     [Test]
-    public async Task PersistAsync_WritesAllEventsAndClearsAggregate()
+    public async Task PersistAsync_WritesAllEvents_DoesNotClearBeforeCommit()
     {
         var store = new InMemoryOutboxStore();
         var bridge = new DomainEventOutboxBridge(new SingleCatalog(Descriptor), new PassthroughSerializer());
@@ -26,11 +26,17 @@ public sealed class DomainEventOutboxBridgeTests
         var written = await bridge.PersistAsync([aggregate], store, CancellationToken.None);
 
         await Assert.That(written).IsEqualTo(2);
-        await Assert.That(aggregate.HasDomainEvents).IsFalse();
+        // FIX-014（2026-11-08）：PersistAsync 不清理事件——提交成功后调用 ClearDomainEvents
+        // （修前 PersistAsync 内清理，CommitAsync 失败回滚时事件丢失）。
+        await Assert.That(aggregate.HasDomainEvents).IsTrue();
         var pending = await store.GetPendingMessagesAsync(10, 100, CancellationToken.None);
         await Assert.That(pending.Count).IsEqualTo(2);
         await Assert.That(pending[0].Type).IsEqualTo(Descriptor.Name);
         await Assert.That(pending[0].Payload.Length).IsGreaterThan(0);
+
+        // 模拟提交成功后清理
+        DomainEventOutboxBridge.ClearDomainEvents([aggregate]);
+        await Assert.That(aggregate.HasDomainEvents).IsFalse();
     }
 
     [Test]

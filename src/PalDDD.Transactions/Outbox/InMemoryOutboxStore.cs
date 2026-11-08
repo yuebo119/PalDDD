@@ -20,6 +20,12 @@ namespace PalDDD.Transactions;
 /// 💡 <b>时间抽象</b>：构造时可选注入 <see cref="TimeProvider"/>（默认 <see cref="TimeProvider.System"/>），
 /// 测试中可传入 <c>FakeTimeProvider</c> 实现确定性租约过期/重试时序，
 /// 与 <c>OutboxBatchProcessor</c>、<c>SagaTimeoutProcessor</c>、<c>OutboxDbContext.GetUtcNow()</c> 的时间抽象设计对齐。
+/// <para>
+/// 💡 <b>Processed 终态例外（FIX-013，2026-11-08）</b>：本栈在 <see cref="MarkProcessedAsync"/>
+/// 移除 Processed 消息（R1 P2-7 性能修复，避免内存无界 + 全表扫描劣化），故
+/// <see cref="GetByStatusAsync"/> 对 <c>Processed</c> 返回空——与持久化栈（保留至 Retention）
+/// 的契约例外，由测试显式断言。
+/// </para>
 /// </remarks>
 public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
 {

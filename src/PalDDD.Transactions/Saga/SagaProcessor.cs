@@ -281,6 +281,10 @@ TState>
             ? await fenceManager.AcquireInvalidationFenceAsync(sagaState.SagaId, ct).ConfigureAwait(false)
             : null)
         {
+            // FIX-015（2026-11-08）：observer/statusBefore 提升到 try 外——catch 分支
+            // （补偿失败终态）也需观察状态变更，与正常路径对齐。
+            var observer = SagaExecutionObserver.Current;
+            var statusBefore = sagaState.Status;
             try
             {
                 // v4 批 D（G2）：超时兜底补偿车道此前零观察者事件——features.md 宣称
@@ -288,8 +292,6 @@ TState>
                 // 无 OnStatusChanged（全仓唯一生产发射点曾是 InterruptStep 挂起）。
                 // 此处补两个观察点，隔离方式与 Saga.cs 的 SafeObserve 族一致：观察者异常
                 // 不得阻断真实补偿（记为 Activity 事件后继续）。
-                var observer = SagaExecutionObserver.Current;
-                var statusBefore = sagaState.Status;
                 await SafeObserveCompensationStartedAsync(
                     observer, sagaState.SagaId, "timeout-compensation", ct).ConfigureAwait(false);
                 await _orchestrator.CompensateAsync(sagaState, ct).ConfigureAwait(false);
@@ -343,6 +345,9 @@ TState>
                 sagaState.Status = SagaStatus.CompensationFailed;
                 sagaState.ErrorAt = now;
                 sagaState.NextCheckAt = null; // M1：终态不再参与超时扫描
+                // FIX-015（2026-11-08）：补偿失败终态补观察（对齐正常路径的状态变更事件）。
+                await SafeObserveStatusChangedAsync(
+                    observer, sagaState.SagaId, statusBefore, SagaStatus.CompensationFailed, ct).ConfigureAwait(false);
             }
         } // 失效栅栏释放：此后到达的决策按「无条目/已失效」可见失败
 

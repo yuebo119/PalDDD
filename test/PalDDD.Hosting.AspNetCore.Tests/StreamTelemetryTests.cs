@@ -201,10 +201,11 @@ public sealed partial class StreamTelemetryTests
         using var failedCounter = new RecordingMeterListener("paldd.stream.failed");
         using var registry = CreateDetachedRegistry(out _);
 
+        // FIX-017（2026-11-08）：Register/Cancel 均需 owner——null-owner run 不可被任意请求取消
         var runId = registry.Register(
-            new DetachedTelemetryQuery("p"), null, null, new DetachedBlockingHandler());
+            new DetachedTelemetryQuery("p"), null, null, new DetachedBlockingHandler(), owner: "test-owner");
         var run = await WaitForDetachedRunAsync(registry, runId);
-        await Assert.That(registry.Cancel(runId)).IsTrue();
+        await Assert.That(registry.Cancel(runId, owner: "test-owner")).IsTrue();
         await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
 
         await Assert.That(run.State).IsEqualTo(StreamRunState.Cancelled);

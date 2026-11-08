@@ -78,6 +78,11 @@ internal sealed class TimeoutBehavior<TRequest, TResponse> : IPipelineBehavior<T
         }
         catch (TimeoutException)
         {
+            // FIX-008（2026-11-08）：handler 自抛 TimeoutException（业务超时）与框架超时会
+            // 同时命中本 catch——running.IsFaulted 为真说明是 handler 失败，原样传播，
+            // 不吞（修前统一转 CreateTimeoutException，丢失 handler 的真实异常类型）。
+            if (running.IsFaulted)
+                return await running.ConfigureAwait(false);
             ObserveFault(running);
             throw CreateTimeoutException();
         }
@@ -92,6 +97,9 @@ internal sealed class TimeoutBehavior<TRequest, TResponse> : IPipelineBehavior<T
         }
         catch (TimeoutException)
         {
+            // FIX-008：同 WaitWithTimeoutAsync——handler 自抛 TimeoutException 原样传播。
+            if (running.IsFaulted)
+                return await running.ConfigureAwait(false);
             ObserveFault(running);
             throw CreateTimeoutException();
         }

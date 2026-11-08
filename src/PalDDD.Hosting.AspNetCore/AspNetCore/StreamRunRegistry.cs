@@ -864,9 +864,10 @@ internal sealed class StreamRunRegistry : IDisposable
         TQuery query,
         Func<TItem, string>? eventSelector,
         Func<TItem, string>? idSelector,
-        IStreamQueryHandler<TQuery, TItem>? handlerOverride = null)
+        IStreamQueryHandler<TQuery, TItem>? handlerOverride = null,
+        string? owner = null)
         where TQuery : IStreamQuery<TItem>
-        => RegisterCore(query, eventSelector, idSelector, handlerOverride, owner: null, startImmediately: true, out _);
+        => RegisterCore(query, eventSelector, idSelector, handlerOverride, owner, startImmediately: true, out _);
 
     /// <summary>
     /// R12 C-11：只创建并登记 run，不启动产出泵。调用方完成附着后再调用
@@ -1069,11 +1070,15 @@ internal sealed class StreamRunRegistry : IDisposable
     }
 
     /// <summary>取消 run（幂等）；未知 run 返回 false。</summary>
-    public bool Cancel(string runId)
+    public bool Cancel(string runId, string? owner = null)
     {
         if (!_runs.TryGetValue(runId, out var run))
             return false;
-        run.Cancel(); // 终态 run 的 Cancel 为 no-op（幂等语义由 204 答复承载）
+        // FIX-017（2026-11-08）：owner 校验——null-owner run 不可被任意请求取消
+        // （无主资源，对齐 TryGetOwned 的「owner 不等即视为不存在」语义）。
+        if (owner is null || !string.Equals(run.Owner, owner, StringComparison.Ordinal))
+            return false;
+        run.Cancel();
         return true;
     }
 

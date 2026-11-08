@@ -49,16 +49,17 @@ public sealed partial class StreamRunRegistryTests
     {
         using var registry = CreateRegistry(out var options);
         options.DetachGrace = TimeSpan.FromSeconds(30);
-        var runId = registry.Register(new RegQuery("p"), null, null, new BlockingHandler());
+        // FIX-017（2026-11-08）：Register/Cancel 均需 owner——null-owner run 不可被任意请求取消
+        var runId = registry.Register(new RegQuery("p"), null, null, new BlockingHandler(), owner: "test-owner");
         _ = await WaitForRunAsync(registry);
 
-        await Assert.That(registry.Cancel(runId)).IsTrue();
+        await Assert.That(registry.Cancel(runId, owner: "test-owner")).IsTrue();
         var run = await WaitForRunAsync(registry, runId);
         await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
 
         await Assert.That(run.State).IsEqualTo(StreamRunState.Cancelled);
         // 幂等：终态再取消仍返回 true（204 语义由端点承载）
-        await Assert.That(registry.Cancel(runId)).IsTrue();
+        await Assert.That(registry.Cancel(runId, owner: "test-owner")).IsTrue();
     }
 
     [Test]

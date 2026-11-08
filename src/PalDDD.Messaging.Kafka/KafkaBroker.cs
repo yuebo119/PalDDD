@@ -839,6 +839,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                 // null/非关停 OCE）此前不结算，而 offset 在消费线程 :532-533 已播种进
                 // OffsetTracker，前缀推进永久卡死（分区消费停摆 + 重启全量重放）。
                 KafkaMessageAck? ack = null;
+                // FIX-009（2026-11-08）：handler 正常返回 = 批量泵已把 item 写入通道；
+                // WriteAsync 失败时未置位，finally 需兜底结算（对齐 Rabbit :635 判据）。
+                var enqueueConfirmed = false;
                 try
                 {
                     // ITM-628 修复：分区 EOF 空消息守卫（EnablePartitionEof=true 时
@@ -875,6 +878,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                         // ADR-039 / 审计 A5：消费跳 span（与发布侧 StartBrokerPublish 配对）
                         using var consumeActivity = PalActivitySource.StartBrokerConsume(topic, descriptor.Name);
                         await handler(message, consumeContext, ack, tokenSnapshot).ConfigureAwait(false);
+                        // FIX-009：handler 正常返回 = item 已入通道（批量泵 WriteAsync 成功）
+                        enqueueConfirmed = true;
                     }
                     else
                     {
@@ -928,7 +933,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                     // 注：handler 成功但未显式结算时补 RejectSkip 与 Acknowledge 等价——两者在
                     // DrainAckCommands（:577-593）走同一分支（前缀推进 + 复位退避），
                     // 因此不会误伤「成功未结算」路径，反而闭合了成功却漏 ack 的推进缺口。
-                    if (manualStore && ack is { IsSettled: false } && !DeferredAckRegistry.IsDeferred(ack) && !tokenSnapshot.IsCancellationRequested)
+                    // FIX-009：判据并入 enqueueConfirmed——WriteAsync 失败时 item 未入通道
+                    // （enqueueConfirmed=false），泵看不到这条 ack，必须由 broker 兜底结算
+                    // （对齐 Rabbit :635 的 !IsDeferred || !enqueueConfirmed 判据）。
+                    if (manualStore && ack is { IsSettled: false } && (!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed) && !tokenSnapshot.IsCancellationRequested)
                         await ack.RejectAsync(requeue: false, CancellationToken.None).ConfigureAwait(false);
                 }
             }

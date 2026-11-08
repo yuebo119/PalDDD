@@ -613,6 +613,16 @@ public sealed class OutboxBatchProcessor
             while (window.Count > 0)
                 await ProcessNextCompletionAsync().ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // FIX-012（2026-11-08）：关停窗口 OCE 不再逃逸出循环骨架（finally 冲刷已执行）。
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // FIX-012：发布同步抛异常（broker 故障）——记录后重抛（保持调用方语义）。
+            _logger.Error(ex, "Outbox batch publish faulted");
+            throw;
+        }
         finally
         {
             completions.Writer.TryComplete();

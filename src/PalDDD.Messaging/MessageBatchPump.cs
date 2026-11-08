@@ -238,6 +238,21 @@ internal static class MessageBatchPump
         }
         finally
         {
+            // FIX-010（2026-11-08）：关停时通道内可能有多条 item 未结算（修前只结算
+            // pendingRead 一条）——全部排空并弃置，与逐条关停语义一致（requeue:false）。
+            while (reader.TryRead(out var item))
+            {
+                if (item.Ack is null)
+                    continue;
+                try
+                {
+                    await item.Ack.RejectAsync(requeue: false, ct: CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is OperationCanceledException or ChannelClosedException or ObjectDisposedException)
+                {
+                    // 关停路径：结算失败不阻止订阅释放。
+                }
+            }
             if (pendingRead is not null)
             {
                 try

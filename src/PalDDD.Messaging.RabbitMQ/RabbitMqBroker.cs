@@ -216,23 +216,27 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
 
         var exchange = descriptor.Name;
-        var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
-
-        // A2：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
-        // using 保证发布抛出后缓冲归还池（池化 writer 无 Clear 复位需求，天然干净入口）
-        using var bodyWriter = new PooledBodyWriter(InitialBodyBufferBytes);
-        Serializer.Serialize(message, descriptor, bodyWriter);
-        // ITM-213 修复（三十二轮）：mandatory:true——无绑定队列时发布抛 PublishException，
-        // 不再静默丢弃（原 mandatory:false 使 Outbox 标记 Processed 但消息实际未路由）。
-        // ITM-639：该语义仅在 channel 启用 publisher confirms（含 confirmation tracking）时
-        // 成立——只有 broker 的 basic.return 被客户端转成 PublishException，mandatory 才真正
-        // 生效。推荐用 RabbitMqBroker.CreateAsync 构造（自动启用）；注入自建 channel 时必须
-        // 自行以 CreateChannelOptions(publisherConfirmationsEnabled:true,
-        // publisherConfirmationTrackingEnabled:true) 创建，否则本 await 会静默"成功"。
+        // FIX-016（2026-11-08）：发布跳 span 提升到 try 外——catch 分支补 SetStatus(Error)，
+        // 让发布失败在 Activity 上可见（修前失败仅记日志/计数器，Activity 恒 Unset）。
+        using var publishActivity = PalActivitySource.StartBrokerPublish(descriptor.Name, descriptor.Name);
+        // FIX-011（2026-11-08）：EnsureExchangeAsync 与 Serialize 移入 try——broker 不可达
+        // （exchange 声明失败）与序列化失败同计 BrokerPublishFailed（修前两者逃逸出 try，
+        // 成为不计数的静默失败）。
         try
         {
-            // ADR-039 / 审计 A5：发布跳 span（与消费侧 StartBrokerConsume 配对）
-            using var publishActivity = PalActivitySource.StartBrokerPublish(descriptor.Name, descriptor.Name);
+            var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
+
+            // A2：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
+            // using 保证发布抛出后缓冲归还池（池化 writer 无 Clear 复位需求，天然干净入口）
+            using var bodyWriter = new PooledBodyWriter(InitialBodyBufferBytes);
+            Serializer.Serialize(message, descriptor, bodyWriter);
+            // ITM-213 修复（三十二轮）：mandatory:true——无绑定队列时发布抛 PublishException，
+            // 不再静默丢弃（原 mandatory:false 使 Outbox 标记 Processed 但消息实际未路由）。
+            // ITM-639：该语义仅在 channel 启用 publisher confirms（含 confirmation tracking）时
+            // 成立——只有 broker 的 basic.return 被客户端转成 PublishException，mandatory 才真正
+            // 生效。推荐用 RabbitMqBroker.CreateAsync 构造（自动启用）；注入自建 channel 时必须
+            // 自行以 CreateChannelOptions(publisherConfirmationsEnabled:true,
+            // publisherConfirmationTrackingEnabled:true) 创建，否则本 await 会静默"成功"。
             await _channel.BasicPublishAsync(
                 exchange: cachedExchange,
                 routingKey: CachedString.Empty,
@@ -251,6 +255,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
                 $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
             // v4 批 D（S3）：发布失败计数器（NO_ROUTE 是丢消息的直接原因，必须可见）
+            publishActivity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }
@@ -260,6 +265,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             // PalDiagnostics.BrokerPublishFailed description「路由失败/连接断/确认失败」与 Kafka
             // 发布 catch 口径。修前仅 catch PublishReturnException，其余发布异常逃逸不计数，
             // 按 description 配「连接断」告警会假阴性。throw 保持调用方重试/Outbox 语义不变。
+            publishActivity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }
@@ -583,6 +589,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 else
                 {
                     // 反序列化返回 null — 消息无法处理，不重试
+                    // FIX-016（2026-11-08）：反序列化 null 按消费失败计（修前漏计）。
+                    PalMetrics.BrokerConsumeFailed.Add(1);
                     _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {queueName}");
                     await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
                 }
