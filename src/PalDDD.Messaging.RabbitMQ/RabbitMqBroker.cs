@@ -601,8 +601,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 // （enqueueConfirmed），结算权归泵的批次收尾，此处跳过以免二次 Nack。
                 // WriteAsync 抛 OCE 时 item 未入通道、泵看不到这条 ack，必须由 broker 兜底
                 // Nack，否则 delivery 恒 unacked 占用 prefetch 名额（红队 A-2 实证）。
-                if (!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed)
-                    await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                // FIX-003：判据经 ShouldFallbackSettle 单一来源（含 IsSettled 判据）。
+                await TrySettleFallbackAsync(
+                    consumerChannel, ea.DeliveryTag, requeue: false, queueName, ack, enqueueConfirmed)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is OperationCanceledException)
             {
@@ -615,10 +617,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 //（与 ITM-008 at-most-once 对齐），消费继续
                 // v4 批 A（B2）：判据同上方的关停分支——已移交且入队确认才交给批次结算。
                 // v4 批 D（S3）：非关停 OCE 按消费失败计（关停窗口不计）
+                // FIX-003：判据经 ShouldFallbackSettle 单一来源（含 IsSettled 判据）。
                 PalMetrics.BrokerConsumeFailed.Add(1);
-                _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, discarding: {queueName}");
-                if (!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed)
-                    await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                _logger.Error(ex, $"Handler for {typeof(TMessage).Name} message threw a non-shutdown OperationCanceledException, discarding: {queueName}");
+                await TrySettleFallbackAsync(
+                    consumerChannel, ea.DeliveryTag, requeue: false, queueName, ack, enqueueConfirmed)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -632,8 +636,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 // v4 批 A（B2）：已移交且入队确认的确认器由泵的批次收尾结算；WriteAsync 抛
                 // ChannelClosedException 等异常时 item 未入通道，必须由 broker 兜底 Nack——
                 // 只查 IsDeferred 会跳过而悬空（v4 §2.1 表 :564 判据的实施轮补强）。
-                if ((!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed) && !ack.IsSettled)
-                    await TryNackSafeAsync(consumerChannel, ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                // FIX-003：判据经 ShouldFallbackSettle 单一来源。
+                await TrySettleFallbackAsync(
+                    consumerChannel, ea.DeliveryTag, requeue: false, queueName, ack, enqueueConfirmed)
+                    .ConfigureAwait(false);
             }
         };
 
@@ -745,6 +751,30 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             _logger.Warning($"BasicNack failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
             MarkChannelFaultIfClosed(channel, ex, queueName);
         }
+    }
+
+    /// <summary>
+    /// FIX-003（2026-11-08 综合审计 P1-3）：broker 兜底结算判据的单一来源——三个 catch
+    /// 分支共用，结构上消除判据分散的遗漏可能。修前关停/非关停 OCE 两 catch 缺
+    /// <c>IsSettled</c> 判据（通用 catch 有），对已结算的 deliveryTag 二次 Nack 会触发
+    /// <c>PRECONDITION_FAILED</c> 关闭 channel，共用该 channel 的全部订阅与发布一并瘫痪。
+    /// </summary>
+    private static bool ShouldFallbackSettle(RabbitMqMessageAck? ack, bool enqueueConfirmed)
+        => ack is not null
+           && !ack.IsSettled
+           && (!DeferredAckRegistry.IsDeferred(ack) || !enqueueConfirmed);
+
+    /// <summary>
+    /// FIX-003：broker 兜底结算的包装——判据经 <see cref="ShouldFallbackSettle"/> 单一来源，
+    /// 检查下沉到本层避免调用点各自重复判据（双保险）。
+    /// </summary>
+    private Task TrySettleFallbackAsync(
+        IChannel channel, ulong deliveryTag, bool requeue, string queueName,
+        RabbitMqMessageAck? ack, bool enqueueConfirmed)
+    {
+        if (!ShouldFallbackSettle(ack, enqueueConfirmed))
+            return Task.CompletedTask;
+        return TryNackSafeAsync(channel, deliveryTag, requeue, queueName);
     }
 
     /// <summary>

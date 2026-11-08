@@ -419,6 +419,12 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         // 项目按资产选择绑定 net10.0 资产，netstandard2.0 资产才声明 public），显式具体类
         // 声明触发 CS0122。Build() 返回值本就是 IConsumer<,>，接口类型声明零行为变化；
         // 下方 KafkaSubscription 构造参数同为 IConsumer<,>。
+        // FIX-002（2026-11-08 综合审计 P1-2）：rebalance 生命周期回调需要 offsetTracker
+        // 与 ackCommands——前移到 ConsumerBuilder 之前声明，回调在 Build 时注册、Consume 时
+        // 触发，届时两者已初始化。
+        var ackCommands = new ConcurrentQueue<AckCommand>();
+        var offsetTracker = new OffsetTracker();
+
         IConsumer<string, byte[]> consumer;
         try
         {
@@ -429,6 +435,28 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                     if (_logger.IsEnabled(LogLevel.Debug)) _logger.Debug($"Kafka consumer statistics: {json}");
                 })
                 .SetLogHandler((_, m) => LogLibrdkafkaLog("consumer", m))
+                // FIX-002：分区生命周期回调——OffsetTracker 的状态必须与分区所有权同步。
+                // 分区被撤销/丢失时作废其水印状态（下次分配以新起点重新初始化），否则
+                // rebalance 后新起点 > 旧 Next 时 Done.Remove(Next) 恒失败，位点永久卡住。
+                // 未结算的 ack 命令无需显式清理：分区移除后 OffsetTracker.Ack 早退返回 null，
+                // 命令自然出队跳过 offset 存储（消息按 at-least-once 重投）。
+                .SetPartitionsAssignedHandler((_, partitions) =>
+                {
+                    foreach (var p in partitions)
+                        offsetTracker.Reset(p);
+                })
+                // Revoked/Lost 的元素是 TopicPartitionOffset（Assigned 是 TopicPartition）——
+                // 取 .TopicPartition 归一后重置。
+                .SetPartitionsRevokedHandler((_, partitions) =>
+                {
+                    foreach (var p in partitions)
+                        offsetTracker.Reset(p.TopicPartition);
+                })
+                .SetPartitionsLostHandler((_, partitions) =>
+                {
+                    foreach (var p in partitions)
+                        offsetTracker.Reset(p.TopicPartition);
+                })
                 .Build();
         }
         catch
@@ -517,23 +545,25 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                 + (manualCommit ? " (auto commit disabled: each acknowledge issues an explicit Commit)" : ""));
         }
 
-        // 单读者命令队列：worker 线程入队，消费线程出队执行（IConsumer 非线程安全）。
-        var ackCommands = new ConcurrentQueue<AckCommand>();
-        var offsetTracker = new OffsetTracker();
+        // FIX-002：ackCommands/offsetTracker 已前移至 ConsumerBuilder 之前（回调捕获需要）。
         // Seek 退避：批 A 风险项「seek 后立即重新 poll 同一批」的紧循环防线。指数增长到 5s，
         // 有进展（确认/跳过）即复位。本状态只在消费线程读写，无需同步。
         var consecutiveSeeks = 0;
         var backoffUntilTimestamp = 0L;
 
-        var channel = Channel.CreateUnbounded<ConsumeResult<string, byte[]>>(
-            new UnboundedChannelOptions
+        // FIX-001（2026-11-08 综合审计 P1-1）：有界 channel 替代 slots——消费线程写入永不
+        // 无限阻塞（TryWrite 失败即等待可写或超时后回顶部排空 ack），从根上切断「ack 排空
+        // 依赖 slot 释放」的循环等待（原实现 maxConcurrent=1 + handler 结算慢时死锁：
+        // handler 等 ack 排空 → 消费线程等 worker ReadAsync → worker 等 handler 完成）。
+        // channel 容量 = maxConcurrent，与原 slots 容量一致；worker 侧 inFlight 保留并发
+        // 控制，两者不重叠。
+        var channel = Channel.CreateBounded<ConsumeResult<string, byte[]>>(
+            new BoundedChannelOptions(maxConcurrent)
             {
+                FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
                 SingleWriter = true
             });
-        // 专用线程上的同步背压：Wait(token) 阻塞本线程而不占用线程池；worker 读到消息即释放
-        // 一个槽位。槽位数 = 并发 handler 上限（默认 1 = 最多 1 处理中 + 1 排队）。
-        var slots = new SemaphoreSlim(maxConcurrent, maxConcurrent);
         var producerCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         // F1（2026-11-08）：排空者退出信号。必须在消费线程 finally 的最终排空**之前**置位，
         // 供 KafkaMessageAck.EnqueueAsync 判定「此后入队的确认命令已无人应用」，结算转尽力而为。
@@ -542,6 +572,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         {
             try
             {
+                // FIX-001：pending 保留未写入 channel 的消息，TryWrite 失败时不丢失。
+                ConsumeResult<string, byte[]>? pending = null;
                 while (!tokenSnapshot.IsCancellationRequested)
                 {
                     // 1. 应用 worker 回送的确认命令（只有本线程可以碰 IConsumer）。
@@ -550,50 +582,52 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                     //    不退避就是无上限紧循环（CPU 打满 + 刷日志）。
                     WaitSeekBackoff();
 
-                    ConsumeResult<string, byte[]>? consumed;
-                    try
+                    if (pending is null)
                     {
-                        // 批次 A：带超时轮询替换无限期阻塞——两次 poll 之间才有机会应用确认命令
-                        // （无限期阻塞时确认要等到下一条消息到达才生效，空闲流上永不生效）。
-                        // 有消息时立即返回，消息到达延迟不受影响。
-                        consumed = consumer.Consume(TimeSpan.FromMilliseconds(PollIntervalMilliseconds));
+                        ConsumeResult<string, byte[]>? consumed;
+                        try
+                        {
+                            // 批次 A：带超时轮询替换无限期阻塞——两次 poll 之间才有机会应用确认命令
+                            // （无限期阻塞时确认要等到下一条消息到达才生效，空闲流上永不生效）。
+                            // 有消息时立即返回，消息到达延迟不受影响。
+                            consumed = consumer.Consume(TimeSpan.FromMilliseconds(PollIntervalMilliseconds));
+                        }
+                        catch (OperationCanceledException) when (tokenSnapshot.IsCancellationRequested)
+                        {
+                            break; // 正常取消
+                        }
+                        catch (ConsumeException ex)
+                        {
+                            // 消费错误：记录后继续下一条（ITM-008）。EnableAutoCommit 默认 true——
+                            // 失败消息 offset 照常提交，本路径为 at-most-once（与既有语义一致）。
+                            _logger.Error(ex, $"Kafka consume error on {topic} @ {_consumerConfig.GroupId}, continuing consumption");
+                            // 退避防止持续错误 CPU 空转；专用线程阻塞 1s 不影响线程池。
+                            Thread.Sleep(TimeSpan.FromSeconds(1));
+                            continue;
+                        }
+
+                        if (consumed is null)
+                            continue; // poll 超时：回到循环顶部继续应用确认命令
+
+                        // EOF（Message==null）与 tombstone（Value==null）不是可确认的消息——
+                        // 不进入 offset 跟踪，否则会把 EOF 的哨兵 offset 记成「下一个待消费位点」。
+                        if (manualStore && consumed.Message is not null && consumed.Message.Value is not null)
+                            offsetTracker.Consumed(consumed.TopicPartition, consumed.Offset.Value);
+
+                        pending = consumed;
                     }
-                    catch (OperationCanceledException) when (tokenSnapshot.IsCancellationRequested)
+
+                    if (!channel.Writer.TryWrite(pending))
                     {
-                        break; // 正常取消
-                    }
-                    catch (ConsumeException ex)
-                    {
-                        // 消费错误：记录后继续下一条（ITM-008）。EnableAutoCommit 默认 true——
-                        // 失败消息 offset 照常提交，本路径为 at-most-once（与既有语义一致）。
-                        _logger.Error(ex, $"Kafka consume error on {topic} @ {_consumerConfig.GroupId}, continuing consumption");
-                        // 退避防止持续错误 CPU 空转；专用线程阻塞 1s 不影响线程池。
-                        Thread.Sleep(TimeSpan.FromSeconds(1));
+                        // channel 满（inFlight 已达上限）：等待可写或超时。超时回顶部排空 ack
+                        // ——这是死锁根治的关键：消费线程永不无限阻塞，ack 应用周期执行。
+                        // 用可中断等待而非 WaitToWriteAsync——BCL 的 ChannelWriter 无
+                        // (TimeSpan, CancellationToken) 重载，且纯等待不感知 worker 进度；
+                        // 100ms 后回顶部排空 ack（与 WaitSeekBackoff 同形态）。
+                        tokenSnapshot.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(PollIntervalMilliseconds));
                         continue;
                     }
-
-                    if (consumed is null)
-                        continue; // poll 超时：回到循环顶部继续应用确认命令
-
-                    // EOF（Message==null）与 tombstone（Value==null）不是可确认的消息——
-                    // 不进入 offset 跟踪，否则会把 EOF 的哨兵 offset 记成「下一个待消费位点」。
-                    if (manualStore && consumed.Message is not null && consumed.Message.Value is not null)
-                        offsetTracker.Consumed(consumed.TopicPartition, consumed.Offset.Value);
-
-                    try
-                    {
-                        slots.Wait(tokenSnapshot);
-                    }
-                    catch (OperationCanceledException) when (tokenSnapshot.IsCancellationRequested)
-                    {
-                        break;
-                    }
-
-                    if (!channel.Writer.TryWrite(consumed))
-                    {
-                        slots.Release();
-                        break;
-                    }
+                    pending = null; // 写入成功，清空待重试
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -711,7 +745,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                 while (!tokenSnapshot.IsCancellationRequested)
                 {
                     var result = await channel.Reader.ReadAsync(tokenSnapshot).ConfigureAwait(false);
-                    slots.Release();
+                    // FIX-001：slots.Release() 已移除——channel 容量本身承载并发限流语义。
 
                     var handlerTask = HandleMessageAsync(result);
                     if (maxConcurrent == 1)
@@ -1068,8 +1102,13 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
     /// <para>
     /// 只在手动存储模式启用（自动模式下确认动作本身是空操作）。
     /// </para>
+    /// <para>
+    /// FIX-002（2026-11-08）：<see cref="Reset"/> 由分区生命周期回调
+    /// （SetPartitionsAssigned/Revoked/Lost）调用——状态与分区所有权同步，rebalance 后
+    /// 新起点 &gt; 旧 Next 时不再卡死。internal（非 private）供集成测试直接锁定 Reset 语义。
+    /// </para>
     /// </remarks>
-    private sealed class OffsetTracker
+    internal sealed class OffsetTracker
     {
         private sealed class Partition(long next)
         {

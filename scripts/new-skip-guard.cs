@@ -11,9 +11,11 @@
 //
 // 判定（净增口径）：
 //   拦截：暂存集 test/**.cs 的 unified diff 中，含 Skip 标注的新增行数 > 删除行数。
-//         Skip 形态四种：[Skip("…")]（TUnit attribute）· Skip = "…" ·
-//         .Skip("…")（Assert.Skip）· Skip.If( —— 注意 LINQ 的 events.Skip(1)
-//         是序列分片不是测试跳过，形态 3 要求引号实参故零误伤。
+//         Skip 形态：[Skip("…")]（TUnit attribute）· Skip = "…" ·
+//         .Skip("…")（Assert.Skip）· Skip.Test( / Skip.Unless( / Skip.When(
+//         （TUnit.Core.Skip 的全部条件跳过成员，2026-11-08 FIX-004 补全）——
+//         注意 LINQ 的 events.Skip(1) 是序列分片不是测试跳过，形态 3 要求引号实参故零误伤；
+//         Skip.If 不是 TUnit 形态（TUnit 用 Skip.When），不拦截。
 //   放行：① 净增 ≤ 0（修改既有 Skip 的 reason / 删除 Skip 均放行——修绿的反向是好事）；
 //         ② 显式豁免 ALLOW_NEW_SKIP=1（flaky 排查等正当场景，commit message 须写
 //            理由与到期日——对齐 TechDebtGuardTests T-24 观察态纪律：无到期日的临时
@@ -168,13 +170,16 @@ static int SelfTest()
         "-[Skip(\"a\")]\n" +
         "+[Skip(\"b\")]\n" +
         "+[Skip(\"c\")]\n" +
-        "+Skip.If(true, \"d\");\n";
+        "+Skip.Test(\"d\");\n";
     var (netE, _) = SkipLogic.Tally(expand);
     Case("拦截：删 1 加 3 净增 2", netE == 2 && SkipLogic.Decide(netE, [], false).Block);
 
-    // 形态精度：LINQ .Skip(1) 与 SkipIf 变量实参不误伤
+    // 形态精度：LINQ .Skip(1) 与 Skip.If（非 TUnit 形态）不误伤
     Case("形态：LINQ .Skip(1) 不算 Skip 标注", !SkipLogic.HasSkipMark("foreach (var e in events.Skip(1))"));
-    Case("形态：Skip.If( 拦截", SkipLogic.HasSkipMark("Skip.If(!hasDocker, \"需要容器\");"));
+    Case("形态：Skip.Test( 拦截", SkipLogic.HasSkipMark("Skip.Test(\"环境不可用\");"));
+    Case("形态：Skip.Unless( 拦截", SkipLogic.HasSkipMark("Skip.Unless(!hasDocker, \"需要容器\");"));
+    Case("形态：Skip.When( 拦截", SkipLogic.HasSkipMark("Skip.When(!hasDocker, \"需要容器\");"));
+    Case("形态：Skip.If( 不误伤（非 TUnit 形态）", !SkipLogic.HasSkipMark("Skip.If(!hasDocker, \"其他框架\");"));
     Case("形态：Skip = \"...\" 拦截", SkipLogic.HasSkipMark("Skip = \"实验性方言\";"));
     Case("形态：整行注释忽略", !SkipLogic.HasSkipMark("    // [Skip(\"历史\")](已移除)"));
     var mdTally = SkipLogic.Tally("diff --git a/docs/x.md b/docs/x.md\n+++ b/docs/x.md\n+[Skip(\"...\")]\n");
@@ -193,8 +198,16 @@ internal static partial class SkipLogic
 {
     // Skip 标注四形态。LinQ 的 .Skip(1) 被形态 3 的引号实参要求排除。
     // GeneratedRegex（源生成）而非运行时反射构造——AOT/启动成本双重友好。
-    [GeneratedRegex(@"\[Skip\b|Skip\s*=\s*[""']|\.Skip\s*\(\s*[""']|\bSkip\.If\s*\(")]
+    [GeneratedRegex(@"\[Skip\b|Skip\s*=\s*[""']|\.Skip\s*\(\s*[""']|\bSkip\.(?:Test|Unless|When)\s*\(")]
     public static partial Regex SkipMarkRegex();
+
+    /// <summary>
+    /// 环境性真库测试的 Skip 标注（reason 含 <c>PALDDD_TEST_</c>）——FIX-006 豁免：
+    /// 这类 Skip 是「环境未配置」的正常运行时状态（真库测试纳入 skipped 计数），
+    /// 不是「以 Skip 修绿」。判据用 reason 里的环境变量名，误用风险由人工 review 兜底。
+    /// </summary>
+    public static bool IsEnvironmentalSkip(string line)
+        => line.Contains("PALDDD_TEST_", StringComparison.Ordinal);
 
     /// <summary>一行代码是否含 Skip 标注。剥除行内 // 之后文本（URL 中的 // 会提前截断，
     /// 漏报方向安全）；以 // 或 * 开头的整行注释直接忽略。</summary>
@@ -243,12 +256,15 @@ internal static partial class SkipLogic
                 continue;
             if (raw.StartsWith('+'))
             {
-                if (HasSkipMark(raw[1..])) { added++; marks.Add(new SkipMark(file, lineNo, raw[1..])); }
+                if (HasSkipMark(raw[1..]) && !IsEnvironmentalSkip(raw[1..]))
+                {
+                    added++; marks.Add(new SkipMark(file, lineNo, raw[1..]));
+                }
                 lineNo++;
             }
             else if (raw.StartsWith('-'))
             {
-                if (HasSkipMark(raw[1..])) removed++;
+                if (HasSkipMark(raw[1..]) && !IsEnvironmentalSkip(raw[1..])) removed++;
             }
         }
         return (added - removed, marks);

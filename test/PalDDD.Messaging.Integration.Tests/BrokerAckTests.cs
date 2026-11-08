@@ -989,4 +989,58 @@ public sealed class RabbitAckTests
         await Assert.That(received.Count).IsEqualTo(batchSize);
         await Assert.That(logger.WarningCount).IsEqualTo(0);
     }
+
+    /// <summary>
+    /// FIX-003（2026-11-08 综合审计 P1-3）锁定：handler 结算后抛 OCE，broker 不得二次 Nack。
+    /// <para>
+    /// 修前机制：关停/非关停 OCE 两 catch 缺 <c>IsSettled</c> 判据，对已结算的 deliveryTag
+    /// 二次 BasicNack → <c>PRECONDITION_FAILED</c> 关 channel，共用该 channel 的全部订阅与
+    /// 发布一并瘫痪。修后：<c>ShouldFallbackSettle</c> 单一判据（含 IsSettled）+
+    /// <c>TrySettleFallbackAsync</c> 下沉。
+    /// </para>
+    /// <para>
+    /// 观测口径：handler 显式 <c>AcknowledgeAsync</c> 后抛非关停 OCE；channel 必须存活
+    /// （第二条消息仍被消费）且无 Warning。修前二次 Nack 关 channel → 第二条永不投递。
+    /// </para>
+    /// <para>
+    /// 变异限制（2026-11-09 实测）：移除 <c>ShouldFallbackSettle</c> 的 <c>IsSettled</c>
+    /// 判据后本用例仍绿——当前 RabbitMQ 4.x 对已结算 deliveryTag 的二次 BasicNack 不抛异常
+    /// （不关 channel、不记 Warning），故 channel 存活口径无法分辨判据有无。判据的价值是
+    /// 避免无意义的二次 Nack（协议正确性），其可观测差异需 mock channel 断言 BasicNack
+    /// 调用次数（当前 broker 内部创建 channel，无注入点，属后续加固项）。
+    /// </para>
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task HandlerSettlesThenThrowsOce_ChannelSurvives(CancellationToken cancellationToken)
+    {
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger);
+        await using var broker = created.Item1;
+
+        var p1 = $"rmq-fix003-1-{Guid.NewGuid():N}";
+        var p2 = $"rmq-fix003-2-{Guid.NewGuid():N}";
+        var secondHandled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var count = 0;
+
+        await using var sub = await broker.SubscribeAsync<TestMessage>(async (msg, _, ack, ct) =>
+        {
+            await ack.AcknowledgeAsync(ct); // handler 显式结算
+            if (Interlocked.Increment(ref count) >= 2)
+                secondHandled.TrySetResult();
+            // 结算后抛非关停 OCE：走「非关停 OCE」catch（linkedCts 未取消）
+            throw new OperationCanceledException("non-shutdown OCE after settle");
+        }, cancellationToken);
+
+        await broker.PublishAsync(new TestMessage(p1), cancellationToken);
+        await broker.PublishAsync(new TestMessage(p2), cancellationToken);
+
+        // 修前：第一条结算后二次 Nack → channel 关闭 → 第二条永不投递（超时转红）。
+        // 修后：channel 存活，第二条投递；无二次 Nack 的 Warning。
+        // 注：handler 抛非关停 OCE 按设计记 Error（BrokerConsumeFailed 计数），故不断言 ErrorCount。
+        await secondHandled.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await Assert.That(Volatile.Read(ref count)).IsEqualTo(2);
+        await Assert.That(logger.WarningCount).IsEqualTo(0)
+            .Because($"二次 Nack 触发 channel 关闭：{logger.RecentWarningsSummary}");
+    }
 }

@@ -315,6 +315,56 @@ public sealed class KafkaBatchAckTests
             .Because("drainer 放弃分支至少记一条 Warning");
     }
 
+    /// <summary>
+    /// FIX-001（2026-11-08 综合审计 P1-1）锁定：maxConcurrent=1 + 慢 handler + 积压多条时不死锁。
+    /// <para>
+    /// 修前机制：<c>slots.Wait</c> 无超时，消费线程被「已 TryWrite 未被 ReadAsync」的消息占用
+    /// slot 后阻塞，无法执行循环顶部的 <c>DrainAckCommands</c>；handler 等 ack 排空，三者循环
+    /// 等待（消费线程等 worker ReadAsync、worker 等 handler 完成、handler 等 ack）。
+    /// 修后：有界 channel + 非阻塞 TryWrite，channel 满时等待 100ms 后回顶部排空 ack。
+    /// </para>
+    /// <para>
+    /// 观测口径：5 条消息在 60s 内全部消费完成。修前第 2 条起消费线程阻塞在 slots.Wait，
+    /// 永不完成（超时转红）。
+    /// </para>
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task SlowHandlerWithConcurrency1_DoesNotDeadlock(CancellationToken cancellationToken)
+    {
+        const int total = 5;
+        var topic = NewTopic("kafka-fix001-deadlock");
+        var prefix = $"fix001-{Guid.NewGuid():N}";
+        var logger = new CapturingLogger<KafkaBroker>();
+        var created = CreateBroker(topic, $"paldd-fix001-{Guid.NewGuid():N}", logger, enableAutoCommit: false);
+        await using var broker = created.Broker;
+
+        var allHandled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var count = 0;
+
+        // ConsumerDispatchConcurrency 默认 1（ConsumerDispatchConcurrency=1）
+        await using var sub = await broker.SubscribeAsync<TestMessage>(async (msg, _, ack, ct) =>
+        {
+            // 慢 handler：ack 结算晚于消费线程第 3 次 Wait 阻塞的时刻
+            await Task.Delay(TimeSpan.FromMilliseconds(300), ct);
+            await ack.AcknowledgeAsync(ct);
+            if (Interlocked.Increment(ref count) >= total)
+                allHandled.TrySetResult();
+        }, cancellationToken);
+
+        for (var i = 0; i < total; i++)
+            await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
+
+        await allHandled.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
+        await Assert.That(Volatile.Read(ref count)).IsEqualTo(total);
+    }
+
+    // FIX-002（2026-11-08 综合审计 P1-2）的真容器 rebalance 锁定测试（双 consumer 同组、
+    // 单分区撤销→重新分配）经两轮实跑均因 rebalance 时机不可控而超时（A 被踢出后 B 未拿到
+    // 分区，或 A 未重新拿回），不稳定。核心机制改由 KafkaOffsetTrackerTests 单元锁定
+    // （Reset 后前进型 rebalance 的位点推进 + 不 Reset 的对照），回调接线由
+    // ArchitectureBoundaryTests 的源码扫描验证。本处不再保留 flaky 用例。
+
     private static string NewTopic(string prefix)
         // Kafka topic 名上限 249 字符且只允许 [a-zA-Z0-9._-]；Guid N 形足够唯一。
         => $"{prefix}-{Guid.NewGuid():N}";

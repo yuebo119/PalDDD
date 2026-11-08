@@ -113,7 +113,7 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     // （删 1 加 1 改 reason = 净 0 放行）。**不覆盖**：字符串字面量内的 Skip 文本
     // （元测试形态，diff 对称与豁免兜底）；行内 // 剥除的漏报路径（方向安全）——
     // 由 --selftest 的 13 断言覆盖。
-    ["new-skip-guard"] = "test/**.cs 新增 Skip 标注四形态（[Skip( / Skip = \" / .Skip(\" / Skip.If(）净增拦截；干净文件放行；删 1 加 1 的 reason 修改放行（对称判定，防搬掩护洗白）；LINQ .Skip(1) 不误伤；**不覆盖**：字符串字面量内 Skip 文本（豁免兜底）",
+    ["new-skip-guard"] = "test/**.cs 新增 Skip 标注形态（[Skip( / Skip = \" / .Skip(\" / Skip.Test( / Skip.Unless( / Skip.When(）净增拦截；干净文件放行；删 1 加 1 的 reason 修改放行（对称判定，防搬掩护洗白）；LINQ .Skip(1) 与 Skip.If（非 TUnit 形态）不误伤；**不覆盖**：字符串字面量内 Skip 文本（豁免兜底）",
     ["changelog-check"] = "隔离探针覆盖两极：目标版本对账失配（顶部段 ≠ props/参数版本）必红（C6，2026-10-26 接线 release.yml 后的阻断形态）/ 干净 CHANGELOG 放行必绿（负向对照，防恒红）；**不覆盖**：C8 tag 提交日比对（夹具无 tag——由真实仓库 v* tag 的本地/CI 运行承担）、C1–C5 既有检查（生产运行多月，selftest 16 断言另覆盖 C6–C10 判定函数）",
     ["perf-registry-check"] = "bench/bench-registry.json ↔ --list flat 的类/方法/case/profile/预算/重复跑类/过滤器方法对账（--from-flat 隔离探针）；**不覆盖**：真实 bench 工程构建与 Program.cs 接线（由 eps-perf-check 与 CI 构建承担）",
 };

@@ -184,6 +184,22 @@ public sealed class ArchitectureBoundaryTests
         await Assert.That(File.Exists(eventFilterPath)).IsFalse();
     }
 
+    /// <summary>
+    /// FIX-002（2026-11-08 综合审计 P1-2）：KafkaBroker 必须接线分区生命周期回调——
+    /// OffsetTracker 的状态与分区所有权同步，rebalance 后新起点 &gt; 旧 Next 不再卡死。
+    /// 真容器 rebalance 用例因时机不可控不稳定（两轮实跑超时），改由本源码扫描锁接线 +
+    /// KafkaOffsetTrackerTests 单元锁 Reset 语义。
+    /// </summary>
+    [Test]
+    public async Task KafkaBroker_WiresPartitionLifecycleCallbacks()
+    {
+        var source = ReadSource("src/PalDDD.Messaging.Kafka/KafkaBroker.cs");
+        await Assert.That(source).Contains("SetPartitionsAssignedHandler");
+        await Assert.That(source).Contains("SetPartitionsRevokedHandler");
+        await Assert.That(source).Contains("SetPartitionsLostHandler");
+        await Assert.That(source).Contains("offsetTracker.Reset");
+    }
+
     [Test]
     public async Task RepositoryLayer_DoesNotExposeGenericRepositoryAbstraction()
     {

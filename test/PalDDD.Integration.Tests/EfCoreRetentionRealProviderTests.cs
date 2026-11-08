@@ -10,8 +10,9 @@ namespace PalDDD.Integration.Tests;
 
 /// <summary>
 /// T2（基础库优化清单）：EfCoreRetentionStore 在真实 PG/MySQL 上的端到端删除。
-/// 通过 PALDDD_TEST_PG / PALDDD_TEST_MYSQL 环境变量启用；未设置时打印说明并返回，
-/// 不写 Skip 标注（new-skip-guard 口径）。临时表随会话结束消失，不污染库。
+/// 通过 PALDDD_TEST_PG / PALDDD_TEST_MYSQL 环境变量启用；未设置时 <c>Skip.Test</c>
+/// （FIX-006：环境性真库测试纳入 skipped 计数，不再静默早退计入通过；new-skip-guard
+/// 对 reason 含 <c>PALDDD_TEST_</c> 的标注豁免）。临时表随会话结束消失，不污染库。
 /// </summary>
 public sealed class EfCoreRetentionRealProviderTests
 {
@@ -24,7 +25,7 @@ public sealed class EfCoreRetentionRealProviderTests
         var connectionString = Environment.GetEnvironmentVariable("PALDDD_TEST_PG");
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            Console.WriteLine("[skip] PALDDD_TEST_PG 未设置；PG 真库保留清理未执行。");
+            Skip.Test("PALDDD_TEST_PG 未设置；PG 真库保留清理未执行。");
             return;
         }
 
@@ -63,7 +64,7 @@ public sealed class EfCoreRetentionRealProviderTests
         var connectionString = Environment.GetEnvironmentVariable("PALDDD_TEST_MYSQL");
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            Console.WriteLine("[skip] PALDDD_TEST_MYSQL 未设置；MySQL 真库保留清理未执行。");
+            Skip.Test("PALDDD_TEST_MYSQL 未设置；MySQL 真库保留清理未执行。");
             return;
         }
 

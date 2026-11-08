@@ -134,7 +134,9 @@ jobs:
             # （运行时环境性跳过不进源码，天然在拦截面之外）。
             # 尽力提取：无命中记 0，不做硬断言。grep 空命中 exit 1 由 || true 兜底
             # （本步 set -euo pipefail，赋值命令替换失败会中断整个步骤）。
-            s=$(grep -oE 'Skipped: [0-9]+' "ci-test-results/$base.log" 2>/dev/null \
+            # FIX-005（2026-11-08）：TUnit/MTP 中文日志输出「已跳过: N」，原 grep 'Skipped:'
+            # （英文格式）恒不命中 → skipped 恒 0，面板失真。改中文格式。
+            s=$(grep -oE '已跳过: [0-9]+' "ci-test-results/$base.log" 2>/dev/null \
                 | grep -oE '[0-9]+' | awk '{t+=$1} END{print t+0}' || true)
             skipped=$((skipped + ${s:-0}))
             code=$(cat "ci-test-results/$base.exit" 2>/dev/null || echo "missing")

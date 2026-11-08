@@ -132,7 +132,7 @@ public sealed class DapperBulkCopyTests
         var connectionString = Environment.GetEnvironmentVariable("PALDDD_TEST_MYSQL");
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            Console.WriteLine("[skip] PALDDD_TEST_MYSQL 未设置；MySQL BulkCopy 原子性未执行。");
+            Skip.Test("PALDDD_TEST_MYSQL 未设置；MySQL BulkCopy 原子性未执行。");
             return;
         }
 
