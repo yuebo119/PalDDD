@@ -886,8 +886,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                     //    EnableAutoOffsetStore=false 下失败无法 Seek 重投 → 消息丢失。
                     //    v4 批 A 遗漏此判据（RabbitMQ 侧四处已查），本轮补（2026-11-07 审计 P1-A）；
                     //  · !tokenSnapshot.IsCancellationRequested —— 关停窗口不结算：
-                    //    EnqueueAsync 的 WaitAsync(ct) 在已取消 token 上立即抛 OCE，且消费线程
-                    //    finally 已放弃队列命令，补结算必然异常逃逸；关停走 at-least-once 重启重放；
+                    //    F1 勘正（2026-11-08）：补结算不再必然异常逃逸——drainerStopped 置位后
+                    //    EnqueueAsync 自行收尾并记 Warning（结算被放弃、offset 未存储）；关停
+                    //    仍走 at-least-once 重启重放，结论不变而理由随 F1 修复同步；
                     //  · CancellationToken.None —— finally 结算不受外部取消打断，消费线程
                     //    Consume(100ms) 每轮排空命令，100ms 内落地。
                     // 注：handler 成功但未显式结算时补 RejectSkip 与 Acknowledge 等价——两者在
@@ -1024,13 +1025,18 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         {
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             queue.Enqueue(new AckCommand(kind, offset, completion));
-            // F1（2026-11-08）：排空者（消费线程）已退出时，本命令无人应用——结算转尽力而为，
-            // 自行收尾而非死等。修前此处仅 WaitAsync(ct)，批量泵关停用 ct=None 补结算且 inner
-            // 已先释放（排空者已死）时永久挂起孤儿 TCS，DisposeAsync 死锁。信号先于最终排空置位
-            // （见消费线程 finally），检查晚于入队，故「未置位 ⇒ 入队早于排空 ⇒ 必被排空」无竞态。
-            // 未存储的 offset 重启重放，是 at-least-once 的预期结果，不推进水印。
+            // F1 完善（2026-11-08）：排空者（消费线程）已退出时，本命令无人应用——结算转尽力而为，
+            // 自行收尾而非死等，并记 Warning 使「静默成功」可观测。修前此处仅 WaitAsync(ct)，
+            // 批量泵关停用 ct=None 补结算且 inner 已先释放（排空者已死）时永久挂起孤儿 TCS，
+            // DisposeAsync 死锁。信号先于最终排空置位（见消费线程 finally），检查晚于入队，
+            // 故「未置位 ⇒ 入队早于排空 ⇒ 必被排空」无竞态。
+            // 未存储的 offset 重启重放，是 at-least-once 的预期结果，不推进水印；调用方通过
+            // 本 Warning 得知结算未生效，与消费线程意外终止的 broker 级健康态互补。
             if (drainerStopped.IsCompleted)
             {
+                logger.Warning(
+                    $"Kafka settlement abandoned (consumer thread stopped, offset not stored): " +
+                    $"{kind} @ {offset} — redelivery after restart is expected (at-least-once)");
                 completion.TrySetResult();
                 return;
             }

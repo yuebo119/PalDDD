@@ -52,8 +52,10 @@ public sealed class KafkaBatchAckTests
     /// 前进到消息位点 +1；修复后 finally 跳过，committed offset 保持 -1001（无提交）。
     /// </para>
     /// <para>
-    /// 为什么不能用「重启后是否重投」：关停时 MessageBatchPump 的 OCE 分支会对当前批补
-    /// RejectAsync(requeue:false)，两条路径都会推进 offset，关停后观测无法区分。
+    /// F1 勘正（2026-11-08）：关停时 MessageBatchPump 的 OCE 分支仍会补
+    /// RejectAsync(requeue:false)，但 inner 已先释放使排空者退出，该结算由 broker 的
+    /// drainer 放弃分支收尾——不推进 offset、记 Warning。故不能用关停后是否重投来区分：
+    /// 两条路径都保留重放语义，观测口径上调 committed offset 才是可分辨信号。
     /// </para>
     /// </summary>
     [Test]
@@ -264,6 +266,53 @@ public sealed class KafkaBatchAckTests
         await Assert.That(winner).IsSameReferenceAs(disposeTask)
             .Because("批次在途时释放订阅永久挂起：inner 先杀排空者，泵关停补结算入队孤儿 TCS 死锁");
         await disposeTask;
+    }
+
+    /// <summary>
+    /// F1 完善（2026-11-08）锁定：排空者退出后的结算必须「可观测」，不得静默成功。
+    /// <para>
+    /// 批次在途时释放订阅：inner 先释放使消费线程退出、drainerStopped 置位，泵随后用
+    /// <c>ct=None</c> 补结算，必然落入 drainer 放弃分支。修前永久挂起；F1 初修后
+    /// 「静默成功、不存储 offset」；本轮完善后必须限时完成释放并记一条 Warning
+    /// （含 offset 未存储、重启重放预期）。变异删 Warning → 下方断言转红。
+    /// </para>
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task SettlementAfterDrainerStopped_IsObservable_NotSilentSuccess(CancellationToken cancellationToken)
+    {
+        var topic = NewTopic("kafka-settle-after-drainer");
+        var payload = $"settle-after-drainer-{Guid.NewGuid():N}";
+        var logger = new CapturingLogger<KafkaBroker>();
+        var created = CreateBroker(topic, $"paldd-settle-after-drainer-{Guid.NewGuid():N}", logger, enableAutoCommit: false);
+        await using var broker = created.Broker;
+        var handlerEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var sub = await broker.SubscribeBatchAsync<TestMessage>(
+            async (batch, ack, ct) =>
+            {
+                if (batch.Any(m => m.Message.Name == payload))
+                {
+                    handlerEntered.TrySetResult();
+                    await Task.Delay(Timeout.Infinite, ct);
+                    return;
+                }
+                await ack.AcknowledgeAsync(ct);
+            },
+            maxBatchSize: 1,
+            maxDelay: TimeSpan.FromMilliseconds(20),
+            cancellationToken);
+
+        await broker.PublishAsync(new TestMessage(payload), cancellationToken);
+        await handlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
+
+        // 关停补结算走 drainer 放弃分支：释放必须完成，且该放弃必须留下 Warning。
+        await sub.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
+
+        await Assert.That(logger.RecentWarningsSummary).Contains("settlement abandoned")
+            .Because("排空者退出后的结算被放弃必须可观测：静默成功会让调用方误以为 offset 已存储");
+        await Assert.That(logger.WarningCount).IsGreaterThanOrEqualTo(1)
+            .Because("drainer 放弃分支至少记一条 Warning");
     }
 
     private static string NewTopic(string prefix)

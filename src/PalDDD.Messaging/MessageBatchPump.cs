@@ -193,8 +193,10 @@ internal static class MessageBatchPump
                     // 整批 delivery 恒 unacked 占用 prefetch 名额（重造 RabbitMqBroker
                     // :547-553 注释所记缺陷，且 broker 侧的 OCE 分支在「结算已移交」时
                     // 不再兜底 Nack）。补一次整批弃置：requeue:false 与逐条关停语义一致，
-                    // CancellationToken.None 保证取消窗口内仍能落地。IsSettled 门控避免
-                    // 覆盖 handler 已显式作出的结算决定。
+                    // F1 勘正（2026-11-08）：CancellationToken.None 只保证取消窗口内仍会发起结算；
+                    // Kafka manualStore 下 inner 已先释放（消费线程退出、排空者已死）时，该结算
+                    // 由 broker 的 drainer 放弃分支收尾——不存储 offset、记 Warning，重启按
+                    // at-least-once 重放。IsSettled 门控避免覆盖 handler 已显式作出的结算决定。
                     if (!batchAck.IsSettled)
                         await batchAck.RejectAsync(requeue: false, ct: CancellationToken.None).ConfigureAwait(false);
                     break;
