@@ -752,6 +752,10 @@ internal static class StreamFrameWriter
     public static void WriteDataFrame(
         PipeWriter writer, ReadOnlySpan<byte> json, string? eventName = null, string? id = null)
     {
+        // FIX-019（2026-11-08）：SSE 字段消毒——eventName/id 源于调用方数据（选择器返回值），
+        // 含 CR/LF 可注入额外 SSE 字段/帧（协议走私）。消毒后再计算字节数（长度可能变化）。
+        eventName = SanitizeSseField(eventName);
+        id = SanitizeSseField(id);
         var eventBytes = eventName is null ? 0 : Encoding.UTF8.GetByteCount(eventName);
         var idBytes = id is null ? 0 : Encoding.UTF8.GetByteCount(id);
         var total = DataPrefix.Length + json.Length + FrameTerminator.Length
@@ -779,6 +783,19 @@ internal static class StreamFrameWriter
         written += json.Length;
         FrameTerminator.CopyTo(span[written..]);
         writer.Advance(total);
+    }
+
+    /// <summary>
+    /// SSE 字段消毒（FIX-019，2026-11-08）：剥离 CR/LF，防字段注入/帧走私。
+    /// 无 CR/LF 时原样返回（零分配）。
+    /// </summary>
+    private static string? SanitizeSseField(string? value)
+    {
+        if (value is null)
+            return null;
+        if (value.IndexOf('\r') < 0 && value.IndexOf('\n') < 0)
+            return value;
+        return value.Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal);
     }
 
     /// <summary>写定制帧（formatFrame 委托返回的完整帧文本——契约：须自行携带帧终止空行）。</summary>

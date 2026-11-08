@@ -19,9 +19,9 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 
 | NuGet packages | Compile-time diagnostics | Persistence stacks | Measured tests |
 |:---:|:---:|:---:|:---:|
-| **36** | **38** | **3** | **1502**¹ |
+| **36** | **38** | **3** | **1707**¹ |
 
-¹ 16 test projects, full-suite local measurement on 2026-10-08: 1434 passed + 68 skipped — 60 Docker-dependent (PalORM multi-dialect 46 + Integration 14, executed by CI Testcontainers) + 8 unreachable local broker prechecks; PalORM.Tests and Messaging.Integration.Tests require Docker.
+¹ 16 test projects, full-suite local measurement on 2026-10-19: 1631 passed + 76 skipped — Docker-dependent items (PalORM multi-dialect + Integration) are executed by CI Testcontainers; PalORM.Tests and Messaging.Integration.Tests require Docker.
 
 ---
 

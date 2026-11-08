@@ -96,7 +96,9 @@ public sealed class ExceptionMiddleware
             }
 
             context.Response.StatusCode = ex.StatusCode;
-            var response = ValidationProblemResponseFactory.CreateBadRequest(ex.StatusCode, ex.Message);
+            // FIX-019（2026-11-08）：泛化消息——ex.Message 含宿主/请求细节（攻击者可控 +
+            // 内部信息），入响应构成信息泄露；细节只留 :94 日志。
+            var response = ValidationProblemResponseFactory.CreateBadRequest(ex.StatusCode, "Bad request");
             await context.Response.WriteAsJsonAsync(
                 response,
                 PalAspNetCoreJsonContext.Default.ValidationProblemResponse,

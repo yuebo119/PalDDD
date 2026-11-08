@@ -15,7 +15,13 @@
   -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
-    <Description>Pal.DDD 扩展元包 — 全量 DDD 能力：CQRS + 事件日志 + 幂等 + 投影 + 消息 + 事务 + DI 装配。AOT：除 Transactions（Saga 反射特例，IsAotCompatible=false）外全兼容。</Description>
+    <Description>Pal.DDD 扩展元包 — 全量 DDD 能力：CQRS + 事件日志 + 幂等 + 投影 + 消息 + 事务 + DI 装配。含非 AOT 的 Transactions（Saga 反射特例），整包不可 AOT。</Description>
+    <!-- FIX-019（2026-11-08）：显式传导性覆盖——元包引用 IsAotCompatible=false 的
+         Transactions（Saga 反射面），对齐 Hosting/OutboxHealth 的三 false 写法，
+         避免 AOT 信号误导消费方。 -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
     <PackageTags>DDD;CQRS;EventSourcing;Outbox;Inbox;Saga;Projections;Idempotency;AOT;.NET11;FullStack</PackageTags>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>

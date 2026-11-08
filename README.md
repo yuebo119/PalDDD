@@ -19,9 +19,9 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 | NuGet 包 | 编译期诊断 | 持久化栈 | 实测用例 |
 |:---:|:---:|:---:|:---:|
-| **36** 个 | **38** 条 | **3** 套 | **1502** 项¹ |
+| **36** 个 | **38** 条 | **3** 套 | **1707** 项¹ |
 
-¹ 16 个测试项目，2026-10-08 本机全量实测：1434 通过 + 68 跳过——60 项 Docker 依赖（PalORM 多方言 46 + Integration 14，由 CI Testcontainers 执行）+ 8 项本机 broker 预检不可达；PalORM.Tests 与 Messaging.Integration.Tests 需 Docker。
+¹ 16 个测试项目，2026-10-19 本机全量实测：1631 通过 + 76 跳过——Docker 依赖项（PalORM 多方言 + Integration）由 CI Testcontainers 执行；PalORM.Tests 与 Messaging.Integration.Tests 需 Docker。
 
 ---
 

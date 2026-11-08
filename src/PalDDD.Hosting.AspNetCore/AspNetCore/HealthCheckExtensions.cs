@@ -135,7 +135,9 @@ public static class HealthCheckExtensions
                 .Select(e => new PalHealthComponent(
                     e.Key,
                     e.Value.Status.ToString(),
-                    e.Value.Description,
+                    // FIX-019（2026-11-08）：健康详情收敛——不回传原始 Description（含异常
+                    // 消息/故障原因，向探测方泄露内部实现）；故障详情只进日志。
+                    e.Value.Status == HealthStatus.Unhealthy ? "Unhealthy — details in logs" : null,
                     e.Value.Duration.TotalMilliseconds,
                     e.Value.Tags.ToArray()))
                 .ToArray());

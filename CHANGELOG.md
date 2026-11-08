@@ -12,133 +12,6 @@
 
 ## [Unreleased]
 
-### Fixed 修复
-
-- **Kafka 批量订阅关停永久挂起（2026-11-08 审计 F1，P1，本轮 B2/悬空收口引入的回归）**：
-  `BatchSubscription.DisposeAsync` 先 `inner.DisposeAsync()`（Kafka 消费线程在 finally 一次性
-  排空 `ackCommands` 后退出），再取消泵；泵关停 OCE/leftover 分支用 `CancellationToken.None`
-  补 `RejectAsync`，入队的正是同一个 `ackCommands`，但唯一排空者已死——`EnqueueAsync` 的
-  `WaitAsync(None)` 无超时，永久等待孤儿 TCS，`await pump` 永不返回，释放死锁。触发需
-  `EnableAutoOffsetStore=false` + 批量订阅 + 在途未结算批 + handler 观察取消（越规范越易触发）；
-  自动存储模式下 `Acknowledge`/`RejectSkip` 早退不受影响，但 `RejectAsync(requeue:true)` 的 Seek
-  不受 `manualStore` 门控，关停后撞上放弃分支同样不重投（下条完善轮已补可观测）。修复：新增「排空者退出」信号（消费线程 finally **先于**最终排空置位），
-  `EnqueueAsync` 入队后检测信号自行收尾，结算转尽力而为；「信号先于排空 + 检查晚于入队」保证
-  无竞态，未存储 offset 重启重放是 at-least-once 预期。刻意不动释放顺序（避免牵连 Rabbit
-  `enqueueConfirmed` 语义）。验证：真容器 kafka431 锁定
-  `KafkaBatchAckTests.DisposeWhileBatchInFlight_Completes`（在途释放限时完成，修前释放挂起、
-  `IsSameReferenceAs` 断言红）；变异移除门控 → 红；既有三用例回归绿；公共 API 快照零变化。
-
-- **F1 完善：结算放弃可观测 + 三方一致同步（2026-11-08 红队复核收口）**：
-  初修把「修前抛 OCE 或挂起」改成「静默成功、不存储 offset」，调用方无从得知结算未生效；
-  且三处注释仍描述修复前语义（硬规则违反）。本轮：`EnqueueAsync` 的 drainer 放弃分支补一条
-  结构化 Warning（`settlement abandoned` + kind + offset + 「offset 未存储/重启重放」），
-  与消费线程意外终止的 broker 级健康态互补；同步勘正
-  `MessageBatchPump.cs` 关停分支注释（`None` 只保证发起、不保证 offset 落地）、
-  `KafkaBroker.cs` finally 五门控注释（「补结算必然异常逃逸」已不成立）、
-  `KafkaBatchAckTests.cs` 观测口径注释（关停 Reject 不再推进 offset）；
-  勘正上一条「自动存储模式不受影响」在 `RejectAsync(requeue:true)` 边界的失实。
-  新增真容器锁定 `KafkaBatchAckTests.SettlementAfterDrainerStopped_IsObservable_NotSilentSuccess`
-  （关停放弃必须留下 Warning，删 Warning 变异转红）；既有四处 `WarningCount==0` 断言均属
-  消费线程存活的正常结算路径，不经过放弃分支，回归绿。公共 API 快照零变化。
-
-- **Rabbit 发布失败计数器只覆盖 NO_ROUTE（2026-11-08 审计 F2，P3）**：
-  两条发布路径仅 `catch PublishReturnException` 计 `paldd.broker.publish_failed`，连接断/
-  确认失败等非 NO_ROUTE 异常逃逸不计数，与 `PalDiagnostics.BrokerPublishFailed` description
-  「路由失败/连接断/确认失败」及 Kafka 发布 catch 口径分叉，按 description 配「连接断」告警
-  假阴性。修复：两路径补 `catch (Exception) when (is not OperationCanceledException)` 计数 +
-  `throw`（调用方重试/Outbox 语义不变）。验证：真容器 rabbit436 锁定
-  `RabbitAckTests.PublishFailedCounter_IncrementsOnConnectionFault`（成功发布缓存 exchange →
-  关连接制造非 NO_ROUTE 失败 → 计数增长，修前 received 0 红）；变异移除 catch → 红；
-  公共 API 快照零变化。
-
-- **RabbitMQ 批量订阅 pre-ack 使批次确认契约失效（2026-11-06 全量审计 B2，P1）**：
-  批量泵只把逐条确认器入队、不结算，而 broker 在 `await handler(...)` 返回后按
-  `!ack.IsSettled` 兜底 ACK——handler 一入队就结算，批次 handler 成败与结算脱钩；
-  批次收尾 `AcknowledgeAsync` 落在已结算确认器上，每条刷
-  `Duplicate acknowledge ignored` Warning，`RejectAsync(requeue:true)` 在批量路径静默无操作。
-  修复：新增 `internal DeferredAckRegistry`（`ConditionalWeakTable`，零公共 API 变化）+
-  `PalDDD.Messaging` 对 RabbitMQ 的 IVT 一行；泵在 `channel.Writer.WriteAsync` **之前**
-  同步打移交标记（顺序硬约束：先写后标在关停竞态下会漏标）；broker 六分支精确判据——
-  `:514`/`:530`（从未入队）保留无条件 Nack，成功兜底与通用异常分支查
-  `!IsDeferred && !IsSettled`，两个 OCE 分支改为「已移交**且**入队已确认」才跳过；
-  泵在关停 `catch(OCE)` break 前对当前批补 `RejectAsync(requeue:false)`，防 delivery 悬空。
-  Kafka 侧 `finally` 判据只看 `IsSettled`，不读该标记，零行为变化。
-  验证：`dotnet build` 0 警告 0 错误；单元锁定测试
-  `SubscribeBatchAsync_AckPath_MarksDeferredBeforeBrokerHandlerReturns` /
-  `SubscribeBatchAsync_ShutdownDuringHandler_RejectsCurrentBatch`；真容器集成锁定
-  `BatchSubscription_DoesNotPreAcknowledge_UntilHandlerSettles`（prefetch=1，批次未结算时
-  第二条不投递且零 Duplicate Warning）/ `BatchSubscription_RejectWithRequeue_RedeliversSameMessage`；
-  变异三点红→绿（删 `MarkDeferred`、标记移到 `WriteAsync` 之后、删泵关停 `Reject`）；
-  公共 API 快照零变化。
-
-- **勘正（2026-11-07 审计后，P1-A）：Kafka 侧 `finally` 判据须并入 `IsDeferred`**：
-  上一条 B2 条目「Kafka 侧 `finally` 判据只看 `IsSettled`，不读该标记，零行为变化」**失实**——
-  `PalDDD.Messaging.csproj` 的 IVT 同时含 `PalDDD.Messaging.Kafka`（批 A 已加），且批量路径的
-  handler 是 `MessageBatchPump.EnqueueAsync`（只 `MarkDeferred` 不结算），`HandleMessageAsync`
-  的 `finally` 会抢先 `RejectAsync(requeue:false)` 占用 `KafkaMessageAck.TryClaim`，批次侧
-  `AcknowledgeAsync` / `RejectAsync(requeue:true)` 全被拦截：`EnableAutoOffsetStore=false`
-  下失败无法 Seek 重投，消息丢失。修复：判据并入 `!DeferredAckRegistry.IsDeferred(ack)`
-  （与 RabbitMQ 侧四处同构）。验证：新增真容器集成锁定
-  `KafkaBatchAckTests.UncommittedOffset_DoesNotAdvance`（批次未结算时 committed offset 不得前进）/
-  `Requeue_Redelivers` / `DirectSubscribe_Unaffected`（方案验收名为无下划线形态，
-  实际方法名按仓库 `Method_Scenario` 命名规范加下划线）；变异删判据 →
-  `UncommittedOffset_DoesNotAdvance` 转红（committed=1）；公共 API 快照零变化。
-
-- **Retention `includeFailed` 假 API（2026-11-07 审计后，P1-B）**：
-  ADR-039 的 A2 落地后仍清不掉 Failed 行——三栈 `MarkFailedAsync` 只写 `Status`/`LastError`，
-  不写 `ProcessedAt`（Failed 行 `processed_at` 恒 NULL），而 `RetentionSql.InboxDeleteAllSubquery`
-  与 `EfCoreRetentionStore.BuildInboxDelete` 的 `includeFailed` 谓词是
-  `status IN (2,3) AND processed_at IS NOT NULL AND processed_at < @cutoff`，NULL 永不命中。
-  修复：四栈 `MarkFailedAsync` 统一写 `ProcessedAt`（取处理开始时间，回退接收时间；store
-  无时间源且接口签名不改，避免公共 API 破坏），Dapper `InboxMarkFailed` 加 `processed_at`。
-  `InboxMessage.ProcessedAt` 语义扩展为「终态完成时间（Processed 或 Failed）」。
-  验证：`InboxCrossStackMatrixTests.MarkFailed_WritesProcessedAt`（四栈）+
-  `RetentionIncludeFailedTests`（Dapper/PalORM/EF 三栈 SQLite 端到端）；变异删 EF 赋值 →
-  四栈用例转红，`InboxDeleteAllSubquery` 谓词退回 `status = 2` → 三栈用例转红；
-  公共 API 快照随 `InboxMarkFailed` 常量值同步更新（G23 同提交，见下条）。
-
-- **公共 API 快照同步（2026-11-07）**：批 2 变更 `Dapper.SqlTemplates.InboxMarkFailed`
-  常量值（加 `processed_at=@processedAt`）后，`core-packages-public-api.txt` 金标同步更新
-  （G23 要求快照与 CHANGELOG 同提交；3bd84b5 补记）。
-
-- **README AOT 虚假声称（2026-11-07 审计后，P1-C）**：
-  特性段称 `PalDDD.Compression.Native`「AOT 安全」，但其 csproj 显式
-  `IsAotCompatible=false`（P/Invoke 原生二进制），AOT 表也未列入 ❌ 行。修复：
-  特性段改「非 AOT——P/Invoke 原生二进制」，AOT 表拆分 Compression（✅，不含 Native）
-  与 Compression.Native（❌）；`README.en.md` 同步。纯文档，无代码/行为变更。
-
-- **SagaCompensated 双计数（2026-11-07 审计后，P2-A）**：
-  `SagaCompensation.RunAsync` 补偿成功时计一次；超时车道经 `CompensateAllAsync → RunAsync`
-  也走该点，随后 `SagaProcessor.LogTerminalResult` 按 `compensationSucceeded` 再计一次——
-  同一补偿双重计数（重试耗尽车道不经该方法，口径分叉：超时 2 / 重试耗尽 1）。
-  修复：`LogTerminalResult` 移除计数（单一发射点留在 `RunAsync`），并清理死参数
-  （`CompensateTimedOutSagaAsync` 改 `void`、pending 元组简化为 `List<TState>`）。
-  验证：新增 `SagaCompensatedMetricTests`（超时车道 + 非空 `ExecutedStepKeys` / 重试耗尽
-  两车道各计 1）；现有 `CheckTimeoutsAsync_RecordsSagaCompensatedMetric` 补 `ExecutedStepKeys`
-  适配单一发射点；变异恢复 `LogTerminalResult` 计数 → 超时车道用例转红；公共 API 快照零变化。
-
-- **Specification 组合规约的 EF 翻译零回归网（2026-11-07 审计后，P2-B）**：
-  `SpecificationTests` 的「EF Core 集成」小节三个用例都只 `expr.Compile()` 内存求值，
-  而内存 Compile 对 `Expression.Invoke` 也能工作，无法捕获 EF 翻译回归。修复：
-  `PalDDD.Repository.EFCore.Tests` 新增 `SpecificationEfTranslationTests`（真实 SQLite
-  provider 执行 And/Or/Not 组合翻译 + 表达式树 Invoke 节点检测）；`SpecificationTests`
-  标题改「内存表达式可编译」并指路。变异：`ParameterReplacer` 改 `Expression.Invoke` →
-  `No_ExpressionInvoke` 转红（方案验收名为无下划线形态，实际方法名按仓库
-  `Method_Scenario` 命名规范加下划线）。
-
-- **Kafka 手动存储模式毒消息冻结 offset 水印（2026-11-06 全量审计 B3，P1）**：
-  `EnableAutoOffsetStore=false` 下，消费线程先把每条已交付消息的 offset 播种进 `OffsetTracker`，
-  但 `HandleMessageAsync` 的失败路径（handler 抛异常、非关停 OCE、反序列化返回 null）与
-  「handler 成功但未显式结算」都不结算确认器——连续前缀缺一环，`StoreOffset` 永不推进，
-  分区消费永久停摆且重启从最早位点全量重放。修复：`KafkaMessageAck` 提升到 `try` 外、
-  在反序列化之前构造，新增 `finally` 在四门控（`manualStore` / 未结算 / 非关停窗口 /
-  `CancellationToken.None`）下补 `RejectAsync(requeue:false)`；自动存储模式零状态变化，
-  EOF/tombstone 不结算，handler 已显式结算时不覆盖其决定。
-  验证：Kafka 项目 0 警告 0 错误；新增集成锁定测试
-  `PoisonHandlerFailure_AutoSettlesOffset_WatermarkAdvancesAfterRestart`（毒消息抛异常 →
-  健康消息确认 → 同 GroupId 重启两条均不重投，修复前水印冻结两条都重投转红）；
-  公共 API 无变化。
-
 ### Added
 
 - **五项 API 增补（2026-11-06 全量审计 A1–A5/G4，ADR-039）**：
@@ -277,27 +150,6 @@
   ⑤配套：`coverage-baseline.json` 增设 `PalDDD.PalORM.Tests` 键（本地无 Docker 保守初值 0.3311，
   降幅门禁覆盖 16 模块；CI 全量待重录上调）。
 
-### Removed
-
-- **2026-11-04 公共 API 缺口 B 批：删除两处假 API / 死枚举（破坏性，5.0.0 窗口内）**：
-  ①**`ISagaManager.GetInterruptedSagasAsync` 删除**（含 `DefaultSagaManager` 实现、`ISagaManager` 过期 remarks）。
-  三条理由任一成立即够：(a) 类型上无法正确实现——`DefaultSagaManager` 是非泛型类，`ISagaStateStore<TState>` 是泛型接口，
-  非泛型 manager 拿不到 `TState`，只能靠反射（违反零反射约束）；(b) 原保留理由（接口含 internal 成员、外部无法替代实现）
-  已随 v5.0.0 `ISagaManager` 公开化失效；(c) 同需求已有更好的入口。
-  **迁移**：`manager.GetInterruptedSagasAsync(ct)` → `store.GetByStatusAsync(SagaStatus.AwaitingHumanDecision, n, ct)`
-  （`store` 为该 Saga 的具体 `ISagaStateStore<TState>`；原方法恒返空列表，照旧调用等于误判「无人工待办」）。
-  ②**`SagaStatus.DeadLettered` 删除**。语义位置已被 `CompensationFailed` 占据——DeadLetter 是消息中间件术语，
-  Saga 域的对应概念是补偿失败；留着只让每个使用者的 `switch` 多一个必须处理但永不进入的分支。
-  **升级前置检查（必做）**：`SELECT COUNT(*) FROM saga_states WHERE status = 4`——非 0 须先手工修正
-  （补偿失败用 `CompensationFailed=3`）再启动，否则该行水合时 fail-fast。
-  ⚠️ **数值契约**：`SagaStatus` 各成员改为显式编号，`AwaitingHumanDecision` 恒为 `5`、`4` 成为永久空洞（不得复用）。
-  若按「直接删中间成员、隐式重排」处理，`AwaitingHumanDecision` 会变成 4——库里 `status=4` 的存量行会被读成
-  「等待人工决策」、`status=5` 的行变成未定义，且 Dapper SQL 模板里三处硬编码的 `status IN (0, 5)` 同时失配。
-  ③**三栈水合点改用带定义域校验的映射**：Dapper / PalORM 的 `Materialize` 由 `(SagaStatus)row.Status` 改为
-  `SagaStatusGuard.FromPersisted(...)`；EF Core 的 int→enum 物化不做校验，故在四个读边界（`GetActiveSagasAsync` /
-  `GetByStatusAsync` / `GetByIdAsync` / 两条 `Lease*`）加复核。未定义值抛 `InvalidOperationException`，
-  文案含 sagaId、原始值与上述升级 SQL（此前强转会把 4 读成「不是任何已知状态」的实例，终态判定与 switch 全部落空且不报错）。
-
 ### Changed
 
 - **可观测补强 + 计数声明对齐（2026-11-06 全量审计 S3/S4/S5/G2/G3/G5/G6/G7/S2，P2）**：
@@ -359,6 +211,154 @@
   Kafka 侧还须关闭 `EnableAutoOffsetStore`。同步改写 `docs/features.md` 的「边界与刻意取舍」两条
   （Broker 语义、`SagaStatus` 数值契约）。
 
+### Removed
+
+- **2026-11-04 公共 API 缺口 B 批：删除两处假 API / 死枚举（破坏性，5.0.0 窗口内）**：
+  ①**`ISagaManager.GetInterruptedSagasAsync` 删除**（含 `DefaultSagaManager` 实现、`ISagaManager` 过期 remarks）。
+  三条理由任一成立即够：(a) 类型上无法正确实现——`DefaultSagaManager` 是非泛型类，`ISagaStateStore<TState>` 是泛型接口，
+  非泛型 manager 拿不到 `TState`，只能靠反射（违反零反射约束）；(b) 原保留理由（接口含 internal 成员、外部无法替代实现）
+  已随 v5.0.0 `ISagaManager` 公开化失效；(c) 同需求已有更好的入口。
+  **迁移**：`manager.GetInterruptedSagasAsync(ct)` → `store.GetByStatusAsync(SagaStatus.AwaitingHumanDecision, n, ct)`
+  （`store` 为该 Saga 的具体 `ISagaStateStore<TState>`；原方法恒返空列表，照旧调用等于误判「无人工待办」）。
+  ②**`SagaStatus.DeadLettered` 删除**。语义位置已被 `CompensationFailed` 占据——DeadLetter 是消息中间件术语，
+  Saga 域的对应概念是补偿失败；留着只让每个使用者的 `switch` 多一个必须处理但永不进入的分支。
+  **升级前置检查（必做）**：`SELECT COUNT(*) FROM saga_states WHERE status = 4`——非 0 须先手工修正
+  （补偿失败用 `CompensationFailed=3`）再启动，否则该行水合时 fail-fast。
+  ⚠️ **数值契约**：`SagaStatus` 各成员改为显式编号，`AwaitingHumanDecision` 恒为 `5`、`4` 成为永久空洞（不得复用）。
+  若按「直接删中间成员、隐式重排」处理，`AwaitingHumanDecision` 会变成 4——库里 `status=4` 的存量行会被读成
+  「等待人工决策」、`status=5` 的行变成未定义，且 Dapper SQL 模板里三处硬编码的 `status IN (0, 5)` 同时失配。
+  ③**三栈水合点改用带定义域校验的映射**：Dapper / PalORM 的 `Materialize` 由 `(SagaStatus)row.Status` 改为
+  `SagaStatusGuard.FromPersisted(...)`；EF Core 的 int→enum 物化不做校验，故在四个读边界（`GetActiveSagasAsync` /
+  `GetByStatusAsync` / `GetByIdAsync` / 两条 `Lease*`）加复核。未定义值抛 `InvalidOperationException`，
+  文案含 sagaId、原始值与上述升级 SQL（此前强转会把 4 读成「不是任何已知状态」的实例，终态判定与 switch 全部落空且不报错）。
+
+### Fixed 修复
+
+- **Kafka 批量订阅关停永久挂起（2026-11-08 审计 F1，P1，本轮 B2/悬空收口引入的回归）**：
+  `BatchSubscription.DisposeAsync` 先 `inner.DisposeAsync()`（Kafka 消费线程在 finally 一次性
+  排空 `ackCommands` 后退出），再取消泵；泵关停 OCE/leftover 分支用 `CancellationToken.None`
+  补 `RejectAsync`，入队的正是同一个 `ackCommands`，但唯一排空者已死——`EnqueueAsync` 的
+  `WaitAsync(None)` 无超时，永久等待孤儿 TCS，`await pump` 永不返回，释放死锁。触发需
+  `EnableAutoOffsetStore=false` + 批量订阅 + 在途未结算批 + handler 观察取消（越规范越易触发）；
+  自动存储模式下 `Acknowledge`/`RejectSkip` 早退不受影响，但 `RejectAsync(requeue:true)` 的 Seek
+  不受 `manualStore` 门控，关停后撞上放弃分支同样不重投（下条完善轮已补可观测）。修复：新增「排空者退出」信号（消费线程 finally **先于**最终排空置位），
+  `EnqueueAsync` 入队后检测信号自行收尾，结算转尽力而为；「信号先于排空 + 检查晚于入队」保证
+  无竞态，未存储 offset 重启重放是 at-least-once 预期。刻意不动释放顺序（避免牵连 Rabbit
+  `enqueueConfirmed` 语义）。验证：真容器 kafka431 锁定
+  `KafkaBatchAckTests.DisposeWhileBatchInFlight_Completes`（在途释放限时完成，修前释放挂起、
+  `IsSameReferenceAs` 断言红）；变异移除门控 → 红；既有三用例回归绿；公共 API 快照零变化。
+
+- **F1 完善：结算放弃可观测 + 三方一致同步（2026-11-08 红队复核收口）**：
+  初修把「修前抛 OCE 或挂起」改成「静默成功、不存储 offset」，调用方无从得知结算未生效；
+  且三处注释仍描述修复前语义（硬规则违反）。本轮：`EnqueueAsync` 的 drainer 放弃分支补一条
+  结构化 Warning（`settlement abandoned` + kind + offset + 「offset 未存储/重启重放」），
+  与消费线程意外终止的 broker 级健康态互补；同步勘正
+  `MessageBatchPump.cs` 关停分支注释（`None` 只保证发起、不保证 offset 落地）、
+  `KafkaBroker.cs` finally 五门控注释（「补结算必然异常逃逸」已不成立）、
+  `KafkaBatchAckTests.cs` 观测口径注释（关停 Reject 不再推进 offset）；
+  勘正上一条「自动存储模式不受影响」在 `RejectAsync(requeue:true)` 边界的失实。
+  新增真容器锁定 `KafkaBatchAckTests.SettlementAfterDrainerStopped_IsObservable_NotSilentSuccess`
+  （关停放弃必须留下 Warning，删 Warning 变异转红）；既有四处 `WarningCount==0` 断言均属
+  消费线程存活的正常结算路径，不经过放弃分支，回归绿。公共 API 快照零变化。
+
+- **Rabbit 发布失败计数器只覆盖 NO_ROUTE（2026-11-08 审计 F2，P3）**：
+  两条发布路径仅 `catch PublishReturnException` 计 `paldd.broker.publish_failed`，连接断/
+  确认失败等非 NO_ROUTE 异常逃逸不计数，与 `PalDiagnostics.BrokerPublishFailed` description
+  「路由失败/连接断/确认失败」及 Kafka 发布 catch 口径分叉，按 description 配「连接断」告警
+  假阴性。修复：两路径补 `catch (Exception) when (is not OperationCanceledException)` 计数 +
+  `throw`（调用方重试/Outbox 语义不变）。验证：真容器 rabbit436 锁定
+  `RabbitAckTests.PublishFailedCounter_IncrementsOnConnectionFault`（成功发布缓存 exchange →
+  关连接制造非 NO_ROUTE 失败 → 计数增长，修前 received 0 红）；变异移除 catch → 红；
+  公共 API 快照零变化。
+
+- **RabbitMQ 批量订阅 pre-ack 使批次确认契约失效（2026-11-06 全量审计 B2，P1）**：
+  批量泵只把逐条确认器入队、不结算，而 broker 在 `await handler(...)` 返回后按
+  `!ack.IsSettled` 兜底 ACK——handler 一入队就结算，批次 handler 成败与结算脱钩；
+  批次收尾 `AcknowledgeAsync` 落在已结算确认器上，每条刷
+  `Duplicate acknowledge ignored` Warning，`RejectAsync(requeue:true)` 在批量路径静默无操作。
+  修复：新增 `internal DeferredAckRegistry`（`ConditionalWeakTable`，零公共 API 变化）+
+  `PalDDD.Messaging` 对 RabbitMQ 的 IVT 一行；泵在 `channel.Writer.WriteAsync` **之前**
+  同步打移交标记（顺序硬约束：先写后标在关停竞态下会漏标）；broker 六分支精确判据——
+  `:514`/`:530`（从未入队）保留无条件 Nack，成功兜底与通用异常分支查
+  `!IsDeferred && !IsSettled`，两个 OCE 分支改为「已移交**且**入队已确认」才跳过；
+  泵在关停 `catch(OCE)` break 前对当前批补 `RejectAsync(requeue:false)`，防 delivery 悬空。
+  Kafka 侧 `finally` 判据只看 `IsSettled`，不读该标记，零行为变化。
+  验证：`dotnet build` 0 警告 0 错误；单元锁定测试
+  `SubscribeBatchAsync_AckPath_MarksDeferredBeforeBrokerHandlerReturns` /
+  `SubscribeBatchAsync_ShutdownDuringHandler_RejectsCurrentBatch`；真容器集成锁定
+  `BatchSubscription_DoesNotPreAcknowledge_UntilHandlerSettles`（prefetch=1，批次未结算时
+  第二条不投递且零 Duplicate Warning）/ `BatchSubscription_RejectWithRequeue_RedeliversSameMessage`；
+  变异三点红→绿（删 `MarkDeferred`、标记移到 `WriteAsync` 之后、删泵关停 `Reject`）；
+  公共 API 快照零变化。
+
+- **勘正（2026-11-07 审计后，P1-A）：Kafka 侧 `finally` 判据须并入 `IsDeferred`**：
+  上一条 B2 条目「Kafka 侧 `finally` 判据只看 `IsSettled`，不读该标记，零行为变化」**失实**——
+  `PalDDD.Messaging.csproj` 的 IVT 同时含 `PalDDD.Messaging.Kafka`（批 A 已加），且批量路径的
+  handler 是 `MessageBatchPump.EnqueueAsync`（只 `MarkDeferred` 不结算），`HandleMessageAsync`
+  的 `finally` 会抢先 `RejectAsync(requeue:false)` 占用 `KafkaMessageAck.TryClaim`，批次侧
+  `AcknowledgeAsync` / `RejectAsync(requeue:true)` 全被拦截：`EnableAutoOffsetStore=false`
+  下失败无法 Seek 重投，消息丢失。修复：判据并入 `!DeferredAckRegistry.IsDeferred(ack)`
+  （与 RabbitMQ 侧四处同构）。验证：新增真容器集成锁定
+  `KafkaBatchAckTests.UncommittedOffset_DoesNotAdvance`（批次未结算时 committed offset 不得前进）/
+  `Requeue_Redelivers` / `DirectSubscribe_Unaffected`（方案验收名为无下划线形态，
+  实际方法名按仓库 `Method_Scenario` 命名规范加下划线）；变异删判据 →
+  `UncommittedOffset_DoesNotAdvance` 转红（committed=1）；公共 API 快照零变化。
+
+- **Retention `includeFailed` 假 API（2026-11-07 审计后，P1-B）**：
+  ADR-039 的 A2 落地后仍清不掉 Failed 行——三栈 `MarkFailedAsync` 只写 `Status`/`LastError`，
+  不写 `ProcessedAt`（Failed 行 `processed_at` 恒 NULL），而 `RetentionSql.InboxDeleteAllSubquery`
+  与 `EfCoreRetentionStore.BuildInboxDelete` 的 `includeFailed` 谓词是
+  `status IN (2,3) AND processed_at IS NOT NULL AND processed_at < @cutoff`，NULL 永不命中。
+  修复：四栈 `MarkFailedAsync` 统一写 `ProcessedAt`（取处理开始时间，回退接收时间；store
+  无时间源且接口签名不改，避免公共 API 破坏），Dapper `InboxMarkFailed` 加 `processed_at`。
+  `InboxMessage.ProcessedAt` 语义扩展为「终态完成时间（Processed 或 Failed）」。
+  验证：`InboxCrossStackMatrixTests.MarkFailed_WritesProcessedAt`（四栈）+
+  `RetentionIncludeFailedTests`（Dapper/PalORM/EF 三栈 SQLite 端到端）；变异删 EF 赋值 →
+  四栈用例转红，`InboxDeleteAllSubquery` 谓词退回 `status = 2` → 三栈用例转红；
+  公共 API 快照随 `InboxMarkFailed` 常量值同步更新（G23 同提交，见下条）。
+
+- **公共 API 快照同步（2026-11-07）**：批 2 变更 `Dapper.SqlTemplates.InboxMarkFailed`
+  常量值（加 `processed_at=@processedAt`）后，`core-packages-public-api.txt` 金标同步更新
+  （G23 要求快照与 CHANGELOG 同提交；3bd84b5 补记）。
+
+- **README AOT 虚假声称（2026-11-07 审计后，P1-C）**：
+  特性段称 `PalDDD.Compression.Native`「AOT 安全」，但其 csproj 显式
+  `IsAotCompatible=false`（P/Invoke 原生二进制），AOT 表也未列入 ❌ 行。修复：
+  特性段改「非 AOT——P/Invoke 原生二进制」，AOT 表拆分 Compression（✅，不含 Native）
+  与 Compression.Native（❌）；`README.en.md` 同步。纯文档，无代码/行为变更。
+
+- **SagaCompensated 双计数（2026-11-07 审计后，P2-A）**：
+  `SagaCompensation.RunAsync` 补偿成功时计一次；超时车道经 `CompensateAllAsync → RunAsync`
+  也走该点，随后 `SagaProcessor.LogTerminalResult` 按 `compensationSucceeded` 再计一次——
+  同一补偿双重计数（重试耗尽车道不经该方法，口径分叉：超时 2 / 重试耗尽 1）。
+  修复：`LogTerminalResult` 移除计数（单一发射点留在 `RunAsync`），并清理死参数
+  （`CompensateTimedOutSagaAsync` 改 `void`、pending 元组简化为 `List<TState>`）。
+  验证：新增 `SagaCompensatedMetricTests`（超时车道 + 非空 `ExecutedStepKeys` / 重试耗尽
+  两车道各计 1）；现有 `CheckTimeoutsAsync_RecordsSagaCompensatedMetric` 补 `ExecutedStepKeys`
+  适配单一发射点；变异恢复 `LogTerminalResult` 计数 → 超时车道用例转红；公共 API 快照零变化。
+
+- **Specification 组合规约的 EF 翻译零回归网（2026-11-07 审计后，P2-B）**：
+  `SpecificationTests` 的「EF Core 集成」小节三个用例都只 `expr.Compile()` 内存求值，
+  而内存 Compile 对 `Expression.Invoke` 也能工作，无法捕获 EF 翻译回归。修复：
+  `PalDDD.Repository.EFCore.Tests` 新增 `SpecificationEfTranslationTests`（真实 SQLite
+  provider 执行 And/Or/Not 组合翻译 + 表达式树 Invoke 节点检测）；`SpecificationTests`
+  标题改「内存表达式可编译」并指路。变异：`ParameterReplacer` 改 `Expression.Invoke` →
+  `No_ExpressionInvoke` 转红（方案验收名为无下划线形态，实际方法名按仓库
+  `Method_Scenario` 命名规范加下划线）。
+
+- **Kafka 手动存储模式毒消息冻结 offset 水印（2026-11-06 全量审计 B3，P1）**：
+  `EnableAutoOffsetStore=false` 下，消费线程先把每条已交付消息的 offset 播种进 `OffsetTracker`，
+  但 `HandleMessageAsync` 的失败路径（handler 抛异常、非关停 OCE、反序列化返回 null）与
+  「handler 成功但未显式结算」都不结算确认器——连续前缀缺一环，`StoreOffset` 永不推进，
+  分区消费永久停摆且重启从最早位点全量重放。修复：`KafkaMessageAck` 提升到 `try` 外、
+  在反序列化之前构造，新增 `finally` 在四门控（`manualStore` / 未结算 / 非关停窗口 /
+  `CancellationToken.None`）下补 `RejectAsync(requeue:false)`；自动存储模式零状态变化，
+  EOF/tombstone 不结算，handler 已显式结算时不覆盖其决定。
+  验证：Kafka 项目 0 警告 0 错误；新增集成锁定测试
+  `PoisonHandlerFailure_AutoSettlesOffset_WatermarkAdvancesAfterRestart`（毒消息抛异常 →
+  健康消息确认 → 同 GroupId 重启两条均不重投，修复前水印冻结两条都重投转红）；
+  公共 API 无变化。
+
 ### Documentation
 
 - **2026-11-04 ADR-037：事件日志只追加不删除**（`docs/decisions/037-event-log-append-only.md`，37 份 ADR）：
@@ -369,6 +369,13 @@
   同步：`docs/features.md` 第 8 节改名「事件日志与投影」并加范围边界（聚合重放器与快照不在范围内，
   与 `architecture.md:243` 的 Event Sourcing Adapter 外圈定位一致）；ADR 计数 36→37 四处
   （README / README.en / AGENTS.md / pitfalls.md）。
+
+- **2026-11-05 pitfalls 增 PALORM-RT6（第十章 17 条，全文 88 条）**：
+  `ExecuteAsync($"... id = '{value}'")` 无报错但 0 行生效——`FormattableSqlFormatter.Format`
+  只参数化**引号字面量之外**的格式项，引号内的 `{0}` 逐字保留，SQL 实际匹配 `'{0}'`；
+  反编译 PalORM.Core 6.8.0 实证。规避：值洞不包引号（即参数化为 `@pN`），或走
+  `GetRawConnection()` + 手动 `DbCommand`；同族陷阱：整句 SQL 写进单个洞会整句退化为参数值
+  （DDL 静默不执行）。`MultiDialectFixture.ApplySchemaAsync` 注释同步勘正。
 
 ### Tests
 
@@ -420,15 +427,6 @@
 - **2026-11-05 测试基建勘正**：批次 C 的 saga 水合测试曾用
   `session.ExecuteAsync($"... saga_id = '{id}'")` 改写存量行，语句无报错但 0 行生效——根因见下方
   Documentation 的 PALORM-RT6，测试改用 store 自身写入并留注释防复发。
-
-### Documentation
-
-- **2026-11-05 pitfalls 增 PALORM-RT6（第十章 17 条，全文 88 条）**：
-  `ExecuteAsync($"... id = '{value}'")` 无报错但 0 行生效——`FormattableSqlFormatter.Format`
-  只参数化**引号字面量之外**的格式项，引号内的 `{0}` 逐字保留，SQL 实际匹配 `'{0}'`；
-  反编译 PalORM.Core 6.8.0 实证。规避：值洞不包引号（即参数化为 `@pN`），或走
-  `GetRawConnection()` + 手动 `DbCommand`；同族陷阱：整句 SQL 写进单个洞会整句退化为参数值
-  （DDL 静默不执行）。`MultiDialectFixture.ApplySchemaAsync` 注释同步勘正。
 
 ## [5.0.0-preview.1] — 2026-10-27
 
