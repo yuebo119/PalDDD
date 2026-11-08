@@ -254,6 +254,15 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // F2（2026-11-08）：非 NO_ROUTE 的发布失败（连接断/确认失败等）同计——对齐
+            // PalDiagnostics.BrokerPublishFailed description「路由失败/连接断/确认失败」与 Kafka
+            // 发布 catch 口径。修前仅 catch PublishReturnException，其余发布异常逃逸不计数，
+            // 按 description 配「连接断」告警会假阴性。throw 保持调用方重试/Outbox 语义不变。
+            PalMetrics.BrokerPublishFailed.Add(1);
+            throw;
+        }
 
         // 优化（二十五轮 Z-1）：同 KafkaBroker——Debug 级门控免白做插值
         if (_logger.IsEnabled(LogLevel.Debug))
@@ -299,6 +308,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
                 $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
             // v4 批 D（S3）：raw 发布路径同计
+            PalMetrics.BrokerPublishFailed.Add(1);
+            throw;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // F2（2026-11-08）：raw 路径非 NO_ROUTE 的发布失败同计（对象路径同形勘正）。
             PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }

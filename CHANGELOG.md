@@ -14,6 +14,29 @@
 
 ### Fixed 修复
 
+- **Kafka 批量订阅关停永久挂起（2026-11-08 审计 F1，P1，本轮 B2/悬空收口引入的回归）**：
+  `BatchSubscription.DisposeAsync` 先 `inner.DisposeAsync()`（Kafka 消费线程在 finally 一次性
+  排空 `ackCommands` 后退出），再取消泵；泵关停 OCE/leftover 分支用 `CancellationToken.None`
+  补 `RejectAsync`，入队的正是同一个 `ackCommands`，但唯一排空者已死——`EnqueueAsync` 的
+  `WaitAsync(None)` 无超时，永久等待孤儿 TCS，`await pump` 永不返回，释放死锁。触发需
+  `EnableAutoOffsetStore=false` + 批量订阅 + 在途未结算批 + handler 观察取消（越规范越易触发）；
+  自动存储模式不受影响。修复：新增「排空者退出」信号（消费线程 finally **先于**最终排空置位），
+  `EnqueueAsync` 入队后检测信号自行收尾，结算转尽力而为；「信号先于排空 + 检查晚于入队」保证
+  无竞态，未存储 offset 重启重放是 at-least-once 预期。刻意不动释放顺序（避免牵连 Rabbit
+  `enqueueConfirmed` 语义）。验证：真容器 kafka431 锁定
+  `KafkaBatchAckTests.DisposeWhileBatchInFlight_Completes`（在途释放限时完成，修前释放挂起、
+  `IsSameReferenceAs` 断言红）；变异移除门控 → 红；既有三用例回归绿；公共 API 快照零变化。
+
+- **Rabbit 发布失败计数器只覆盖 NO_ROUTE（2026-11-08 审计 F2，P3）**：
+  两条发布路径仅 `catch PublishReturnException` 计 `paldd.broker.publish_failed`，连接断/
+  确认失败等非 NO_ROUTE 异常逃逸不计数，与 `PalDiagnostics.BrokerPublishFailed` description
+  「路由失败/连接断/确认失败」及 Kafka 发布 catch 口径分叉，按 description 配「连接断」告警
+  假阴性。修复：两路径补 `catch (Exception) when (is not OperationCanceledException)` 计数 +
+  `throw`（调用方重试/Outbox 语义不变）。验证：真容器 rabbit436 锁定
+  `RabbitAckTests.PublishFailedCounter_IncrementsOnConnectionFault`（成功发布缓存 exchange →
+  关连接制造非 NO_ROUTE 失败 → 计数增长，修前 received 0 红）；变异移除 catch → 红；
+  公共 API 快照零变化。
+
 - **RabbitMQ 批量订阅 pre-ack 使批次确认契约失效（2026-11-06 全量审计 B2，P1）**：
   批量泵只把逐条确认器入队、不结算，而 broker 在 `await handler(...)` 返回后按
   `!ack.IsSettled` 兜底 ACK——handler 一入队就结算，批次 handler 成败与结算脱钩；

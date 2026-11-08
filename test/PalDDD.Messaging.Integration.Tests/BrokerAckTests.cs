@@ -881,6 +881,75 @@ public sealed class RabbitAckTests
     }
 
     /// <summary>
+    /// F2（2026-11-08）锁定：非 NO_ROUTE 的发布失败（连接断）必须计 <c>paldd.broker.publish_failed</c>。
+    /// <para>
+    /// 修前仅 <c>catch PublishReturnException</c>（NO_ROUTE），连接断/确认失败等异常逃逸不计数，
+    /// 与 <c>PalDiagnostics.BrokerPublishFailed</c> description「路由失败/连接断/确认失败」及 Kafka
+    /// 发布 catch 口径分叉。本用例先成功发布（有绑定队列、非 NO_ROUTE）缓存 exchange 声明，再关连接
+    /// 制造非 NO_ROUTE 失败（exchange 已缓存，失败落在 BasicPublishAsync），断言计数增长——修前不增长转红。
+    /// </para>
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task PublishFailedCounter_IncrementsOnConnectionFault(CancellationToken cancellationToken)
+    {
+        using var meter = new RecordingMeterListener("paldd.broker.publish_failed");
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var connection = await Fixture.CreateRabbitConnectionAsync();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger, prefetchCount: 10, connection);
+        var broker = created.Item1;
+
+        var payload = $"rmq-pubfail-{Guid.NewGuid():N}";
+        var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var sub = await broker.SubscribeAsync<TestMessage>(async (msg, _, ack, ct) =>
+        {
+            if (msg.Name == payload)
+            {
+                await ack.AcknowledgeAsync(ct);
+                delivered.TrySetResult();
+            }
+        }, cancellationToken);
+
+        // 首发成功（绑定队列在场，mandatory 路由成功，非 NO_ROUTE）：缓存 exchange 声明，不应计数。
+        await broker.PublishAsync(new TestMessage(payload), cancellationToken);
+        await delivered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        var before = meter.Measurements.Count;
+
+        // 关连接制造非 NO_ROUTE 发布失败（复用批 C 健康测试的故障注入形态）。
+        await connection.CloseAsync(
+            reasonCode: 200,
+            reasonText: "publish-fault probe",
+            timeout: TimeSpan.FromSeconds(5),
+            abort: false,
+            cancellationToken);
+        Exception? publishFault = null;
+        try
+        {
+            await broker.PublishAsync(new TestMessage(payload), cancellationToken);
+        }
+#pragma warning disable CA1031 // 连接已断，捕获任意发布异常以断言其类型并验证计数（故障注入预期）
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            publishFault = ex;
+        }
+
+        // 连接已断必须抛「非 OCE」异常才落在新增 catch（OCE 按设计不计数）；若未抛异常，下方
+        // 计数断言兜底转红。IsNotTypeOf 同时排除「注入成取消」的失真形态。
+        await Assert.That(publishFault).IsNotTypeOf<OperationCanceledException>()
+            .Because($"注入的应是连接断类异常而非取消（实际：{publishFault?.GetType().Name ?? "未抛异常"}）");
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && meter.Measurements.Count <= before)
+            await Task.Delay(10);
+        await Assert.That(meter.Measurements.Count).IsGreaterThan(before)
+            .Because("非 NO_ROUTE 发布失败未计数：修前仅 catch PublishReturnException，连接断逃逸");
+
+        await broker.DisposeAsync();
+        await connection.DisposeAsync();
+    }
+
+    /// <summary>
     /// v4 批 A Not-Tested 收口：prefetch 与 maxBatchSize 的组合语义。
     /// usage.md 声明「prefetch 默认 10 会先于 maxBatchSize 生效」，本用例锁其反面：
     /// prefetch(20) &gt;= maxBatchSize(20) 时整批能到 20，不被默认 10 截断。

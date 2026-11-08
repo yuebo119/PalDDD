@@ -535,6 +535,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         // 一个槽位。槽位数 = 并发 handler 上限（默认 1 = 最多 1 处理中 + 1 排队）。
         var slots = new SemaphoreSlim(maxConcurrent, maxConcurrent);
         var producerCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // F1（2026-11-08）：排空者退出信号。必须在消费线程 finally 的最终排空**之前**置位，
+        // 供 KafkaMessageAck.EnqueueAsync 判定「此后入队的确认命令已无人应用」，结算转尽力而为。
+        var drainerStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var consumerThread = new Thread(() =>
         {
             try
@@ -604,6 +607,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
             {
                 // 关停/异常退出：仍在队列中的确认命令不会再被应用——以完成收尾而不是让
                 // handler 永久阻塞。未提交的位点正是 at-least-once 的预期结果（重启后重放）。
+                // F1：退出信号先于最终排空置位——入队晚于此信号的命令无人应用，EnqueueAsync
+                // 据其自行收尾；先置位再排空保证「检查未置位 ⇒ 入队早于排空 ⇒ 必被排空」无竞态。
+                drainerStopped.TrySetResult();
                 while (ackCommands.TryDequeue(out var pending))
                     pending.Completion?.TrySetResult();
                 channel.Writer.TryComplete();
@@ -821,6 +827,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
                         ackCommands,
                         new TopicPartitionOffset(result.TopicPartition, result.Offset),
                         manualStore,
+                        drainerStopped.Task,
                         _logger);
                     // 2026-10-19 性能实施轮：走泛型反序列化（编译时 JsonTypeInfo<T>/
                     // MemoryPack 泛型 Formatter），免运行时 Type 查找与值类型装箱。
@@ -968,6 +975,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         ConcurrentQueue<AckCommand> queue,
         TopicPartitionOffset offset,
         bool manualStore,
+        Task drainerStopped,
         IPalLogger<KafkaBroker> logger) : IMessageAck
     {
         private int _settled;
@@ -1016,7 +1024,17 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         {
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             queue.Enqueue(new AckCommand(kind, offset, completion));
-            // 等待消费线程应用（或关停时放弃）。消费线程 poll 超时 100ms 内必定回到队列。
+            // F1（2026-11-08）：排空者（消费线程）已退出时，本命令无人应用——结算转尽力而为，
+            // 自行收尾而非死等。修前此处仅 WaitAsync(ct)，批量泵关停用 ct=None 补结算且 inner
+            // 已先释放（排空者已死）时永久挂起孤儿 TCS，DisposeAsync 死锁。信号先于最终排空置位
+            // （见消费线程 finally），检查晚于入队，故「未置位 ⇒ 入队早于排空 ⇒ 必被排空」无竞态。
+            // 未存储的 offset 重启重放，是 at-least-once 的预期结果，不推进水印。
+            if (drainerStopped.IsCompleted)
+            {
+                completion.TrySetResult();
+                return;
+            }
+            // 等待消费线程应用。消费线程 poll 超时 100ms 内必定回到队列。
             await completion.Task.WaitAsync(ct).ConfigureAwait(false);
         }
 

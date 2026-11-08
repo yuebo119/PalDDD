@@ -214,6 +214,58 @@ public sealed class KafkaBatchAckTests
         }
     }
 
+    /// <summary>
+    /// F1（2026-11-08）锁定：批次在途（handler 阻塞未结算）时释放订阅必须完成，不得死锁。
+    /// <para>
+    /// 修前机制：<c>BatchSubscription.DisposeAsync</c> 先 <c>inner.DisposeAsync</c>（消费线程
+    /// 排空 ackCommands 后退出），再取消泵；泵 OCE 分支用 <c>ct=None</c> 补 Reject，入队孤儿 TCS，
+    /// <c>EnqueueAsync.WaitAsync(None)</c> 永久等待 → <c>DisposeAsync</c> 挂起（真容器复现 10s 未完成）。
+    /// 修后：<c>EnqueueAsync</c> 检测排空者退出信号自行收尾，释放在限时内完成。
+    /// </para>
+    /// <para>
+    /// 观测口径：<c>DisposeAsync</c> 在 15s 内完成；修前 <c>WaitAsync</c> 抛 <c>TimeoutException</c> 转红。
+    /// handler 用 <c>Task.Delay(Timeout.Infinite, ct)</c> 规范观察取消——越规范的 handler 越易触发修前死锁。
+    /// </para>
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task DisposeWhileBatchInFlight_Completes(CancellationToken cancellationToken)
+    {
+        var topic = NewTopic("kafka-batch-dispose-inflight");
+        var payload = $"dispose-inflight-{Guid.NewGuid():N}";
+        var logger = new CapturingLogger<KafkaBroker>();
+        var created = CreateBroker(topic, $"paldd-dispose-inflight-{Guid.NewGuid():N}", logger, enableAutoCommit: false);
+        await using var broker = created.Broker;
+        var handlerEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var sub = await broker.SubscribeBatchAsync<TestMessage>(
+            async (batch, ack, ct) =>
+            {
+                if (batch.Any(m => m.Message.Name == payload))
+                {
+                    handlerEntered.TrySetResult();
+                    // 阻塞且规范观察取消：泵取消时抛 OCE，触发泵的关停结算分支。
+                    await Task.Delay(Timeout.Infinite, ct);
+                    return;
+                }
+                await ack.AcknowledgeAsync(ct);
+            },
+            maxBatchSize: 1,
+            maxDelay: TimeSpan.FromMilliseconds(20),
+            cancellationToken);
+
+        await broker.PublishAsync(new TestMessage(payload), cancellationToken);
+        await handlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
+
+        // 在 handler 仍阻塞（批次在途、未结算）时释放订阅：必须限时完成，不得永久挂起。
+        // 修前 disposeTask 永不完成，超时任务胜出 → IsSameReferenceAs 断言红。
+        var disposeTask = sub.DisposeAsync().AsTask();
+        var winner = await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromSeconds(15), cancellationToken));
+        await Assert.That(winner).IsSameReferenceAs(disposeTask)
+            .Because("批次在途时释放订阅永久挂起：inner 先杀排空者，泵关停补结算入队孤儿 TCS 死锁");
+        await disposeTask;
+    }
+
     private static string NewTopic(string prefix)
         // Kafka topic 名上限 249 字符且只允许 [a-zA-Z0-9._-]；Guid N 形足够唯一。
         => $"{prefix}-{Guid.NewGuid():N}";
