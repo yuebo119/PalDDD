@@ -69,12 +69,14 @@ public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOu
             return await SaveChangesAsync().ConfigureAwait(false);
 #pragma warning restore S8949
         }
-        catch (DbUpdateException)
+        catch (Exception)
         {
             // v27 P2 修复：失败上抛前全批 Detach——Added 实体滞留 ChangeTracker 会被同
             // DbContext 下次无关 SaveChanges 幽灵 INSERT（调用方以为失败已放弃的消息被写入，
             // 或重发后双份）——镜像 EventLogDbContext.DetachAddedEvents（三十八轮 ITM-226
             // "残留批次污染后续追加"同型同文件族）
+            // FIX-020 次级（2026-11-08）：异常面放宽为所有异常（镜像 InboxDbContext R12 C-05）——
+            // 取消/OCE 下 Added 实体滞留 ChangeTracker，长驻上下文后续 SaveChanges 幽灵 INSERT。
             foreach (var message in messages)
                 Entry(message).State = EntityState.Detached;
             throw;

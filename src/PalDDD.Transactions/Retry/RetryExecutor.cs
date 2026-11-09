@@ -94,9 +94,11 @@ public static class RetryExecutor
             catch (Exception ex) when (IsRetryCandidate(ex, cancellationToken))
             {
                 var failures = attempt;
-                if (failures > options.MaxRetries || !(options.ShouldRetry?.Invoke(ex) ?? true))
+                // FIX-020 次级（2026-11-08）：用户回调异常隔离——避免回调异常中止重试链
+                // 并掩盖原始 operation 异常。ShouldRetry 异常按「不重试」降级；OnRetry 异常吞掉。
+                if (failures > options.MaxRetries || !TryEvaluateShouldRetry(options, ex))
                     throw;
-                options.OnRetry?.Invoke(ex, failures);
+                TryInvokeOnRetry(options, ex, failures);
                 await Task.Delay(ComputeDelaySafely(options.BackoffPolicy, failures), clock, cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -128,13 +130,36 @@ public static class RetryExecutor
             catch (Exception ex) when (IsRetryCandidate(ex, cancellationToken))
             {
                 var failures = attempt;
-                if (failures > options.MaxRetries || !(options.ShouldRetry?.Invoke(ex) ?? true))
+                // FIX-020 次级（2026-11-08）：用户回调异常隔离（同无返回值版本）。
+                if (failures > options.MaxRetries || !TryEvaluateShouldRetry(options, ex))
                     throw;
-                options.OnRetry?.Invoke(ex, failures);
+                TryInvokeOnRetry(options, ex, failures);
                 await Task.Delay(ComputeDelaySafely(options.BackoffPolicy, failures), clock, cancellationToken)
                     .ConfigureAwait(false);
             }
             attempt++;
+        }
+    }
+
+    /// <summary>
+    /// 回调异常隔离（FIX-020 次级，2026-11-08）：用户回调异常不得中止重试链或掩盖原始异常。
+    /// ShouldRetry 异常按「不重试」降级；OnRetry 异常吞掉。
+    /// </summary>
+    private static bool TryEvaluateShouldRetry(RetryOptions options, Exception ex)
+    {
+        try { return options.ShouldRetry?.Invoke(ex) ?? true; }
+        catch (Exception callbackEx) when (callbackEx is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryInvokeOnRetry(RetryOptions options, Exception ex, int failures)
+    {
+        try { options.OnRetry?.Invoke(ex, failures); }
+        catch (Exception callbackEx) when (callbackEx is not OperationCanceledException)
+        {
+            // OnRetry 异常仅吞掉（不中断重试链）。
         }
     }
 
