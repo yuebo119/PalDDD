@@ -38,6 +38,9 @@ public sealed class DomainEventOutboxBridgeDapperTests
         await unitOfWork.BeginTransactionAsync(ct);
         var written = await bridge.PersistAsync([aggregate], store, ct);
         await unitOfWork.CommitAsync(ct);
+        // FIX-014（2026-11-08）：事件清理在提交成功后调用（PersistAsync 不再内清理——
+        // 提交失败回滚时事件保留，重试不丢）。
+        DomainEventOutboxBridge.ClearDomainEvents([aggregate]);
 
         await Assert.That(written).IsEqualTo(1);
         await Assert.That(aggregate.HasDomainEvents).IsFalse();

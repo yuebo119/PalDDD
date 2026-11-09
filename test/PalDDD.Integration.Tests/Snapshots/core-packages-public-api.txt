@@ -1668,6 +1668,7 @@ class PalDDD.Transactions.DomainEventOutboxBridge
   ctor(PalDDD.Serialization.IMessageCatalog catalog, PalDDD.Serialization.IMessageSerializer serializer)
   method PalDDD.Transactions.OutboxMessage BuildMessage(PalDDD.Core.DomainEvent domainEvent)
   method System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> BuildMessages(System.Collections.Generic.IEnumerable<PalDDD.Core.Entity> aggregates)
+  method System.Void ClearDomainEvents(System.Collections.Generic.IReadOnlyList<PalDDD.Core.Entity> aggregates)
   method System.Threading.Tasks.ValueTask<System.Int32> PersistAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Core.Entity> aggregates, PalDDD.Transactions.IPalOutboxStore outboxStore, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.DynamicStep
   ctor(System.String key, System.Func<PalDDD.Transactions.SagaState, System.String> router, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate)
