@@ -56,7 +56,7 @@ CREATE INDEX idx_inbox_processed ON inbox_messages(status, processed_at);
 CREATE TABLE saga_states (
     saga_id       TEXT    PRIMARY KEY,  -- Ulid 26 字符（代码传字符串，非 UUID）；MySQL: CHAR(26)
     current_state TEXT    NOT NULL,
-    status        INTEGER NOT NULL DEFAULT 0,  -- 0:Active 1:Completed 2:Compensated 3:CompensationFailed 4:DeadLettered
+    status        INTEGER NOT NULL DEFAULT 0,  -- 0:Active 1:Completed 2:Compensated 3:CompensationFailed 5:AwaitingHumanDecision（4 为永久空洞，不得复用）
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at  TIMESTAMP,
     error         TEXT,

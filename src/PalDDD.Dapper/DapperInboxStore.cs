@@ -229,11 +229,15 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // 三十八轮 P2 修复：同 MarkProcessedAsync——processing_started_at 抢占 token 守卫
         // 2026-11-07 审计 P1-B：Failed 行写 processed_at（否则 Retention 的 includeFailed
-        // 永远清不掉 Failed 行）；时间取处理开始时间，回退接收时间（store 无独立时间源）。
-        var failedAt = message.ProcessingStartedAt ?? message.ReceivedAt;
+        // 永远清不掉 Failed 行）；时间取处理开始时间。
+        // FIX-020（2026-11-08）：显式守卫——ProcessingStartedAt 为 null 时 fail-fast（对齐
+        // PalORM），修前 `?? ReceivedAt` 是死回退（下方 `!.Value` 先抛，回退值永不消费）。
+        if (message.ProcessingStartedAt is null)
+            throw new ArgumentNullException(nameof(message), "message.ProcessingStartedAt must be set before marking the message.");
+        var failedAt = message.ProcessingStartedAt.Value;
         var affected = await c.ExecuteAsync(
             SqlTemplates.InboxMarkFailed,
-                new { err = failureReason, id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value), processedAt = ToTimeParam(failedAt) }, Tx).ConfigureAwait(false);
+                new { err = failureReason, id = message.Id, startedAt = ToTimeParam(failedAt), processedAt = ToTimeParam(failedAt) }, Tx).ConfigureAwait(false);
         // R11 F16：同 MarkProcessed——命中时同步入参对象（0 行不清洗被抢占者快照）。
         if (affected > 0)
         {

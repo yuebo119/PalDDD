@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 
 namespace PalDDD.Projections;
 
@@ -23,11 +24,13 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
     // TryStart 跟踪查询两形态分别编译，跟踪语义随委托固化）。按 IModel 引用各缓存一份
     // 委托：编译委托与单一模型绑定（EF 官方约束），同上下文类型跨 provider 模型实例
     // 不同，按模型分持。
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+    // FIX-020（2026-11-08）：ConcurrentDictionary → ConditionalWeakTable——IModel 键的静态
+    // 字典永不回收，历史模型及其元数据滞留（同仓 EventLogDbContext 已改 CWT 的先例）。
+    private static readonly ConditionalWeakTable<
         Microsoft.EntityFrameworkCore.Metadata.IModel,
         Func<ProjectionCheckpointDbContext, string, string, string, CancellationToken, Task<ProjectionCheckpoint?>>> GetCheckpointNoTrackingByModel = new();
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+    private static readonly ConditionalWeakTable<
         Microsoft.EntityFrameworkCore.Metadata.IModel,
         Func<ProjectionCheckpointDbContext, string, string, string, CancellationToken, Task<ProjectionCheckpoint?>>> GetCheckpointTrackedByModel = new();
 
@@ -46,7 +49,7 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         ValidateKeyParts(projectionName, sourceName, position);
 
         // A5（S1 轮）：读路径走按模型缓存的编译委托（AsNoTracking 形态随委托固化）
-        return await GetCheckpointNoTrackingByModel.GetOrAdd(Model, static _ =>
+        return await GetCheckpointNoTrackingByModel.GetValue(Model, static _ =>
             EF.CompileAsyncQuery<ProjectionCheckpointDbContext, string, string, string, ProjectionCheckpoint?>(
                 (ctx, projectionName, sourceName, position, ct) => ctx.ProjectionCheckpoints
                     .AsNoTracking()
@@ -100,7 +103,7 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
 
         // A5（S1 轮）：跟踪查询走按模型缓存的编译委托（僵尸回收分支的 MarkProcessing
         // 突变依赖 ChangeTracker 持久化，保持跟踪形态；编译只固化查询形状，跟踪语义不变）
-        var checkpoint = await GetCheckpointTrackedByModel.GetOrAdd(Model, static _ =>
+        var checkpoint = await GetCheckpointTrackedByModel.GetValue(Model, static _ =>
             EF.CompileAsyncQuery<ProjectionCheckpointDbContext, string, string, string, ProjectionCheckpoint?>(
                 (ctx, projectionName, sourceName, position, ct) => ctx.ProjectionCheckpoints
                     .SingleOrDefault(

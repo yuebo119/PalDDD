@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 
 namespace PalDDD.Idempotency;
 
@@ -26,11 +27,13 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
     // TryStart 跟踪查询两形态分别编译，跟踪语义随委托固化）。按 IModel 引用各缓存一份
     // 委托：编译委托与单一模型绑定（EF 官方约束），同上下文类型跨 provider 模型实例
     // 不同，按模型分持。
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+    // FIX-020（2026-11-08）：ConcurrentDictionary → ConditionalWeakTable——IModel 键的静态
+    // 字典永不回收，历史模型及其元数据滞留（同仓 EventLogDbContext 已改 CWT 的先例）。
+    private static readonly ConditionalWeakTable<
         Microsoft.EntityFrameworkCore.Metadata.IModel,
         Func<IdempotencyDbContext, string, string, CancellationToken, Task<IdempotencyRecord?>>> GetRecordNoTrackingByModel = new();
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+    private static readonly ConditionalWeakTable<
         Microsoft.EntityFrameworkCore.Metadata.IModel,
         Func<IdempotencyDbContext, string, string, CancellationToken, Task<IdempotencyRecord?>>> GetRecordTrackedByModel = new();
 
@@ -49,7 +52,7 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
     {
         ValidateKeyParts(operationName, key);
 
-        var record = await GetRecordNoTrackingByModel.GetOrAdd(Model, static _ =>
+        var record = await GetRecordNoTrackingByModel.GetValue(Model, static _ =>
             EF.CompileAsyncQuery<IdempotencyDbContext, string, string, IdempotencyRecord?>(
                 (ctx, operationName, key, ct) => ctx.IdempotencyRecords
                     .AsNoTracking()
@@ -103,7 +106,7 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
 
         // A5（S1 轮）：跟踪查询走按模型缓存的编译委托（僵尸回收分支的突变依赖
         // ChangeTracker，保持跟踪形态；编译只固化查询形状，跟踪语义不变）
-        var record = await GetRecordTrackedByModel.GetOrAdd(Model, static _ =>
+        var record = await GetRecordTrackedByModel.GetValue(Model, static _ =>
             EF.CompileAsyncQuery<IdempotencyDbContext, string, string, IdempotencyRecord?>(
                 (ctx, operationName, key, ct) => ctx.IdempotencyRecords
                     .SingleOrDefault(x => x.OperationName == operationName && x.Key == key)))(this, operationName, key, ct).ConfigureAwait(false);
@@ -400,5 +403,12 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        // FIX-020（2026-11-08）：长度上限对齐 MySQL DDL（operation_name VARCHAR(128)、
+        // idempotency_key VARCHAR(255)）——超长在 MySQL 严格模式报 1406，非严格模式静默
+        // 截断致不同请求撞同一幂等键。PG/SQLite 虽无长度限制，统一上限保证跨栈一致。
+        if (operationName.Length > 128)
+            throw new ArgumentException("operation_name exceeds 128 characters (MySQL DDL limit).", nameof(operationName));
+        if (key.Length > 255)
+            throw new ArgumentException("idempotency_key exceeds 255 characters (MySQL DDL limit).", nameof(key));
     }
 }

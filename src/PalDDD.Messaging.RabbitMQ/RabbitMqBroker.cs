@@ -663,6 +663,13 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             await consumerChannel.BasicQosAsync(0, _prefetchCount, false, ct).ConfigureAwait(false);
             consumerTag = await consumerChannel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken: ct).ConfigureAwait(false);
 
+            // FIX-020（2026-11-08）：健康态恢复——新订阅成功即清除粘滞的故障标志。
+            // channel 关闭在连接存活时可重建，修前只置位不清除使 /health 永久 Unhealthy。
+            // 局限（broker 级标志）：一个订阅恢复会清掉另一订阅的故障——按 channel 跟踪
+            // 是更严谨的后续加固（ConditionalWeakTable<IChannel, string>）。
+            if (consumerChannel.IsOpen)
+                _consumeFaultReason = null;
+
             // v25 P2-5：ct 取消 → 异步解绑消费者终止消费；channel 已关等异常由安全包装吞成
             // Warning。句柄释放时 Dispose registration 防泄漏（释放与取消并发时，双
             // BasicCancelAsync 的后者同样被安全包装吞掉）
