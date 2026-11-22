@@ -66,10 +66,11 @@
     <VerifyReferenceAotCompatibility>true</VerifyReferenceAotCompatibility>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
     <!-- .NET 11 Runtime Async: 运行时管理 async 状态机，减少后台处理器栈帧 ~60%
-         ⚠️ 与 ConfigureAwait 的交互（二十四轮特性扫描 OPP-B2）：官方 .NET 11 runtime 文档建议
-         "少用 ConfigureAwait(false) 与 AsyncLocal → 开销更低"——本库全层 ~210 处 ConfigureAwait(false)
-         会稀释 runtime-async 收益 [推断·幅度未测]。保留理由：库可能被非 runtime-async 宿主引用，
-         全层 CA 是防御性正确。GA 后用 bench/OutboxThroughputBench 对比再定去留。 -->
+         ⚠️ ConfigureAwait(false) 去留已实测结案（2026-11-22，GA 计划 §三.4，勿重开，台账 perf-ledger #55）：
+         src 全层 938 处 CA 的移除对照（infra 车道 A/B，BDN MediumRun）净负面——EventLog +18~32%
+         （两方法 CI 不相交）、Inbox 方向性 +24%、其余噪声内。官方「少用 CA」建议在本仓
+         InMemory 快路径负载下不成立 [实测]。全层 CA 保留（兼防御非 runtime-async 宿主）。
+         复开条件：后续 .NET 大版本 runtime-async 语义演进，或真实挂起路径为主的车道数据。 -->
     <Features>runtime-async=on</Features>
     <!-- AOT 发布时速度优化优先 -->
     <OptimizationPreference>Speed</OptimizationPreference>
