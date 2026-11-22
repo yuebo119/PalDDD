@@ -12,9 +12,10 @@
       ═══════════════════════════════════════════════════════════
       NoWarn 抑制列表 — 逐条 Justification
       ═══════════════════════════════════════════════════════════
-      实际生效 18 条（<NoWarn> 行去重计数）：CA1062/CA2007/CA1307/CA1305/CA2100/
+      实际生效 17 条（<NoWarn> 行去重计数）：CA1062/CA2007/CA1307/CA1305/CA2100/
       CA2016/CA1721/CA1512/CA1849/CA2000/CA1001/CA1725（12）+ CS1591/CS1573/
-      CS1570/CS8620（4）+ NU1900（1）+ NU5104（1）。
+      CS1570/CS8620（4）+ NU1900（1）。NU5104 已于 2026-11-22 GA 轮清偿移除（前提消失：
+      微软 11 线包 GA 稳定版全批落地，打包面零预览依赖，ITM-806 预案第 4 步）。
       另有 2 条**非 NoWarn 抑制**：NU1901/NU1902 走 <WarningsNotAsErrors>（保留可见、
       不阻断）；NU1903/NU1904 不抑制（高/严重漏洞随 TreatWarningsAsErrors 阻断构建）。
       下方另列 CA1031——它**不在全局 NoWarn 内**，由各 catch 点 [SuppressMessage] 精确抑制，
@@ -54,10 +55,9 @@
               即完全静默；实测移除后构建 0 警告 0 错误 ⇒ 该抑制此前未在承重。
       NU1903/1904  高/严重漏洞 — **不抑制也不豁免**，经 TreatWarningsAsErrors 直接成为构建错误
               （高危及以上必须阻断发布）。
-      NU5104  稳定版包含预发布依赖 — .NET 11 TFM 的 NuGet 包（Microsoft.Data.Sqlite/Npgsql/MySqlConnector 等）当前仅有 preview 版本可用；所有 PalDDD 包需随 .NET 11 GA 后统一升级为稳定依赖并移除此抑制
       ═══════════════════════════════════════════════════════════
     -->
-    <NoWarn>$(NoWarn);CA1062;CA2007;CA1307;CA1305;CA2100;CA2016;CA1721;CA1512;CA1849;CA2000;CA1001;CA1725;CS1591;CS1573;CS1570;CS8620;NU1900;NU5104</NoWarn>
+    <NoWarn>$(NoWarn);CA1062;CA2007;CA1307;CA1305;CA2100;CA2016;CA1721;CA1512;CA1849;CA2000;CA1001;CA1725;CS1591;CS1573;CS1570;CS8620;NU1900</NoWarn>
     <!-- T-12（2026-09-22）：低/中危漏洞告警保留可见但不阻断构建（官方建议形态）。高/严重（NU1903/1904）
          不在豁免列表内 ⇒ 随 TreatWarningsAsErrors 成为构建错误。 -->
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902</WarningsNotAsErrors>

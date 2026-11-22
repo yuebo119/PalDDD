@@ -13,7 +13,6 @@
     本地重建：dotnet pack src/PalDDD.Base/PalDDD.Base.csproj
   -->
   <PropertyGroup>
-    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <Description>Pal.DDD 基础元包 — 最小编程模型：领域基元 + 序列化 + 压缩 + 源生成 + 编译时分析器。最小依赖（含 ByteAether.Ulid），AOT 安全。</Description>
     <PackageTags>DDD;Entity;ValueObject;DomainEvent;Specification;AOT;.NET11;Foundation</PackageTags>
     <IncludeBuildOutput>false</IncludeBuildOutput>
@@ -31,7 +30,7 @@
     <ProjectReference Include="..\PalDDD.Core.SourceGen\PalDDD.Core.SourceGen.csproj" PrivateAssets="build;analyzers" />
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" PrivateAssets="build;analyzers" />
     <ProjectReference Include="..\PalDDD.Serialization\PalDDD.Serialization.csproj" PrivateAssets="build;analyzers" />
-    <PackageReference Include="ByteAether.Ulid" Version="1.4.2" PrivateAssets="build;analyzers" />
+    <PackageReference Include="ByteAether.Ulid" PrivateAssets="build;analyzers" />
   </ItemGroup>
 
 </Project>
