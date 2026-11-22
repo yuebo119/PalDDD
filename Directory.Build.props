@@ -76,8 +76,9 @@
     <!-- AOT 下保留异常行号信息 (.NET 11 Preview 4+) -->
     <StackTraceLineNumberSupport>true</StackTraceLineNumberSupport>
     <VersionPrefix>5.0.0</VersionPrefix>
-    <!-- 2026-10-27 用户裁决：.NET 11 GA（2026-11）前先走预览通道发 5.0.0-preview.1（GA 轮把本后缀清空、同内容转正 5.0.0）。 -->
-    <VersionSuffix>preview.1</VersionSuffix>
+    <!-- VersionSuffix 已清空（2026-11-22 GA 轮执行，2026-10-27 用户裁决）：5.0.0-preview.1 → 5.0.0 正式版转正，
+         内容 = preview.1 + 预览期修订族（FIX-001~020 / API 增补 / 依赖 GA 稳定版全批），
+         CHANGELOG `[5.0.0]` 段同提交转正（发布规范：先于 tag）。tag/NuGet 发布动作待用户授权。 -->
     <Authors>PalDDD</Authors>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/yuebo119/PalDDD</PackageProjectUrl>
