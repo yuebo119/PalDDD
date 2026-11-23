@@ -253,8 +253,11 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         foreach (var message in messages)
             message.NextAttemptAt = message.NextAttemptAt ?? now;
         var rows = messages.Select(OutboxMessageRow.FromDomain).ToList();
-        // 6.6.0 单参重载：PG 取整段行数走单次 COPY（2 万行不再付 20 次 BeginBinaryImport/
-        // Complete），MySQL/SQLite 内部沿用 1000 批宽；需要限制单次 COPY/事务持锁行数时用
+        // 单参重载默认整段单批：PG 6.6.0 起单次 COPY（2 万行不再付 20 次 BeginBinaryImport/
+        // Complete），MySQL 6.9.0 起默认批宽由 1000 行/批改整段单次 LOAD DATA（与 PG 对齐），
+        // SQLite 6.8.0 起为行预编译形态。MySQL 源码实证（MySqlBulkCopyInserter）：传入
+        // transaction 时 LOAD DATA 入事务、无隐式提交切断，无事务时每批语句级原子；
+        // local_infile=OFF 的服务端走多值回退（1000 行/语句钳制）。需要限制单次持锁行数时用
         // 带 batchSize 的重载（本 store 的批量入口由调用方控制单次列表大小）。
         // v4.0 ④（ADR-026）：ct 传播进批量路径
         var inserted = (int)await Session.BulkInsertAsync(rows, ct).ConfigureAwait(false);

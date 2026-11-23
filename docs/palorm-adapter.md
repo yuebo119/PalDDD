@@ -101,9 +101,9 @@ services.AddPalOrmSqlite(connectionString);
 
 | 方言包 | DI 入口 | 方言特性 |
 |---|---|---|
-| `PalDDD.PalORM.Sqlite` | `AddPalOrmSqlite(services, cs, options?, clock?)` | 嵌入式基准路径，AOT 验证载体；BulkInsert 默认 1000 行/批多值 INSERT |
+| `PalDDD.PalORM.Sqlite` | `AddPalOrmSqlite(services, cs, options?, clock?)` | 嵌入式基准路径，AOT 验证载体；BulkInsert 6.8.0 起为行预编译形态（原 1000 行/批多值 INSERT 已换） |
 | `PalDDD.PalORM.PostgreSql` | `AddPalOrmPostgreSql(services, cs, options?, clock?)` | 支持 RETURNING —— Outbox LeasePending / Inbox TryStart 单语句原子路径（无两步回读）；BulkInsert 走 Npgsql Binary COPY（6.6.0 单参重载整段单次 COPY） |
-| `PalDDD.PalORM.MySql` | `AddPalOrmMySql(services, cs, options?, clock?)` | 不支持 RETURNING（两步 UPDATE+SELECT）；BulkInsert 检测 `local_infile` 系统变量自动选 BulkCopy 或多值 INSERT（默认 1000 行/批） |
+| `PalDDD.PalORM.MySql` | `AddPalOrmMySql(services, cs, options?, clock?)` | 不支持 RETURNING（两步 UPDATE+SELECT）；BulkInsert 检测 `local_infile` 系统变量自动选 BulkCopy 或多值 INSERT（6.9.0 起 BulkCopy 默认整段单批，与 PG 对齐） |
 
 #### 4.1.1 会话池（PalORM 6.6.0 `IDataSessionFactory`，可选）
 

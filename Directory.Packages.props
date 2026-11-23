@@ -79,8 +79,28 @@
        Stryker 5.0.0 → 5.1.0。维持项：MediatR 12.5.0 / Verify.TUnit 32.0.1 商业许可禁令
        （14/15.x、33.7.2 均禁令线）、Confluent.Kafka 2.16.0（最新稳定；4.4.0-alpha.1 跨两主版本，
        核心消息栈不入 alpha 线）、RabbitMQ.Client 7.2.2（7.3.0-beta.0 预发布不入线）、
-       CAP 10.1.0-preview-308323494 / BDN 0.16.0-preview.2 各自最新（含预发布口径）、
-       Unsafe 6.1.2 / Platforms 8.0.0-preview.7 既有废弃线裁决；PalORM ×5 6.8.0 已最新 -->
+   CAP 10.1.0-preview-308323494 / BDN 0.16.0-preview.2 各自最新（含预发布口径）、
+   Unsafe 6.1.2 / Platforms 8.0.0-preview.7 既有废弃线裁决；PalORM ×5 6.8.0 已最新；
+   2026-11-23 全量核新（用户令「升级当前项目引用的所有包和库到最新版，并适配」，NuGet 双通道实测）：
+   PalORM ×5 → 6.9.0（6.x 线内次版本）：上游 4 处行为变更逐条核查对本仓零触及——
+   ①MySQL 批插默认整段单批：本仓唯一消费点 PalOrmOutboxStore.AddMessagesAsync 单参重载，
+   批大小由调用方控制（回放 CheckpointBatchSize 量级），且 MySqlBulkCopyInserter 源码实证
+   传入 transaction 时 LOAD DATA 入事务（无隐式提交切断），无事务时语句级原子（整段单批
+   比 6.8.0 的 N 次自动提交原子性更强）；生产/CI MySQL 容器 local_infile 默认 OFF 走多值
+   回退路径（1000 行/语句钳制）行为不变；②PG DateTime 列改 timestamptz：本仓 PalORM 模型
+   全部 DateTimeOffset 无裸 DateTime 属性，测试夹具 DDL（MultiDialectSchema）PG 侧早已
+   TIMESTAMPTZ，零影响；③ToPageAsync 遇 Skip() 抛异常、④SQLite ForUpdate/ForShare 构建期
+   抛错：本仓 grep 零调用；迁移漂移检测（MigrateWithResultAsync 默认开启）与 PALORM054
+   （SaveAsync+ConcurrencyCheck）本仓分别零调用/不走 SaveAsync；超时归一 TimeoutException
+   无专捕 catch 面；新增四项生命周期 API 不消费；内部修复（连接判死自愈/读租约双计/
+   ExecuteDeleteAsync 软删保留）为正面收益。适配面=注释勘正（AddMessagesAsync 头注
+   「MySQL/SQLite 内部沿用 1000 批宽」失实）+ 编译 + 面板实证。
+   Meziantou.Analyzer 3.0.341 → 3.0.342（补丁位；CLI 通道漏报、flatcontainer 直查实证，
+   与 2026-11-22 轮同款双通道方法论）；其余 72 处维持现状：68 处已在最新（含预发布口径），
+   4 处既有裁决排除（MediatR 12.5.0 / Verify.TUnit 32.0.1 商业许可禁令、
+   Confluent.Kafka 2.16.0 核心消息栈不入 4.4.0-alpha.1 跨两主版本 alpha 线、
+   RabbitMQ.Client 7.2.2 7.3.0-beta.0 预发布不入线）；dotnet tools（reportgenerator 5.6.1 /
+   Stryker 5.1.0）与 SDK 11.0.100（GA 后 patch 11.0.101~104 探测 404 未发）均最新 -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
@@ -92,7 +112,7 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.12.0" />
     <!-- 第三方代码质量分析器（2026-10-18 接入，PrivateAssets=all，不进包依赖） -->
     <PackageVersion Include="Roslynator.Analyzers" Version="5.0.1" />
-    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.341" />
+    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.342" />
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.37.0.15768" />
     <!-- 仓储层依赖 (EF Core 11 rc.3 线) — 多数据库 Provider -->
     <!-- 2026-09-13 版本核实:EF Core 11 线最新即 rc.1.26425.128(rc.2 未发,GA 预计 2026-11),
@@ -130,12 +150,18 @@
          改行预编译与 json_each 单参数形态（批插 3.5~3.9×、批删 15×+）、批内重复主键后行覆盖
          前行、混合类型键批删在 JSON 构建期抛 FormatException——本仓 Outbox/Inbox 主键 Ulid
          无批内重复路径，适配面由编译 + PalORM 测试面板与 AOT 双样本实证；6.7.0（2026-10-23）：
-         无公共 API 签名变更，TenantAware/QueryPipeline/结构体投影本仓均未消费 -->
-    <PackageVersion Include="PalORM.Core" Version="6.8.0" />
-    <PackageVersion Include="PalORM.SourceGen" Version="6.8.0" />
-    <PackageVersion Include="PalORM.Sqlite" Version="6.8.0" />
-    <PackageVersion Include="PalORM.PostgreSql" Version="6.8.0" />
-    <PackageVersion Include="PalORM.MySql" Version="6.8.0" />
+         无公共 API 签名变更，TenantAware/QueryPipeline/结构体投影本仓均未消费；
+         6.9.0（2026-11-23 升位）：上游行为变更 4 处（MySQL 批插默认整段单批 / PG DateTime 列
+         改 timestamptz / ToPageAsync+Skip 构建期抛错 / SQLite ForUpdate|ForShare 构建期抛
+         NotSupportedException）经源码与 release notes 逐条核实对本仓零触及——MySQL 批宽由
+         调用方控制且事务内入事务（MySqlBulkCopyInserter 源码实证）、模型全 DateTimeOffset、
+         后两组 API 本仓 grep 零调用；新增迁移漂移检测/PALORM054/TimeoutException 归一/
+         四项生命周期 API 均不触及本仓调用面（Migrate/SaveAsync 零调用、无专捕 catch） -->
+    <PackageVersion Include="PalORM.Core" Version="6.9.0" />
+    <PackageVersion Include="PalORM.SourceGen" Version="6.9.0" />
+    <PackageVersion Include="PalORM.Sqlite" Version="6.9.0" />
+    <PackageVersion Include="PalORM.PostgreSql" Version="6.9.0" />
+    <PackageVersion Include="PalORM.MySql" Version="6.9.0" />
     <!-- MemoryPack 二进制序列化（AOT 兼容） -->
     <PackageVersion Include="MemoryPack" Version="1.22.0" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
