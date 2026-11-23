@@ -60,6 +60,12 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
 
     private PgNotificationListener? _listener;
 
+    // 2026-11-23 审查修复（优化）：fire 任务缓存——修前每 NOTIFY 一次 Task.Run 分配。
+    // gate(1,1) 串行语义下同一时刻至多一个 fire 在飞：in-flight 时后续 NOTIFY 被
+    // Wait(0) 拒掉，根本到不了 Task.Run；任务完成（finally 释放 gate 前）清回 null，
+    // 下一次 NOTIFY 再建。分配次数 = 实际批处理次数，非通知次数。
+    private Task? _fireTask;
+
     /// <summary>启动监听（建立连接并 LISTEN）。</summary>
     /// <exception cref="InvalidOperationException">重复启动（IHostedService 契约下 StartAsync 只应调用一次）。</exception>
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -93,8 +99,10 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
             // 不传宿主 token：传入时若调度前取消，任务不执行、已获取的 gate 永不释放
             //（Dapper 版 P2 修复同款）；关停协作取消经 _shutdownCts（StopAsync 先取消），
             // gate 释放由 FireBatchProcessAsync 的 finally 兜底。
+            // fire 任务缓存在 _fireTask：批处理串行（gate 语义）下同刻至多一个在飞，
+            // 完成后清回 null 复用——分配次数 = 实际批处理次数而非通知次数。
 #pragma warning disable S8949 // 刻意不向 Task.Run 传 token（调度前取消会使 gate 永不释放）
-            _ = Task.Run(() => FireBatchProcessAsync());
+            _fireTask = Task.Run(FireBatchProcessAsync);
 #pragma warning restore S8949
         }
     }
@@ -124,6 +132,9 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
         }
         finally
         {
+            // 清回 fire 缓存位（复用窗口见 _fireTask 字段注释）；finally 先于 gate 释放
+            // 执行，下一次 NOTIFY 看到的是 null → 新建任务，不会读到已完成任务。
+            _fireTask = null;
             try { _processGate.Release(); }
             catch (ObjectDisposedException)
             {
