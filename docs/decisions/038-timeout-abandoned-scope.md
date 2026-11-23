@@ -2,7 +2,7 @@
 
 > 状态：**已采纳（2026-11-07）**，阶段 1 为「登记 + 披露 + 独立可观测项」，**不含根因修复**；阶段 2 的裁决见 [ADR-040](040-b4-phase2-scope-ownership-decision.md)（结论：当前不实施，先观测）
 > 日期：2026-11-07
-> 关联：2026-11-06 全量功能审计（`docs/review/audit-2026-11-06-full.md` P1 B4）、修复方案 v4（`docs/review/fix-plan-2026-11-07-v4.md` §2.2）、ADR-026（Dispatcher 复用 RequestServices 性能定案）、`TimeoutBehavior.cs` 文件头语义定案
+> 关联：2026-11-06 全量功能审计（`docs/review/audit-2026-11-06-full-v96.md` P1 B4）、修复方案 v4（`docs/review/fix-plan-2026-11-07-v4.md` §2.2）、ADR-026（Dispatcher 复用 RequestServices 性能定案）、`TimeoutBehavior.cs` 文件头语义定案
 
 ## 消费状态
 

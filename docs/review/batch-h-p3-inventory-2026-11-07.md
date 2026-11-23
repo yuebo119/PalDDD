@@ -1,6 +1,6 @@
 # 批 H · P3 卫生 18 项盘点（2026-11-07）
 
-> 依据：`docs/review/fix-plan-2026-11-07-v4.md` §3 批 H；清单来源 `docs/review/audit-2026-11-06-full.md:70`。
+> 依据：`docs/review/fix-plan-2026-11-07-v4.md` §3 批 H；清单来源 `docs/review/audit-2026-11-06-full-v96.md:70`。
 > 口径：逐项标注「已闭合 / 未做」，已闭合项给源码锚点与闭合批次；未做项给理由与建议载体。
 > **明确声明**：`verify-conventions --quick` 只查结构 / 链接 / TODO（V5/V8/V9/V10/V11/V12），**查不到语义失实**；本盘点不宣称它覆盖语义正确性。
 
