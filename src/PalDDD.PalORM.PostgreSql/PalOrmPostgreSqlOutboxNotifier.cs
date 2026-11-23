@@ -51,15 +51,29 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
     // 在执行；NOTIFY 风暴被合并（一次批处理拿走全部 pending，多余的并发只竞争连接池）。
     private readonly SemaphoreSlim _processGate = new(1, 1);
 
+    // 2026-11-23 审查修复（缺陷 1）：关停协作取消——FireBatchProcessAsync 原传
+    // CancellationToken.None，宿主关停时 in-flight 批处理不可协作收尾，进程退出硬杀
+    // 批（Outbox 租约悬挂到超时）。对齐 Dapper 版 stoppingToken 语义：StopAsync 先
+    // 取消本 CTS，ProcessBatchAsync 感知取消后按其既有协作语义收尾（Dapper 版
+    // FireBatchProcessAsync(stoppingToken) 同款）。
+    private CancellationTokenSource? _shutdownCts;
+
     private PgNotificationListener? _listener;
 
     /// <summary>启动监听（建立连接并 LISTEN）。</summary>
+    /// <exception cref="InvalidOperationException">重复启动（IHostedService 契约下 StartAsync 只应调用一次）。</exception>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        // 2026-11-23 审查修复（缺陷 2）：幂等守卫——重复 StartAsync 会 new 第二个 listener，
+        // 旧实例的订阅挂着无人释放（构造 + 订阅成功但 Stop/Dispose 走不到）。fail-fast 抛。
+        if (_listener is not null)
+            throw new InvalidOperationException("PalOrmPostgreSqlOutboxNotifier has already been started.");
         // 通道名白名单校验与 Dapper 版同款（LISTEN 不可参数化，拼接前须防注入；
         // PG 未引号标识符小写折叠，上游 listener 以双引号包裹通道名传递——大小写口径一致）。
         ValidateChannelName(channelName);
+
+        _shutdownCts = new CancellationTokenSource();
 
         // 构造不建连；StartAsync 后才连接并 LISTEN（上游 XML 契约）。
         // 订阅者异常被上游隔离（不会终止重连循环），此处仍 catch-log 防未观察异常。
@@ -76,8 +90,9 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
         //（PeriodicTimer 轮询 + 上游 listener 心跳保活的后续通知），对齐 Dapper 版语义。
         if (_processGate.Wait(0))
         {
-            // 不传 stoppingToken：传入时若调度前取消，任务不执行、已获取的 gate 永不释放
-            //（Dapper 版 P2 修复同款）；由 FireBatchProcessAsync 内部 finally 兜底释放。
+            // 不传宿主 token：传入时若调度前取消，任务不执行、已获取的 gate 永不释放
+            //（Dapper 版 P2 修复同款）；关停协作取消经 _shutdownCts（StopAsync 先取消），
+            // gate 释放由 FireBatchProcessAsync 的 finally 兜底。
 #pragma warning disable S8949 // 刻意不向 Task.Run 传 token（调度前取消会使 gate 永不释放）
             _ = Task.Run(() => FireBatchProcessAsync());
 #pragma warning restore S8949
@@ -88,13 +103,22 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
         Justification = "后台批处理触发任务必须隔离任意异常，避免未处理异常终止后台服务；失败已通过 logger.Error 记录。")]
     private async Task FireBatchProcessAsync()
     {
+        // 关停协作取消（审查修复 1）：批处理执行期间 StopAsync 可取消本 token，让
+        // ProcessBatchAsync 按既有协作语义收尾（对齐 Dapper 版 stoppingToken 形态）；
+        // null = StartAsync 从未成功，无批处理可言（防御，正常不可达）。
+        var ct = _shutdownCts?.Token ?? CancellationToken.None;
         try
         {
             using var scope = scopeFactory.CreateScope();
             var processor = scope.ServiceProvider.GetRequiredService<OutboxBatchProcessor>();
-            await processor.ProcessBatchAsync(CancellationToken.None).ConfigureAwait(false);
+            await processor.ProcessBatchAsync(ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 宿主关停：批处理按协作语义收尾，记录后静默（对齐 Dapper 版 ITM-094 语义）
+            logger.Information("PostgreSQL NOTIFY batch process canceled during shutdown (PalORM stack)");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.Error(ex, "PostgreSQL NOTIFY batch process failed (PalORM stack)");
         }
@@ -111,6 +135,15 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
     /// <summary>停止监听并释放后台任务（断线由上游 StopAsync 幂等处理）。</summary>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        // 先取消 in-flight 批处理（协作收尾），再停监听——顺序反了会让最后一批
+        // 在监听已停、轮询器同停的窗口内无人等待其完成。
+        if (_shutdownCts is not null)
+        {
+            await _shutdownCts.CancelAsync().ConfigureAwait(false);
+            _shutdownCts.Dispose();
+            _shutdownCts = null;
+        }
+
         if (_listener is not null)
         {
             _listener.OnNotification -= OnNotificationReceived;
@@ -122,6 +155,11 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
     public async ValueTask DisposeAsync()
     {
         _processGate.Dispose();
+        if (_shutdownCts is not null)
+        {
+            _shutdownCts.Dispose();
+            _shutdownCts = null;
+        }
         if (_listener is not null)
             await _listener.DisposeAsync().ConfigureAwait(false);
     }

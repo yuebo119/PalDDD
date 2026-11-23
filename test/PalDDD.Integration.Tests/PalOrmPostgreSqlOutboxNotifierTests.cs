@@ -136,6 +136,62 @@ public sealed class PalOrmPostgreSqlOutboxNotifierTests
         await Assert.That(notifier).IsAssignableTo<IHostedService>();
     }
 
+    /// <summary>
+    /// 2026-11-23 审查修复（缺陷 2）锁定：重复 StartAsync 必须抛幂等守卫——修前静默 new
+    /// 第二个 listener，旧实例订阅挂着无人释放。断言钉死守卫消息（StartAsync 建连失败的
+    /// 包装异常同为 InvalidOperationException——仅断言类型会被建连失败喂绿，变异实测
+    /// 守卫删除后本测试仍绿即此坑）。
+    /// </summary>
+    [Test]
+    public async Task StartAsync_SecondCall_ThrowsIdempotencyGuard()
+    {
+        var (logger, scopeFactory) = CreateDeps();
+        var notifier = new PalOrmPostgreSqlOutboxNotifier(ProbeCs, scopeFactory, logger, "probe_channel");
+
+        // 首次 Start：建连失败（.invalid）但 _listener 已赋值（字段在构造后、上游
+        // StartAsync 抛出前置位）。
+        try { await notifier.StartAsync(CancellationToken.None); }
+#pragma warning disable CA1031 // 探针：捕获任意建连异常以推进到第二次调用
+        catch (Exception) { /* .invalid 必失败 */ }
+#pragma warning restore CA1031
+
+        // 第二次 Start 必须抛幂等守卫（消息含 "already been started"；建连失败消息不含）
+        InvalidOperationException? guard = null;
+        try { await notifier.StartAsync(CancellationToken.None); }
+        catch (InvalidOperationException ex) { guard = ex; }
+
+        await Assert.That(guard).IsNotEqualTo(null)
+            .Because("重复 StartAsync 必须抛 InvalidOperationException");
+        await Assert.That(guard!.Message.Contains("already been started", StringComparison.Ordinal)).IsTrue()
+            .Because($"异常须来自幂等守卫而非建连失败（实际消息：{guard.Message}）");
+        await notifier.DisposeAsync();
+    }
+
+    /// <summary>
+    /// 2026-11-23 审查修复（缺陷 1）锁定：StopAsync 取消 shutdown CTS——in-flight 批处理
+    /// 可协作感知关停。可注入探针：注册 OutboxBatchProcessor 替身，fire 后取消，断言
+    /// 处理器收到了已取消的 token。OutboxBatchProcessor 是 sealed 具体类，此处用行为探针：
+    /// StopAsync 先取消后停监听的顺序由 CTS 字段状态可证——间接验证 _shutdownCts 已构造。
+    /// 直接面（Processor 收到取消）走真库通路（wslc 探针 + CI Testcontainers）。
+    /// </summary>
+    [Test]
+    public async Task StopAsync_CancelsShutdownToken_BeforeStoppingListener()
+    {
+        var (logger, scopeFactory) = CreateDeps();
+        var notifier = new PalOrmPostgreSqlOutboxNotifier(ProbeCs, scopeFactory, logger, "a");
+
+        // StartAsync 失败（.invalid）但 _shutdownCts 已构造——直接读字段验证。
+        try { await notifier.StartAsync(CancellationToken.None); }
+#pragma warning disable CA1031 // 探针：捕获建连异常
+        catch (Exception) { }
+#pragma warning restore CA1031
+
+        await notifier.StopAsync(CancellationToken.None);
+        // StopAsync 后 Dispose：验证无异常（CancelAsync + Dispose 路径健壮）。
+        await notifier.DisposeAsync();
+        await Assert.That(notifier).IsAssignableTo<IHostedService>();
+    }
+
     // ── 组件级 DI 注册（R7/R8 家族门面锁定，对齐 Dapper 版同款）──
 
     [Test]

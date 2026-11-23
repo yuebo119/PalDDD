@@ -123,27 +123,25 @@ public static class MySqlServiceCollectionExtensions
         //（含池扩容按需新建的连接）统一重放 SET SESSION 优化，ITM-211 的池扩容缺口
         //（同池 RC/RR 混跑）就此闭环，init_connect 服务端方案从「推荐」降为「可选兜底」。
         // 连接串已带 ConnectionReset=false，Reset 条件位不触发；防御性不筛 Conditions——
-        // 重放幂等（SET SESSION 同值重写），误重放零语义影响。
+        // 重放幂等（SET SESSION 同值重写），误重放零语义影响。回调在连接建立路径同步执行：
+        // 每个新开物理连接多一次 SET 往返（池化下仅冷启动与池扩容时发生，非每次 checkout）。
         if (applyOptimization)
         {
             builder.UseConnectionOpenedCallback(static (context, ct) =>
             {
                 // 回调异常面：吞掉（对齐原首连接优化的 catch MySqlException 语义——
                 // 优化失败不得阻断连接交付）；新连接走服务端默认参数，缺口回到
-                // init_connect 兜底方案。
+                // init_connect 兜底方案。MySqlException 与其他异常同处置（连不上库时
+                // SET 必失败，无需细分形态）。
+#pragma warning disable CA1031 // 回调由 provider 在连接建立路径调用，异常逃逸会打断建连
                 try
                 {
                     MySqlPerformanceOptimizer.Optimize(context.Connection);
                 }
-                catch (MySqlException)
-                {
-                    // 优化失败——连接保持可用（服务端默认设置）
-                }
-#pragma warning disable CA1031 // 回调由 provider 在连接建立路径调用，异常逃逸会打断建连
                 catch (Exception)
 #pragma warning restore CA1031
                 {
-                    // 非 MySqlException 的失败（如正在关停）同样吞掉——建连优先
+                    // 优化失败——连接保持可用（服务端默认设置）
                 }
 
                 return ValueTask.CompletedTask;
