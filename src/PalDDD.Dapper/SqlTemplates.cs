@@ -347,8 +347,17 @@ public static class SqlTemplates
     /// P2/P3 修复（十七轮）：方言语义声明——
     /// MySQL 变体见 <see cref="SagaLeaseActiveMySql"/>（JOIN 形态；READ COMMITTED 下
     /// UPDATE 与租约回读两步之间存在抢占窗口，由 SagaUpdate 的 version 乐观锁兜底）；
-    /// SQLite 单写者（库级串行）无并发抢占，直接使用本模板；
-    /// PG 变体见 <see cref="SagaLeaseActivePG"/>（SKIP LOCKED 消除锁竞争）。
+    /// SQLite 单写者（库级串行）无并发抢占。
+    /// <para>
+    /// ⚠️ <b>R16 勘正（2026-11-24）：本常量与 <see cref="SagaLeaseActivePG"/> 在
+    /// <see cref="DapperSagaStateStore"/> 中<b>不可达</b></b>——该 store 的 PG/SQLite 分支
+    /// 已分别走 RETURNING 变体（<see cref="SagaLeaseActivePGReturning"/> /
+    /// <see cref="SagaLeaseActiveSqliteReturning"/>）并提前 return，余下的 switch 只剩
+    /// MySQL 臂与一个同样不可达的 <c>_</c> 兜底臂（<c>DapperDbType</c> 仅三个成员）。
+    /// 保留是因为它们属已发布的 v5.0.0 公共 API 面（快照
+    /// <c>core-packages-public-api.txt</c> 收录）——删除属破坏性变更，须走 Major。
+    /// 修改本常量不改变任何运行时行为；<b>不要</b>把它当作在用 SQL 阅读。
+    /// </para>
     /// </summary>
     public const string SagaLeaseActive =
         // v53 P2：租约即换代（version=version+1）——对齐 EFCore BumpVersion/InMemory v25 B1
@@ -362,6 +371,10 @@ public static class SqlTemplates
     /// P2/P3 修复（十七轮）：与 Outbox PG 路径（<see cref="OutboxLeaseUpdatePG"/>）同款——
     /// 多 worker 并发租约时，子查询锁定行互相跳过而非阻塞等待，
     /// 各自拿到不相交的 Saga 批次。注意 PG 的 locking clause 位于 LIMIT 之后。
+    /// <para>
+    /// ⚠️ <b>R16 勘正（2026-11-24）：不可达</b>——理由与 <see cref="SagaLeaseActive"/> 同段
+    /// （PG 分支已走 <see cref="SagaLeaseActivePGReturning"/>）。保留原因同：已发布公共 API 面。
+    /// </para>
     /// </summary>
     public const string SagaLeaseActivePG =
         // v53 P2：租约即换代（version=version+1），见 SagaLeaseActive 注释
@@ -404,6 +417,15 @@ public static class SqlTemplates
     // 活动 Saga 的 next_check_at 恒有值：有带 Timeout 的已开始步骤时为真实到期时刻，
     // 否则为哨兵 9999-12-31（扫描自然跳过）。NULL 只出现在迁移前存量行——按到期处理，
     // 首次扫描后由 SagaProcessor 回填（否则存量行永不进入超时扫描）。
+    //
+    // ⚠️ R16 勘正（2026-11-24）：下面两个非 RETURNING 变体（SagaLeaseActiveDue /
+    // SagaLeaseActiveDuePG）在 DapperSagaStateStore 中**不可达**（PG/SQLite 走 RETURNING
+    // 变体提前 return，switch 只剩 MySQL 臂与不可达的 `_` 兜底臂）。保留原因是它们属
+    // 已发布的 v5.0.0 公共 API 面（公共 API 快照收录），删除须走 Major。
+    // 另注意排序键不一致：不可达的这两个用 `ORDER BY created_at`，在用的三个
+    // RETURNING/MySQL 变体用 `ORDER BY next_check_at, created_at`。**在用形态才是权威**——
+    // 到期扫描按到期时刻取批（先到期的先租），按创建序会饿死后创建的已到期 Saga。
+    // 若未来把某分支改回非 RETURNING 形态，必须同步排序键，否则会静默改变公平性。
 
     public const string SagaLeaseActiveDue =
         "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND (next_check_at IS NULL OR next_check_at <= @now) ORDER BY created_at LIMIT @n)";

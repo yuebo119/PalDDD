@@ -779,13 +779,20 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
             // v36 勘正：外层非关停 OCE 兜底——handler 的非关停 OCE 已在 HandleMessageAsync
             // 内 catch 后返回；到达本外层 catch 的是 while 条件求值等循环骨架位置的非关停
             // OCE——此处终止是真实语义（骨架异常无法安全 continue），文案如实描述终止。
+            // R16 修复（2026-11-24）：本 worker 循环终止同样置健康故障位。修前只记 Error
+            // （与 R14 修复的消费线程 :637 同族漏格）——worker 死后 finally 取消 cts，
+            // 消费线程走「token 已取消」分支静默退出（:601-604）不置位，订阅句柄仍有效、
+            // IsConsumingHealthy 恒 true，/health 保持 Healthy 而本实例已停止消费。
             catch (OperationCanceledException ex)
             {
+                // ??= 保留首因：消费线程（:637）若已先置位根因，此处不覆盖
+                _consumeFaultReason ??= $"{ex.GetType().Name}: {ex.Message}";
                 _logger.Error(ex, $"Kafka consume loop terminated by non-shutdown cancellation at loop skeleton: {topic} @ {_consumerConfig.GroupId}");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // 兜底：记录未被内层捕获的异常
+                _consumeFaultReason ??= $"{ex.GetType().Name}: {ex.Message}";
                 _logger.Error(ex, $"Kafka consume loop terminated unexpectedly: {topic} @ {_consumerConfig.GroupId}");
             }
             finally

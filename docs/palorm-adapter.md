@@ -135,6 +135,13 @@ Error 日志（此前三通道全空、静默死亡零输出），Outbox 退回�
 轮询节奏）。Dapper 版为无限重连（外层 while），同类长断线故障下自愈形态不同；恢复手段是
 重启进程。
 
+**启动与关停语义（2026-11-24，R16）**：`StartAsync` 首连失败不留半成品状态——失败路径退订并
+释放局部 listener/CTS 后原样重抛，对象回到「未启动」可重入态（对齐上游「`StopAsync` 之后
+可再次启动」契约；修前先赋值字段再 await，首连失败后重试会命中幂等守卫）。`StopAsync` 的
+顺序是「取消在飞批处理 → 退订并停监听 → 等待在飞 fire 任务 → 释放 CTS」——**会等待**
+在飞批处理真正收尾（修前只发取消信号即返回，宿主随后释放 gate，最后一批的终态标记可能
+未落库）。`DisposeAsync` 同样等待在飞任务，覆盖宿主未调 `StopAsync` 的路径。
+
 ```csharp
 services.AddPalOutbox();
 services.AddPalOrmPostgreSql(connectionString);

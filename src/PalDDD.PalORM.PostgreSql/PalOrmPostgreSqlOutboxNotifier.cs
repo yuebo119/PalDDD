@@ -71,9 +71,8 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
     // 2026-11-24 勘正（R15 审计发现 2）：fire 任务引用持有——原注释（654f4da）声称
     // 「Task.Run 每通知一分配 → 每批处理一分配」的缓存收益不存在：字段零读方，
     // Task.Run 调用次数与修前 `_ = Task.Run(...)` 逐位一致（in-flight 时 NOTIFY 被
-    // Wait(0) 拒掉的串行性质在修前同样成立）。字段语义为「仅持引用，无缓存/复用」，
-    // 保留是为后续若需观察 in-flight 状态（如健康检查）时有现成挂点；无观察者时
-    // 与丢弃引用等价。
+    // Wait(0) 拒掉的串行性质在修前同样成立）。
+    // R16 修复（2026-11-24）：本字段自本轮起有读方——StopAsync 等待它收尾（见该处注释）。
     private Task? _fireTask;
 
     /// <summary>启动监听（建立连接并 LISTEN）。</summary>
@@ -89,12 +88,12 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
         // PG 未引号标识符小写折叠，上游 listener 以双引号包裹通道名传递——大小写口径一致）。
         ValidateChannelName(channelName);
 
-        _shutdownCts = new CancellationTokenSource();
+        var shutdownCts = new CancellationTokenSource();
 
         // 构造不建连；StartAsync 后才连接并 LISTEN（上游 XML 契约）。
         // 订阅者异常被上游隔离（不会终止重连循环），此处仍 catch-log 防未观察异常。
-        _listener = new PgNotificationListener(connectionString, channelName);
-        _listener.OnNotification += OnNotificationReceived;
+        var listener = new PgNotificationListener(connectionString, channelName);
+        listener.OnNotification += OnNotificationReceived;
         // 2026-11-24 修复（R15 审计发现 1）：监听死亡可观测接线。上游断线重连有次数上限
         //（反编译实证 _maxReconnectAttempts=5），耗尽后 RunAsync 终止、RaiseError 走
         // LogListenerTerminated(Logger ?? NullLogger)——本组件此前三通道全空（Logger 属性
@@ -104,8 +103,28 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
         // 轮询兜底。此处订阅 OnError 把终止原因转入本组件日志（Error 级）；未再触发
         // 自动重启——与 Dapper 版「无限重连」的行为差异保留声明（见类 remarks 差异段），
         // 恢复手段是重启进程或修复网络后由轮询器继续投递。
-        _listener.OnError += OnListenerTerminated;
-        await _listener.StartAsync(cancellationToken).ConfigureAwait(false);
+        listener.OnError += OnListenerTerminated;
+
+        // R16 修复（2026-11-24，F3）：字段赋值后移到最后——修前先置 _listener/_shutdownCts
+        // 再 await 上游 StartAsync，首连失败时对象停在「声称已启动」态：_listener 非 null
+        // 使重试命中 :86 的幂等守卫（实际从未启动），且已创建的 CTS 无人释放。
+        // 现语义：首连成功才落字段；失败路径退订 + 释放局部对象后重抛，对象回到「未启动」
+        // 可重入态（对齐上游「StopAsync 之后可再次启动」契约）。
+        try
+        {
+            await listener.StartAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            listener.OnNotification -= OnNotificationReceived;
+            listener.OnError -= OnListenerTerminated;
+            await listener.DisposeAsync().ConfigureAwait(false);
+            shutdownCts.Dispose();
+            throw;
+        }
+
+        _listener = listener;
+        _shutdownCts = shutdownCts;
         logger.Information($"PalORM PostgreSQL LISTEN started on channel '{channelName}'");
     }
 
@@ -171,14 +190,19 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
     /// <summary>停止监听并释放后台任务（断线由上游 StopAsync 幂等处理）。</summary>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        // 先取消 in-flight 批处理（协作收尾），再停监听——顺序反了会让最后一批
-        // 在监听已停、轮询器同停的窗口内无人等待其完成。
+        // 顺序：① 取消 in-flight 批处理（协作收尾）→ ② 退订并停监听（阻止新回调）→
+        // ③ 等待在飞 fire 任务 → ④ 释放 CTS。等待点必须在停监听之后——放在之前会漏掉
+        // 「已进入 OnNotificationReceived、正在通过 gate 并赋值 _fireTask」的在途回调。
+        //
+        // R16 修复（2026-11-24，F2）：修前只 Cancel 不 await——StopAsync 返回即被宿主
+        // 视为已收尾，随后容器释放 _processGate，在飞批处理只能靠 finally 的
+        // ObjectDisposedException 兜底（标记可能未落库，租约悬挂至超时重投）；
+        // 注释所称的「协作收尾」不成立。
+        // 等待不用宿主传入的 token：关停已在推进，宿主给 StopAsync 的 token 常用于限制
+        // 等待时长，沿用它会在限时取消时退回「不等」的旧语义。批处理内部已收到取消信号，
+        // 其收尾时长受 ProcessBatchAsync 自身协作语义约束。
         if (_shutdownCts is not null)
-        {
             await _shutdownCts.CancelAsync().ConfigureAwait(false);
-            _shutdownCts.Dispose();
-            _shutdownCts = null;
-        }
 
         if (_listener is not null)
         {
@@ -186,11 +210,57 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
             _listener.OnError -= OnListenerTerminated;
             await _listener.StopAsync().ConfigureAwait(false);
         }
+
+        var inFlight = _fireTask;
+        if (inFlight is not null)
+        {
+            try
+            {
+                await inFlight.ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // FireBatchProcessAsync 已自行 catch-log 全部异常，此处仅为防御：
+                // 关停路径不得因批处理异常中断后续释放。
+                logger.Warning($"PalORM PostgreSQL LISTEN in-flight batch faulted during shutdown: {ex.Message}");
+            }
+            catch (OperationCanceledException)
+            {
+                // 批处理按协作语义取消收尾，属预期路径。
+            }
+        }
+
+        if (_shutdownCts is not null)
+        {
+            _shutdownCts.Dispose();
+            _shutdownCts = null;
+        }
     }
 
     /// <summary>释放 gate 与 listener。</summary>
     public async ValueTask DisposeAsync()
     {
+        // R16 修复（2026-11-24，F2 姊妹）：释放 gate 前先等在飞 fire 任务收尾。
+        // 修前直接 Dispose gate——若宿主未调 StopAsync（启动失败、DI 提前释放等路径），
+        // 在飞批处理仍在用 gate 与 scope，Release 只能靠 ObjectDisposedException 兜底。
+        var inFlight = _fireTask;
+        if (inFlight is not null)
+        {
+            try
+            {
+                await inFlight.ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // FireBatchProcessAsync 已自行 catch-log；释放路径不得因它中断。
+                logger.Warning($"PalORM PostgreSQL LISTEN in-flight batch faulted during dispose: {ex.Message}");
+            }
+            catch (OperationCanceledException)
+            {
+                // 协作取消收尾，属预期路径。
+            }
+        }
+
         _processGate.Dispose();
         if (_shutdownCts is not null)
         {

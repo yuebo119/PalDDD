@@ -138,34 +138,31 @@ public sealed class PalOrmPostgreSqlOutboxNotifierTests
     }
 
     /// <summary>
-    /// 2026-11-23 审查修复（缺陷 2）锁定：重复 StartAsync 必须抛幂等守卫——修前静默 new
-    /// 第二个 listener，旧实例订阅挂着无人释放。断言钉死守卫消息（StartAsync 建连失败的
-    /// 包装异常同为 InvalidOperationException——仅断言类型会被建连失败喂绿，变异实测
-    /// 守卫删除后本测试仍绿即此坑）。
+    /// 幂等守卫存在性（2026-11-23 审查修复缺陷 2 的锁定）。
+    /// <para>
+    /// R16 变更（2026-11-24，F3）：原测试通过「首连失败后 _listener 仍被赋值」制造出
+    /// 「已启动」状态再断言守卫抛。F3 修复后首连失败不再留下半成品状态（_listener 归 null），
+    /// 该构造路径已不存在；而无真库时无法真正进入「已启动」态，故改为源码级断言——
+    /// 守卫本体与其在方法首位的位置由文本不变式锁定。
+    /// 真实「已启动 → 重复 Start 抛」的行为面归真库通路（wslc/CI Testcontainers）。
+    /// </para>
     /// </summary>
     [Test]
-    public async Task StartAsync_SecondCall_ThrowsIdempotencyGuard()
+    public async Task StartAsync_HasIdempotencyGuard()
     {
-        var (logger, scopeFactory) = CreateDeps();
-        var notifier = new PalOrmPostgreSqlOutboxNotifier(ProbeCs, scopeFactory, logger, "probe_channel");
+        var text = await File.ReadAllTextAsync(Path.Combine(
+            FindRepoRoot(), "src", "PalDDD.PalORM.PostgreSql", "PalOrmPostgreSqlOutboxNotifier.cs"));
 
-        // 首次 Start：建连失败（.invalid）但 _listener 已赋值（字段在构造后、上游
-        // StartAsync 抛出前置位）。
-        try { await notifier.StartAsync(CancellationToken.None); }
-#pragma warning disable CA1031 // 探针：捕获任意建连异常以推进到第二次调用
-        catch (Exception) { /* .invalid 必失败 */ }
-#pragma warning restore CA1031
+        var startIndex = text.IndexOf("public async Task StartAsync(", StringComparison.Ordinal);
+        await Assert.That(startIndex).IsGreaterThan(-1).Because("未定位 StartAsync");
+        var guardIndex = text.IndexOf("has already been started", startIndex, StringComparison.Ordinal);
+        await Assert.That(guardIndex).IsGreaterThan(startIndex)
+            .Because("StartAsync 必须保留重复启动守卫（否则重复 Start 会 new 第二个 listener，旧实例订阅无人释放）");
 
-        // 第二次 Start 必须抛幂等守卫（消息含 "already been started"；建连失败消息不含）
-        InvalidOperationException? guard = null;
-        try { await notifier.StartAsync(CancellationToken.None); }
-        catch (InvalidOperationException ex) { guard = ex; }
-
-        await Assert.That(guard).IsNotEqualTo(null)
-            .Because("重复 StartAsync 必须抛 InvalidOperationException");
-        await Assert.That(guard!.Message.Contains("already been started", StringComparison.Ordinal)).IsTrue()
-            .Because($"异常须来自幂等守卫而非建连失败（实际消息：{guard.Message}）");
-        await notifier.DisposeAsync();
+        // 守卫必须在字段赋值之前——否则首连失败后仍会留下「声称已启动」态（F3 缺陷形态）
+        var assignIndex = text.IndexOf("_listener = listener;", startIndex, StringComparison.Ordinal);
+        await Assert.That(assignIndex).IsGreaterThan(guardIndex)
+            .Because("字段赋值必须在方法末尾（F3：先赋值再 await 会让首连失败留下半成品状态）");
     }
 
     /// <summary>
@@ -193,8 +190,67 @@ public sealed class PalOrmPostgreSqlOutboxNotifierTests
         await Assert.That(notifier).IsAssignableTo<IHostedService>();
     }
 
-    // ── 组件级 DI 注册（R7/R8 家族门面锁定，对齐 Dapper 版同款）──
+    /// <summary>
+    /// R16 修复（2026-11-24，F3）锁定：StartAsync 建连失败后对象必须回到「未启动」可重入态。
+    /// 修前 _listener 先于 await 赋值——首连失败后重试命中 :86 的幂等守卫（消息 "already
+    /// been started"），而对象实际从未启动；且已创建的 CTS 无人释放。
+    /// 断言：首次失败后第二次 StartAsync 不得抛幂等守卫（应再次尝试建连，仍以连接异常失败）。
+    /// </summary>
+    [Test]
+    public async Task StartAsync_FirstAttemptFails_SecondAttemptIsNotBlockedByIdempotencyGuard()
+    {
+        var (logger, scopeFactory) = CreateDeps();
+        var notifier = new PalOrmPostgreSqlOutboxNotifier(ProbeCs, scopeFactory, logger, "probe_channel");
 
+        Exception? first = null;
+        try { await notifier.StartAsync(CancellationToken.None); }
+#pragma warning disable CA1031 // 探针：捕获首次建连异常
+        catch (Exception ex) { first = ex; }
+#pragma warning restore CA1031
+        await Assert.That(first).IsNotEqualTo(null).Because(".invalid 主机名的建连必须失败（否则断言环境失真）");
+
+        Exception? second = null;
+        try { await notifier.StartAsync(CancellationToken.None); }
+#pragma warning disable CA1031 // 探针：捕获第二次建连异常
+        catch (Exception ex) { second = ex; }
+#pragma warning restore CA1031
+
+        await Assert.That(second).IsNotEqualTo(null).Because("第二次建连同样失败（.invalid）");
+        var isGuard = second is InvalidOperationException
+            && second.Message.Contains("already been started", StringComparison.Ordinal);
+        await Assert.That(isGuard).IsFalse()
+            .Because($"修前首连失败后对象停在「声称已启动」态，重试被幂等守卫挡死（实际消息：{second!.Message}）");
+
+        await notifier.DisposeAsync();
+    }
+
+    /// <summary>
+    /// R16 修复（2026-11-24，F2）锁定：StopAsync 必须等待在飞 fire 任务收尾。
+    /// 行为面探针：注入一个 StartAsync 成功的替身不可行（上游 listener 需真库），
+    /// 故用源码级断言——StopAsync 体内必须出现对 _fireTask 的 await。
+    /// 修前只有 CancelAsync + Dispose，无任何等待点。
+    /// </summary>
+    [Test]
+    public async Task StopAsync_AwaitsInFlightFireTask()
+    {
+        var path = Path.Combine(
+            FindRepoRoot(), "src", "PalDDD.PalORM.PostgreSql", "PalOrmPostgreSqlOutboxNotifier.cs");
+        var text = await File.ReadAllTextAsync(path);
+
+        var stopStart = text.IndexOf("public async Task StopAsync(", StringComparison.Ordinal);
+        await Assert.That(stopStart).IsGreaterThan(-1).Because("未定位 StopAsync");
+        var stopEnd = text.IndexOf("\n    /// <summary>释放 gate", stopStart, StringComparison.Ordinal);
+        await Assert.That(stopEnd).IsGreaterThan(stopStart).Because("未定位 StopAsync 结束边界");
+
+        var body = text[stopStart..stopEnd];
+        await Assert.That(body.Contains("_fireTask", StringComparison.Ordinal)).IsTrue()
+            .Because("StopAsync 必须读取 _fireTask 以等待在飞批处理（修前只 Cancel 不 await，标记可能未落库）");
+        await Assert.That(body.Contains("await inFlight", StringComparison.Ordinal)
+            || body.Contains("await _fireTask", StringComparison.Ordinal)).IsTrue()
+            .Because("StopAsync 必须真正 await 在飞任务，仅读取引用不够");
+    }
+
+    // ── 组件级 DI 注册（R7/R8 家族门面锁定，对齐 Dapper 版同款）──
     [Test]
     public async Task AddPalOrmPostgreSqlOutboxNotifier_ComponentRegistration_ResolvesHostedService()
     {
@@ -230,45 +286,46 @@ public sealed class PalOrmPostgreSqlOutboxNotifierTests
     /// 2026-11-24 R15 审计发现 1 锁定：上游监听终止（重连耗尽）必须转入本组件 Error 日志。
     /// 修前 OnError 零订阅：PgNotificationListener 断线重连 5 次耗尽后 RunAsync 终止，
     /// 终止原因落到 NullLogger 零输出，通知器静默死亡（Outbox 退回轮询且无任何信号）。
-    /// 探针形态：StartAsync（.invalid 建连失败，_listener 已赋值）后反射取出 listener，
-    /// 通过反射触发其 OnError 事件（上游 RaiseError 的同一条路径），断言 RecordingLogger
-    /// 收到含监听终止语义的 Error 记录。修前（无订阅）log 为空 → 红；修后含消息 → 绿。
+    /// <para>
+    /// R16 变更（2026-11-24，F3）：原测试借「首连失败后 _listener 仍被赋值」的旧缺陷形态
+    /// 反射取 listener。F3 修复后首连失败不留下半成品状态，该构造路径已不存在。
+    /// 现改为两个互补断言：
+    /// ① 源码级——OnError 订阅/退订成对存在，且订阅点在字段赋值之前（保证首连成功后
+    ///   必有订阅）；
+    /// ② 行为级——直接构造上游 listener 并复现 RaiseError 的分发路径，验证
+    ///    OnListenerTerminated 的实现体确实把异常消息写入 Error 日志（不依赖 notifier
+    ///    的生命周期状态）。
+    /// </para>
     /// </summary>
     [Test]
     public async Task Listener_OnError_IsWiredToComponentErrorLog()
     {
+        // ① 源码级：订阅/退订成对，且订阅先于字段赋值（F3 后字段赋值在方法末尾）
+        var path = Path.Combine(
+            FindRepoRoot(), "src", "PalDDD.PalORM.PostgreSql", "PalOrmPostgreSqlOutboxNotifier.cs");
+        var text = await File.ReadAllTextAsync(path);
+
+        await Assert.That(text.Contains("listener.OnError += OnListenerTerminated", StringComparison.Ordinal)).IsTrue()
+            .Because("修前 OnError 零订阅 → 上游终止原因落 NullLogger 零输出（R15 发现 1）");
+        await Assert.That(text.Contains("listener.OnError -= OnListenerTerminated", StringComparison.Ordinal)).IsTrue()
+            .Because("订阅必须成对退订，否则 StopAsync 后 listener 仍持有本组件引用");
+
+        var subscribeIndex = text.IndexOf("listener.OnError += OnListenerTerminated", StringComparison.Ordinal);
+        var assignIndex = text.IndexOf("_listener = listener;", StringComparison.Ordinal);
+        await Assert.That(subscribeIndex).IsLessThan(assignIndex)
+            .Because("订阅必须早于字段赋值——否则首连成功后到赋值前有窗口无订阅");
+
+        // ② 行为级：复现上游 RaiseError 的分发（GetInvocationList 逐个调用），
+        //    验证本组件的终止回调把原因写入 Error 日志。
         var (logger, scopeFactory) = CreateDeps();
         var notifier = new PalOrmPostgreSqlOutboxNotifier(ProbeCs, scopeFactory, logger, "probe_channel");
 
-        // StartAsync 建连失败（.invalid），但 _listener 已在字段赋值、OnError 订阅在
-        // StartAsync 调用前完成——接线已就位。
-        try { await notifier.StartAsync(CancellationToken.None); }
-#pragma warning disable CA1031 // 探针：捕获建连异常以推进到事件触发
-        catch (Exception) { /* .invalid 必失败 */ }
-#pragma warning restore CA1031
+        var callback = typeof(PalOrmPostgreSqlOutboxNotifier)
+            .GetMethod("OnListenerTerminated", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        await Assert.That(callback).IsNotEqualTo(null).Because("终止回调必须存在（R15 修复本体）");
 
-        var listener = typeof(PalOrmPostgreSqlOutboxNotifier)
-            .GetField("_listener", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-            ?.GetValue(notifier);
-        await Assert.That(listener).IsNotEqualTo(null)
-            .Because("StartAsync 失败路径 _listener 必已赋值（接线在其后）");
-
-        // 上游 RaiseError 同款路径：GetInvocationList 逐个触发（事件 add 访问器是自定义的，
-        // 直接 += 触发不了已有订阅；反射读多播字段再调用其 Invoke）。
-        var onErrorField = listener!.GetType()
-            .GetField("OnError", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var multicast = onErrorField?.GetValue(listener) as System.Delegate;
-        await Assert.That(multicast).IsNotEqualTo(null)
-            .Because("修前 OnError 零订阅（null 委托）→ 本断言红，锁定接线本体");
-
-        var invocationList = multicast!.GetInvocationList();
-        await Assert.That(invocationList.Length).IsEqualTo(1)
-            .Because("OnError 必须恰好被本组件订阅一次");
-
-        var args = new PgNotificationErrorEventArgs(
-            new InvalidOperationException("reconnect attempts exhausted (probe)"));
-        foreach (var d in invocationList)
-            d.DynamicInvoke(listener, args);
+        var cause = new InvalidOperationException("reconnect attempts exhausted (probe)");
+        callback!.Invoke(notifier, [null, new PgNotificationErrorEventArgs(cause)]);
 
         var errorMessages = logger.Messages.Where(m => m.Contains("terminated", StringComparison.Ordinal)).ToArray();
         await Assert.That(errorMessages.Length).IsEqualTo(1)
@@ -277,5 +334,13 @@ public sealed class PalOrmPostgreSqlOutboxNotifierTests
             .Because("终止原因（上游异常消息）必须随日志透传");
 
         await notifier.DisposeAsync();
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null && !File.Exists(Path.Combine(dir, "PalDDD.slnx")))
+            dir = Path.GetDirectoryName(dir);
+        return dir ?? throw new InvalidOperationException("未定位仓库根（PalDDD.slnx）");
     }
 }

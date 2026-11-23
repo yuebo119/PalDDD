@@ -95,9 +95,20 @@ public sealed class OutboxOptions
     public IRetryBackoffPolicy RetryBackoffPolicy { get; set; } = new ExponentialBackoffPolicy();
 
     /// <summary>
-    /// 重试延迟上限 — 仅用于观测/健康检查展示。<br/>
-    /// 实际封顶由 <see cref="RetryBackoffPolicy"/> 内部控制（默认 Exponential 封顶 64s——与本
-    /// 展示默认值 60s 存在 4s 差异，v19 声明：仅影响观测读数不影响行为；如需一致请两处同步修改）。
+    /// 重试延迟上限 — <b>当前无运行期消费者</b>，设置它不改变任何重试行为。
+    /// <para>
+    /// R16 勘正（2026-11-24）：原文档称「仅用于观测/健康检查展示」，该表述失实——
+    /// 全仓零读取点（唯一引用是 <c>ServiceCollectionExtensions</c> 的 <c>&gt; 0</c> 启动校验），
+    /// <c>PalOutboxHealthCheck</c> 读的是 <see cref="IPalOutboxStore.DefaultMaxRetryCount"/>，
+    /// 与本属性无关。
+    /// </para>
+    /// <para>
+    /// 真实的重试延迟封顶由 <see cref="RetryBackoffPolicy"/> 内部控制（默认
+    /// <see cref="ExponentialBackoffPolicy"/> 封顶 64 秒）。本属性默认 60 秒与之一致性
+    /// 由调用方自行维护；两者<b>不会</b>互相同步。
+    /// 保留属性本身是因为它属已发布的 v5.0.0 公共 API 面（公共 API 快照收录），
+    /// 删除属破坏性变更，须走 Major。
+    /// </para>
     /// </summary>
     public TimeSpan MaxRetryDelay { get; set; } = TimeSpan.FromSeconds(60);
 
