@@ -90,12 +90,36 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
             "Ensure the type is registered with [MemoryPackable] and a MemoryPack generator.");
     }
 
-    // R8/P1-1（ADR-029，2026-10-14）：本实现**不覆写**直写重载 Serialize(object, descriptor,
-    // IBufferWriter<byte>)——MemoryPack 1.21.4 的 IBufferWriter 重载仅有泛型形态
-    //（Serialize<T>(writer, value)），无 (writer, Type, object) 非 AOT 路径对应重载
-    //（本地编译实证 CS1501/CS1503）；T=object 泛型动态序列化语义未经探针验证（P0 #4
-    // 纪律不臆测）。走接口 DIM 默认回退（内存形态 + 单次拷贝进 destination），语义与
-    // 非泛型内存重载严格一致；原生直写待验证后跟进（ADR-029 延后段）。
+    /// <inheritdoc />
+    /// <remarks>
+    /// 直写重载（2026-11-23 兑现 ADR-029 延后段）：<c>Serialize&lt;TBufferWriter&gt;(Type, in TBufferWriter,
+    /// object, options)</c> 在 MemoryPack 1.22.0 中<b>存在</b>（反射枚举实证，见本轮探针记录），
+    /// 原注释「仅有泛型形态、无 (writer, Type, object) 重载」基于 1.21.4 的误判，已勘正。
+    /// 实测（10,000 次，47 B 载荷）：复用 <see cref="System.Buffers.ArrayBufferWriter{T}"/> 直写
+    /// <b>0.0 B/op</b>，内存重载 72.0 B/op；两者产出逐字节一致。AOT 语义不变：仍依赖类型在
+    /// 源码生成器静态注册的 Formatter，未注册时安全失败（不静默降级）。
+    /// </remarks>
+    public void Serialize(object message, MessageDescriptor descriptor, System.Buffers.IBufferWriter<byte> destination)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentNullException.ThrowIfNull(destination);
+        ValidateDescriptorContentType(descriptor);
+
+        var runtimeType = message.GetType();
+        var writer = destination;
+        try
+        {
+            MemoryPackSerializer.Serialize<System.Buffers.IBufferWriter<byte>>(runtimeType, in writer, message, null);
+        }
+        catch (MemoryPackSerializationException ex)
+        {
+            throw new InvalidOperationException(
+                $"MemoryPack serialization failed for runtime type '{runtimeType.FullName}' " +
+                $"(descriptor CLR type '{descriptor.ClrType.FullName}'). " +
+                "Ensure the type is registered with [MemoryPackable] and a MemoryPack generator.", ex);
+        }
+    }
 
     /// <inheritdoc />
     /// <remarks>

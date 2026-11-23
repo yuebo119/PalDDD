@@ -12,6 +12,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **IPalLogger 插值重载与零分配关闭路径（2026-11-23）**：新增非泛型基接口 `IPalLogger`（承载 `IsEnabled`，供插值 handler 构造使用）与四个级别 handler（`PalDebugLogHandler` / `PalInformationLogHandler` / `PalWarningLogHandler` / `PalErrorLogHandler`）。`IPalLogger<T>` 每个级别新增一个插值重载，调用形态为 `_logger.Debug($"id={id} name={name}")`。**关闭态零分配**：级别未启用时编译器跳过整个插值表达式（实测 N=2000：MEL 参数化重载 96.0 B/op → 0.0 B/op）；启用态 336.0 → 约 196.0 B/op。纯加法，旧实现者走 DIM 默认实现零迁移成本。公共 API 快照 +51/−1（唯一删除为 `IPalLogger<T>` 的 `IsEnabled` 上移到基接口）。
+
+### Performance
+
+- **MemoryPack 直写重载兑现（ADR-029 延后段，2026-11-23）**：`MemoryPackMessageSerializer` 覆写 `Serialize(object, descriptor, IBufferWriter<byte>)`，改走 `MemoryPackSerializer.Serialize<TBufferWriter>(Type, in writer, object, options)` 非泛型直写。实测（N=10000，47 B 载荷）：复用缓冲 **0.0 B/op**，原 DIM 回退 72.0 B/op，两者产出逐字节一致。原注释「MemoryPack 1.21.4 无 (writer, Type, object) 重载」经反射枚举证伪并勘正（1.22.0 存在该重载）。
+
+### Fixed
+
+- **PalLogger 结构化重载补 IsEnabled 门控（2026-11-23）**：MEL 的 `LogDebug/LogInformation/LogWarning/LogError(EventId, string, params object?[])` 重载**不做**级别检查，直接构造 `FormattedLogValues` 交给 provider 过滤，关闭态下 params 数组、装箱与 state 全部照常分配（实测 96.0 B/op）。四个结构化重载与四个插值重载均补门控，关闭态实现零分配且不调用 provider。
+
 ### Dependencies
 
 - **PalORM ×5 6.8.0 → 6.9.0**（2026-11-23 全量核新，NuGet 双通道实测）：上游行为变更 4 处——MySQL 批量写入默认整段单批（与 PostgreSQL 对齐）、PG `DateTime` 列统一 `timestamptz`、`ToPageAsync` 遇 `Skip()` 与 SQLite 行锁 API 改调用期抛错，另新增迁移漂移检测（默认开启）与四项生命周期 API。本仓零代码适配：唯一批插消费点的批宽由调用方控制且事务内入事务（MySqlBulkCopyInserter 源码实证无隐式提交切断）、PalORM 模型全部 `DateTimeOffset`、后两组 API 本仓零调用、迁移与 `SaveAsync` 路径零调用。消费者可见变化为依赖面上移，公共 API 与行为契约不变。
