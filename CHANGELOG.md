@@ -27,6 +27,8 @@
 
 - **MySQL 会话优化池扩容缺口闭环（ITM-211，2026-11-23）**：`AddPalMySqlDataSource` 的 InnoDB 性能优化改经 `MySqlDataSourceBuilder.UseConnectionOpenedCallback` 对**每个新开物理连接**（含并发高峰池扩容按需新建的连接）重放 `SET SESSION`——此前仅首连接被优化，池扩容出的新连接使用服务端默认（REPEATABLE-READ），同池内 RC/RR 隔离级别混跑（间隙锁/死锁行为不一致）。原注释「MySqlDataSource 无 on-open 回调，应用内无法闭环」失实（MySqlConnector 2.6.2/3.0.0 均提供该 API，XML 实证）。真库探针（wslc mysql84）：6 条连接（首连接 + 归池复用 + 4 并发池扩容）全部 READ-COMMITTED；变异验证（移除 Optimize）转 REPEATABLE-READ 红。init_connect 服务端方案从「推荐」降为「可选兜底」。
 - **PalLogger 结构化重载补 IsEnabled 门控（2026-11-23）**：MEL 的 `LogDebug/LogInformation/LogWarning/LogError(EventId, string, params object?[])` 重载**不做**级别检查，直接构造 `FormattedLogValues` 交给 provider 过滤，关闭态下 params 数组、装箱与 state 全部照常分配（实测 96.0 B/op）。四个结构化重载与四个插值重载均补门控，关闭态实现零分配且不调用 provider。
+- **PalORM PG 通知器监听终止可观测（R15 审计发现 1，2026-11-24）**：`PalOrmPostgreSqlOutboxNotifier` 此前未接线上游 `PgNotificationListener` 的任何终止信号（`Logger` 属性未赋值、`OnError` 零订阅、`LastError` 零读取），断线重连 5 次耗尽或遇非瞬态故障后组件静默死亡：NOTIFY 通路中断无日志、无健康信号，Outbox 仅在退回 500ms 轮询时体现为延迟回升。现补 `OnError` 订阅，终止原因与通道名转入本组件 Error 日志；StopAsync 同步退订。与 Dapper 版「无限重连」的差异在类 remarks 与 `docs/palorm-adapter.md` 显式声明（上游上限 5 次，恢复手段为重启进程）。锁定测试 `Listener_OnError_IsWiredToComponentErrorLog` 变异验证红/绿（摘除订阅即红）。
+- **通知器 fire 任务缓存注释勘正（R15 审计发现 2，2026-11-24）**：654f4da 声称的「Task.Run 每通知一分配 → 每批处理一分配」收益不存在：`_fireTask` 字段零读方，`Task.Run` 调用次数与修前 `_ = Task.Run(...)` 逐位一致（in-flight 时 NOTIFY 被 `Wait(0)` 拒掉的串行性质在修前同样成立）。三处注释勘正为「仅持引用」真实语义，行为零变化。
 
 ### Dependencies
 

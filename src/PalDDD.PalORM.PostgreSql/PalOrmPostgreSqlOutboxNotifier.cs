@@ -30,6 +30,14 @@ namespace PalDDD.PalORM.PostgreSql;
 /// 断线自动重连（线性递增 + 全量抖动退避）、30 秒心跳保活、订阅者异常隔离，
 /// 免去手写 WaitAsync 循环与重连退避的维护面（Dapper 版五轮 P1/P3 修复的全部分支）。
 /// <para>
+/// ⚠️ <b>重连上限差异（2026-11-24 R15 审计发现 1 接线后的行为声明）</b>：上游
+/// <c>PgNotificationListener</c> 的断线重连有<b>次数上限（5 次）</b>，耗尽后或遇非瞬态
+/// 故障时后台循环终止且不再自愈——终止原因经 <c>OnError</c> 记入本组件 Error 日志
+/// （NOTIFY 通路中断，Outbox 退回轮询兜底，消息不丢但延迟回升）。Dapper 版为无限重连
+/// （外层 while），同类故障下自愈形态不同；长断线场景恢复手段是重启进程，或依赖轮询器
+/// 继续投递。
+/// </para>
+/// <para>
 /// 注册：<c>services.AddPalOrmPostgreSql(...).AddPalOrmPostgreSqlOutboxNotifier(connectionString, "outbox_channel");</c>
 /// ⚠️ 连接串必须与 <see cref="PostgreSqlPalOrmExtensions.AddPalOrmPostgreSql"/> 一致——
 /// listener 持有独立长连接（LISTEN 不可与业务会话共用），不走 PalORM 会话池。
@@ -60,10 +68,12 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
 
     private PgNotificationListener? _listener;
 
-    // 2026-11-23 审查修复（优化）：fire 任务缓存——修前每 NOTIFY 一次 Task.Run 分配。
-    // gate(1,1) 串行语义下同一时刻至多一个 fire 在飞：in-flight 时后续 NOTIFY 被
-    // Wait(0) 拒掉，根本到不了 Task.Run；任务完成（finally 释放 gate 前）清回 null，
-    // 下一次 NOTIFY 再建。分配次数 = 实际批处理次数，非通知次数。
+    // 2026-11-24 勘正（R15 审计发现 2）：fire 任务引用持有——原注释（654f4da）声称
+    // 「Task.Run 每通知一分配 → 每批处理一分配」的缓存收益不存在：字段零读方，
+    // Task.Run 调用次数与修前 `_ = Task.Run(...)` 逐位一致（in-flight 时 NOTIFY 被
+    // Wait(0) 拒掉的串行性质在修前同样成立）。字段语义为「仅持引用，无缓存/复用」，
+    // 保留是为后续若需观察 in-flight 状态（如健康检查）时有现成挂点；无观察者时
+    // 与丢弃引用等价。
     private Task? _fireTask;
 
     /// <summary>启动监听（建立连接并 LISTEN）。</summary>
@@ -85,9 +95,26 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
         // 订阅者异常被上游隔离（不会终止重连循环），此处仍 catch-log 防未观察异常。
         _listener = new PgNotificationListener(connectionString, channelName);
         _listener.OnNotification += OnNotificationReceived;
+        // 2026-11-24 修复（R15 审计发现 1）：监听死亡可观测接线。上游断线重连有次数上限
+        //（反编译实证 _maxReconnectAttempts=5），耗尽后 RunAsync 终止、RaiseError 走
+        // LogListenerTerminated(Logger ?? NullLogger)——本组件此前三通道全空（Logger 属性
+        // 未赋值、OnError 零订阅、LastError 零读取），Error 级终止原因落到 NullLogger
+        // 零输出，通知器静默死亡。OnNotificationReceived 的注释「上游 listener 心跳保活
+        // 的后续通知」仅在重连窗口内成立，死亡后 NOTIFY 通路中断，Outbox 退回 500ms
+        // 轮询兜底。此处订阅 OnError 把终止原因转入本组件日志（Error 级）；未再触发
+        // 自动重启——与 Dapper 版「无限重连」的行为差异保留声明（见类 remarks 差异段），
+        // 恢复手段是重启进程或修复网络后由轮询器继续投递。
+        _listener.OnError += OnListenerTerminated;
         await _listener.StartAsync(cancellationToken).ConfigureAwait(false);
         logger.Information($"PalORM PostgreSQL LISTEN started on channel '{channelName}'");
     }
+
+    // 2026-11-24 修复（R15 审计发现 1）：上游终止回调——首次 LISTEN 成功后，重连耗尽
+    // 或非瞬态故障均经上游 RaiseError 触发本事件；关停路径的取消不触发（RunAsync 的
+    // OCE-when-cancel 分支先行退出）。只记日志不重抛：事件在后台任务上触发，异常会
+    // 打断上游的事件分发循环。
+    private void OnListenerTerminated(object? sender, PgNotificationErrorEventArgs e)
+        => logger.Error(e.Exception, $"PalORM PostgreSQL LISTEN terminated (non-transient failure or reconnect attempts exhausted); NOTIFY delivery is down, Outbox falls back to polling, channel '{channelName}': {e.Exception.Message}");
 
     private void OnNotificationReceived(object? sender, PgNotificationEventArgs e)
     {
@@ -99,8 +126,7 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
             // 不传宿主 token：传入时若调度前取消，任务不执行、已获取的 gate 永不释放
             //（Dapper 版 P2 修复同款）；关停协作取消经 _shutdownCts（StopAsync 先取消），
             // gate 释放由 FireBatchProcessAsync 的 finally 兜底。
-            // fire 任务缓存在 _fireTask：批处理串行（gate 语义）下同刻至多一个在飞，
-            // 完成后清回 null 复用——分配次数 = 实际批处理次数而非通知次数。
+            // fire 任务引用存入 _fireTask（仅持引用语义，见字段勘正注释）。
 #pragma warning disable S8949 // 刻意不向 Task.Run 传 token（调度前取消会使 gate 永不释放）
             _fireTask = Task.Run(FireBatchProcessAsync);
 #pragma warning restore S8949
@@ -132,8 +158,7 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
         }
         finally
         {
-            // 清回 fire 缓存位（复用窗口见 _fireTask 字段注释）；finally 先于 gate 释放
-            // 执行，下一次 NOTIFY 看到的是 null → 新建任务，不会读到已完成任务。
+            // 清引用（仅持引用语义，见字段勘正注释）；finally 先于 gate 释放执行。
             _fireTask = null;
             try { _processGate.Release(); }
             catch (ObjectDisposedException)
@@ -158,6 +183,7 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
         if (_listener is not null)
         {
             _listener.OnNotification -= OnNotificationReceived;
+            _listener.OnError -= OnListenerTerminated;
             await _listener.StopAsync().ConfigureAwait(false);
         }
     }

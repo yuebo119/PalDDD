@@ -15,6 +15,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using PalDDD.Core.Logging;
 using PalDDD.PalORM.PostgreSql;
+using PalORM.PostgreSql;
 
 namespace PalDDD.Integration.Tests;
 
@@ -223,5 +224,58 @@ public sealed class PalOrmPostgreSqlOutboxNotifierTests
         await using var provider = services.BuildServiceProvider();
         var hosted = provider.GetServices<IHostedService>().ToArray();
         await Assert.That(hosted.OfType<PalOrmPostgreSqlOutboxNotifier>().Count()).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// 2026-11-24 R15 审计发现 1 锁定：上游监听终止（重连耗尽）必须转入本组件 Error 日志。
+    /// 修前 OnError 零订阅：PgNotificationListener 断线重连 5 次耗尽后 RunAsync 终止，
+    /// 终止原因落到 NullLogger 零输出，通知器静默死亡（Outbox 退回轮询且无任何信号）。
+    /// 探针形态：StartAsync（.invalid 建连失败，_listener 已赋值）后反射取出 listener，
+    /// 通过反射触发其 OnError 事件（上游 RaiseError 的同一条路径），断言 RecordingLogger
+    /// 收到含监听终止语义的 Error 记录。修前（无订阅）log 为空 → 红；修后含消息 → 绿。
+    /// </summary>
+    [Test]
+    public async Task Listener_OnError_IsWiredToComponentErrorLog()
+    {
+        var (logger, scopeFactory) = CreateDeps();
+        var notifier = new PalOrmPostgreSqlOutboxNotifier(ProbeCs, scopeFactory, logger, "probe_channel");
+
+        // StartAsync 建连失败（.invalid），但 _listener 已在字段赋值、OnError 订阅在
+        // StartAsync 调用前完成——接线已就位。
+        try { await notifier.StartAsync(CancellationToken.None); }
+#pragma warning disable CA1031 // 探针：捕获建连异常以推进到事件触发
+        catch (Exception) { /* .invalid 必失败 */ }
+#pragma warning restore CA1031
+
+        var listener = typeof(PalOrmPostgreSqlOutboxNotifier)
+            .GetField("_listener", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?.GetValue(notifier);
+        await Assert.That(listener).IsNotEqualTo(null)
+            .Because("StartAsync 失败路径 _listener 必已赋值（接线在其后）");
+
+        // 上游 RaiseError 同款路径：GetInvocationList 逐个触发（事件 add 访问器是自定义的，
+        // 直接 += 触发不了已有订阅；反射读多播字段再调用其 Invoke）。
+        var onErrorField = listener!.GetType()
+            .GetField("OnError", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var multicast = onErrorField?.GetValue(listener) as System.Delegate;
+        await Assert.That(multicast).IsNotEqualTo(null)
+            .Because("修前 OnError 零订阅（null 委托）→ 本断言红，锁定接线本体");
+
+        var invocationList = multicast!.GetInvocationList();
+        await Assert.That(invocationList.Length).IsEqualTo(1)
+            .Because("OnError 必须恰好被本组件订阅一次");
+
+        var args = new PgNotificationErrorEventArgs(
+            new InvalidOperationException("reconnect attempts exhausted (probe)"));
+        foreach (var d in invocationList)
+            d.DynamicInvoke(listener, args);
+
+        var errorMessages = logger.Messages.Where(m => m.Contains("terminated", StringComparison.Ordinal)).ToArray();
+        await Assert.That(errorMessages.Length).IsEqualTo(1)
+            .Because("上游终止必须记入组件 Error 日志（修前静默死亡零记录）");
+        await Assert.That(errorMessages[0].Contains("reconnect attempts exhausted", StringComparison.Ordinal)).IsTrue()
+            .Because("终止原因（上游异常消息）必须随日志透传");
+
+        await notifier.DisposeAsync();
     }
 }

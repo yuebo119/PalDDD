@@ -129,6 +129,12 @@ PeriodicTimer 轮询保留作兜底。监听载体是 PalORM 6.9.0 的 `PgNotifi
 （`outbox_channel` + 过渡表触发器，DDL 见其头注释）——同一库两栈共用同一触发器面。
 连接串必须与 `AddPalOrmPostgreSql` 一致（listener 持独立长连接，不走会话池）。
 
+**重连上限差异（2026-11-24 勘正）**：上游 `PgNotificationListener` 的断线重连有**次数上限
+（5 次）**，耗尽后或遇非瞬态故障时监听终止且不再自愈。终止原因经组件 OnError 接线记入
+Error 日志（此前三通道全空、静默死亡零输出），Outbox 退回轮询兜底（消息不丢但延迟回升至
+轮询节奏）。Dapper 版为无限重连（外层 while），同类长断线故障下自愈形态不同；恢复手段是
+重启进程。
+
 ```csharp
 services.AddPalOutbox();
 services.AddPalOrmPostgreSql(connectionString);
