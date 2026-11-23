@@ -571,7 +571,6 @@ Issues and PRs are welcome. The first build after cloning automatically configur
 
 License is determined by release version, not by when code was introduced:
 
-- **`v1.0.0-preview.1`** (published 2026-07-04): MIT
 - **`v1.0.0` – `v4.0.0`** (published 2026-07-30 to 2026-10-11, including packages already on NuGet.org): AGPL-3.0-or-later (a published grant is not revoked by later relicensing)
 - **v5.0 and later** (including `5.0.0-preview.1`, published from 2026-10-27): [Apache-2.0](LICENSE) (covers all source code of that release, including code inherited from earlier versions)
 
