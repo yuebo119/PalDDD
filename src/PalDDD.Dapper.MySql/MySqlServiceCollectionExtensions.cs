@@ -40,7 +40,12 @@ public static class MySqlServiceCollectionExtensions
     /// 池取连接时会话已重置，SET SESSION 优化随归池即丢）。代价是同一 DataSource 池内的
     /// 物理连接共享会话设置——优化参数对所有使用方生效，应用方自行执行的 SET SESSION
     /// 变更同样会跨 scope 泄漏到池内其他使用方。若不能接受，传 applyOptimization=false
-    /// 并改在 MySQL 服务端（my.cnf）全局配置。
+    /// 并改在 MySQL 服务端（my.cnf）全局配置。<br/>
+    /// ✅ <b>池扩容闭环（2026-11-23 性能轮）</b>：优化经
+    /// <c>MySqlDataSourceBuilder.UseConnectionOpenedCallback</c> 对<b>每个新开物理连接</b>重放
+    /// （含并发高峰池扩容按需新建的连接）——ITM-211 声明的「首连接之外的连接收不到
+    /// SET SESSION、同池 RC/RR 混跑」缺口就此闭环；回调失败被吞（连接走服务端默认，
+    /// 兜底方案仍是 my.cnf init_connect）。
     /// </summary>
     /// <param name="connectionString">MySQL 连接字符串</param>
     /// <param name="applyOptimization">是否应用 InnoDB 性能优化（默认 true）</param>
@@ -91,7 +96,7 @@ public static class MySqlServiceCollectionExtensions
 
         // P2 修复（二十一轮）：SET SESSION 传导前提——MySqlConnector 默认 ResetConnections=true，
         // 从池中取出的连接会话已被重置（CHARACTER_SET_RESULTS / SQL_MODE 等恢复服务端默认），
-        // ApplySessionOptimization 打出的会话级优化随连接归池即丢，"首个连接上设置、后续复用连接
+        // 回调重放的会话级优化随连接归池即丢，"首个连接上设置、后续复用连接
         // 继承"的原假设不成立。此处显式关闭池会话重置，使会话设置在同一 DataSource 池的物理
         // 连接上持久化——恰好是想要的传导语义（见上方 summary 的会话泄漏权衡声明）。
         if (applyOptimization)
@@ -99,8 +104,9 @@ public static class MySqlServiceCollectionExtensions
             {
                 ConnectionReset = false  // P2 修正（二十一轮主线程）：builder 属性真名是 ConnectionReset（连接串键为 "Connection Reset"；v45 探针实证 "Reset Connections" 键在 2.6.2 不被支持，勿按旧注释手写）
                 // P3 声明（二十三轮验证轮）：① 显式 applyOptimization=true 时覆盖用户连接串中的
-                // 显式 Reset Connections 设置（强意图优先）；② ApplySessionOptimization 失败被吞时
-                // 连接串已带 ConnectionReset=false——"优化未打上、泄漏代价照付"的次序权衡已接受
+                // 显式 Reset Connections 设置（强意图优先）；② 连接打开回调（UseConnectionOpenedCallback）
+                // 内优化失败被吞时连接串已带 ConnectionReset=false——"优化未打上、泄漏代价照付"的
+                // 次序权衡已接受
             }.ConnectionString;
 
         var builder = new MySqlDataSourceBuilder(connectionString);
@@ -109,15 +115,43 @@ public static class MySqlServiceCollectionExtensions
         // 能力对调用方可达（此前无任何入口可摸到 builder，新特性结构性不可达）
         configure?.Invoke(builder);
 
-        // MySqlDataSource 自动使用 ILoggerFactory（无需手动传递）
-        var dataSource = builder.Build();
-
+        // 2026-11-23 性能轮（勘正 + 缺口闭环）：v72 声明「.NET 侧无每连接 checkout 钩子
+        // （MySqlDataSource 无 on-open 回调），应用内无法闭环」失实——MySqlConnector
+        // 2.6.2/3.0.0 的 MySqlDataSourceBuilder.UseConnectionOpenedCallback 正是该钩子
+        //（XML 实证：MySqlConnectionOpenedCallback 委托，MySqlConnectionOpenedContext
+        // 含 Connection 与 Conditions 位标志 New/Reset）。此处接入：每个新开物理连接
+        //（含池扩容按需新建的连接）统一重放 SET SESSION 优化，ITM-211 的池扩容缺口
+        //（同池 RC/RR 混跑）就此闭环，init_connect 服务端方案从「推荐」降为「可选兜底」。
+        // 连接串已带 ConnectionReset=false，Reset 条件位不触发；防御性不筛 Conditions——
+        // 重放幂等（SET SESSION 同值重写），误重放零语义影响。
         if (applyOptimization)
         {
-            // 在第一个从池中创建的连接上应用会话级性能优化。
-            // 仅在 ResetConnections=false（上方已追加）时持久化到池内物理连接。
-            ApplySessionOptimization(dataSource);
+            builder.UseConnectionOpenedCallback(static (context, ct) =>
+            {
+                // 回调异常面：吞掉（对齐原首连接优化的 catch MySqlException 语义——
+                // 优化失败不得阻断连接交付）；新连接走服务端默认参数，缺口回到
+                // init_connect 兜底方案。
+                try
+                {
+                    MySqlPerformanceOptimizer.Optimize(context.Connection);
+                }
+                catch (MySqlException)
+                {
+                    // 优化失败——连接保持可用（服务端默认设置）
+                }
+#pragma warning disable CA1031 // 回调由 provider 在连接建立路径调用，异常逃逸会打断建连
+                catch (Exception)
+#pragma warning restore CA1031
+                {
+                    // 非 MySqlException 的失败（如正在关停）同样吞掉——建连优先
+                }
+
+                return ValueTask.CompletedTask;
+            });
         }
+
+        // MySqlDataSource 自动使用 ILoggerFactory（无需手动传递）
+        var dataSource = builder.Build();
 
         // 注册为 Singleton — MySqlDataSource 内部管理连接池。
         // R13 F15：必须走工厂注册——MS.DI 只释放「容器自己创建」的实例，
@@ -141,7 +175,7 @@ public static class MySqlServiceCollectionExtensions
         DapperServiceCollectionExtensions.AddPalDapperTransactions(services, DapperDbType.MySql, connectionString);
 
         // P3 修复（八轮评审）：Store 连接改从注册的 MySqlDataSource 取——AddPalDapperTransactions 的
-        // DbConnection 工厂是 new MySqlConnection(cs)（走连接串全局池），而 ApplySessionOptimization 的
+        // DbConnection 工厂是 new MySqlConnection(cs)（走连接串全局池），而数据源回调重放的
         // SET SESSION 打在 MySqlDataSource 私有池上，优化完全打不到 Store 实际使用的连接。
         // 此处覆盖 DbConnection 注册（MS DI 后注册胜出），Store 统一从 DataSource 池取连接。
         // P2 勘正（二十一轮）：会话优化传导到 Store 的前提是池不重置会话——MySqlConnector 默认
@@ -263,43 +297,4 @@ public static class MySqlServiceCollectionExtensions
         return services;
     }
 
-    // ── 内部辅助 ──
-
-    /// <summary>
-    /// 在从池中获取的第一个连接上应用会话级 InnoDB 性能优化。<br/>
-    /// ⚠️ 传导前提（P2 勘正·二十一轮）：MySqlConnector 默认 Reset Connections=true——从池中
-    /// 取出的连接会话已被重置，SET SESSION 设置随连接归池即丢，并不会被后续会话继承。
-    /// 调用方（AddPalMySqlDataSource）已显式设 Reset Connections=false 使设置持久化到池内
-    /// 物理连接；直接调用本方法且未关闭会话重置时，优化在下一次取连接时即失效。<br/>
-    /// ⚠️ <b>池扩容缺口（ITM-211 声明·三十二轮）</b>：本方法仅优化启动时创建的<b>首个物理连接</b>——
-    /// MySQL 池默认 MinimumPoolSize=0，并发高峰按需新建的物理连接<b>不会</b>收到 SET SESSION，
-    /// 使用服务端默认（如 transaction_isolation=REPEATABLE-READ）——同池内 RC 与 RR 隔离级别
-    /// 混跑（间隙锁/死锁行为不一致）。<br/>
-    /// <b>生产环境收口方案（三十四轮，按优先级）</b>：<br/>
-    /// 1. <b>服务器端 init_connect（推荐）</b>——MySQL 对<b>每个新建连接</b>执行该 SQL，覆盖池内
-    /// 全部现在与未来的物理连接，应用侧零改动：<br/>
-    /// <code>
-    /// -- my.cnf [mysqld] 段：
-    /// init_connect = 'SET SESSION transaction_isolation=''READ-COMMITTED'', sql_mode=''STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'', innodb_lock_wait_timeout=10'
-    /// </code>
-    /// ⚠️ 注意：拥有 CONNECTION_ADMIN/SUPER 权限的连接<b>不执行</b> init_connect（MySQL 官方语义）——
-    /// 应用账号不应授予该权限，否则该连接回到缺口状态。<br/>
-    /// 2. <b>全局参数</b>——my.cnf 直接设 <c>transaction_isolation</c>/<c>sql_mode</c> 服务器级值
-    /// （影响所有库与账号，需 DBA 评估）。<br/>
-    /// .NET 侧无每连接 checkout 钩子（MySqlDataSource 无 on-open 回调），应用内无法闭环——
-    /// 本方法保留为"首连接尽力优化 + 缺口显式声明"。
-    /// </summary>
-    private static void ApplySessionOptimization(MySqlDataSource dataSource)
-    {
-        try
-        {
-            using var conn = dataSource.CreateConnection();
-            conn.Open();
-            MySqlPerformanceOptimizer.Optimize(conn);
-        }
-        catch (MySqlException)
-        {
-            // 连接失败时跳过优化——应用仍可启动，使用 MySQL 默认设置
-        }
-    }
 }

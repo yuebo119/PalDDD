@@ -484,6 +484,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             ? await _connection.CreateChannelAsync(consumerOptions, ct).ConfigureAwait(false)
             : _channel;
 
+        // 2026-11-23 性能轮：批量 multiple-ack 聚合授权（判据见 ReceivedAsync 处注释）。
+        // 共享 channel（ownsConsumerChannel=false）恒关；并发 dispatch >1 恒关。
+        var batchAggregateEnabled = CanAggregateBatchAck(ownsConsumerChannel, _consumerDispatchConcurrency);
+
         try
         {
             await consumerChannel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct).ConfigureAwait(false);
@@ -546,7 +550,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         {
             // 批次 A（2026-11-04）：每次交付一个确认器——handler 显式结算时由它调 broker API，
             // 未结算时下方兜底分支按既有规则收尾（成功 BasicAck / 异常 Nack(false)）。
-            var ack = new RabbitMqMessageAck(this, consumerChannel, ea.DeliveryTag, queueName);
+            // 2026-11-23 性能轮：批量聚合授权在订阅时算好传入——独立 consumer channel
+            // （默认）+ 串行 dispatch（ConsumerDispatchConcurrency null 或 ≤1，客户端默认 1）
+            // 时 deliveryTag 严格单调入批，multiple:true 单帧等价逐条；两种语义前提任一
+            // 不满足（共享 channel 多订阅共 tag 空间 / 并发 dispatch 打乱单调性）则关闭。
+            var ack = new RabbitMqMessageAck(
+                this, consumerChannel, ea.DeliveryTag, queueName, batchAggregateEnabled);
             // v4 批 A（B2）：入队确认——只有泵的四参 handler 正常返回才置 true。
             // 批量路径的 handler 就是 MessageBatchPump.EnqueueAsync：它先同步打 deferred
             // 标记，再 WriteAsync 入通道。WriteAsync 在关停/通道关闭时抛 OCE 或
@@ -813,6 +822,16 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
     }
 
     /// <summary>
+    /// 批量聚合授权判定（2026-11-23 性能轮）——提为纯函数供白盒测试锁定：
+    /// 独立 consumer channel（每订阅独占 tag 空间）且消费分发串行
+    /// （<paramref name="consumerDispatchConcurrency"/> null = 客户端默认 1，或显式 ≤1）
+    /// 时，deliveryTag 严格单调入批，单帧 multiple ack/nack 语义等价逐条；任一前提
+    /// 不满足（共享 channel 多订阅共 tag 空间 / 并发 dispatch 打乱单调性）返回 false。
+    /// </summary>
+    internal static bool CanAggregateBatchAck(bool ownsConsumerChannel, ushort? consumerDispatchConcurrency)
+        => ownsConsumerChannel && consumerDispatchConcurrency is not > 1;
+
+    /// <summary>
     /// ACK 的安全包装——与 TryNackSafeAsync 同型（P3 修复：成功路径 channel 已关时
     /// BasicAckAsync 抛异常同样会逃逸进消费者回调）。
     /// </summary>
@@ -825,6 +844,41 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicAck failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
+            MarkChannelFaultIfClosed(channel, ex, queueName);
+        }
+    }
+
+    /// <summary>
+    /// 批量聚合 ACK 的安全包装（2026-11-23 性能轮）——单帧 <c>multiple:true</c> 结算整批，
+    /// 与 <see cref="TryAckSafeAsync"/> 同型的 channel 已关防护。成员占位已在聚合器内完成，
+    /// 帧失败只记 Warning（语义对齐逐条路径第 i 帧失败后跳过剩余成员）。
+    /// </summary>
+    private async Task TryAckMultipleSafeAsync(IChannel channel, ulong maxDeliveryTag, string queueName)
+    {
+        try
+        {
+            await channel.BasicAckAsync(maxDeliveryTag, multiple: true).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Warning($"BasicAck(multiple) failed (channel closed?): {queueName}, deliveryTag={maxDeliveryTag}: {ex.Message}");
+            MarkChannelFaultIfClosed(channel, ex, queueName);
+        }
+    }
+
+    /// <summary>
+    /// 批量聚合 Nack 的安全包装（2026-11-23 性能轮）——单帧 <c>multiple:true</c> 弃置/重投整批，
+    /// 与 <see cref="TryNackSafeAsync"/> 同型的 channel 已关防护。
+    /// </summary>
+    private async Task TryNackMultipleSafeAsync(IChannel channel, ulong maxDeliveryTag, bool requeue, string queueName)
+    {
+        try
+        {
+            await channel.BasicNackAsync(maxDeliveryTag, multiple: true, requeue: requeue).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Warning($"BasicNack(multiple) failed (channel closed?): {queueName}, deliveryTag={maxDeliveryTag}: {ex.Message}");
             MarkChannelFaultIfClosed(channel, ex, queueName);
         }
     }
@@ -846,6 +900,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
 
     /// <summary>
     /// 单次投递的消费确认器（批次 A，2026-11-04）——把既有 manual-ack 动作交给 handler 决策。
+    /// 2026-11-23 性能轮：实现 <c>IBatchAckAggregator</c>（internal），批量泵的批次级
+    /// 结算可聚合成单帧 <c>multiple:true</c> ack/nack。
     /// </summary>
     /// <remarks>
     /// 嵌套在 Broker 内以复用 <see cref="TryAckSafeAsync"/>/<see cref="TryNackSafeAsync"/> 的
@@ -859,6 +915,13 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
     /// 抛出会打断业务逻辑，而结算失败本身已由安全包装记 Warning。
     /// </para>
     /// <para>
+    /// <b>批量聚合（2026-11-23）</b>：授权由订阅时判定（独立 channel + 串行 dispatch，
+    /// 见四参 <c>SubscribeAsync</c> 重载内 <c>batchAggregateEnabled</c>）。聚合校验：① 授权在场；② 全员同 channel；③ 批内
+    /// deliveryTag 严格连续递增（tag 洞只可能来自 broker 兜底已弃置的交付——不在服务端
+    /// unacked map，multiple 帧语义上安全，但保守回退逐条，把「正确性依赖服务端 map 状态」
+    /// 收窄到可静态判定的形态）。任一不满足返回 false（零副作用），调用方逐条结算。
+    /// </para>
+    /// <para>
     /// <c>ct</c> 不参与结算：AMQP 的 ack/nack 是通道级单帧写，无法在中途取消，且结算
     /// 必须尽可能完成（取消语义交由调用方在调用前判断）。
     /// </para>
@@ -867,7 +930,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         RabbitMqBroker broker,
         IChannel channel,
         ulong deliveryTag,
-        string queueName) : IMessageAck
+        string queueName,
+        bool batchAggregateEnabled) : IMessageAck, IBatchAckAggregator
     {
         private int _settled;
 
@@ -876,6 +940,15 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
 
         /// <summary>原子占位：首次返回 <c>true</c>。</summary>
         public bool TryClaim() => Interlocked.Exchange(ref _settled, 1) == 0;
+
+        /// <summary>本确认器的 deliveryTag（聚合校验用；批量路径外不暴露）。</summary>
+        public ulong DeliveryTag => deliveryTag;
+
+        /// <summary>聚合授权（订阅时判定：独立 channel + 串行 dispatch）。</summary>
+        public bool BatchAggregateEnabled => batchAggregateEnabled;
+
+        /// <summary>本确认器所属 channel（同批成员归属校验用）。</summary>
+        public IChannel Channel => channel;
 
         /// <inheritdoc />
         public async ValueTask AcknowledgeAsync(CancellationToken ct = default)
@@ -901,6 +974,83 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             }
 
             await broker.TryNackSafeAsync(channel, deliveryTag, requeue, queueName).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// 聚合路径：全员 TryClaim 占位后，以最大 deliveryTag 发一帧 <c>multiple:true</c>
+        /// ack——服务端确认该 channel unacked map 中 ≤ tag 的全部条目。占位失败（成员已被
+        /// 单独结算，防御分支——批量泵移交后 broker 不兜底，正常不可达）的成员 tag 不在
+        /// 服务端 unacked map，multiple 帧不受影响，仅跳过其 TryClaim。帧发送失败由
+        /// <see cref="RabbitMqBroker.TryAckMultipleSafeAsync"/> 安全包装吞掉并记 Warning——语义与
+        /// 逐条路径第 i 帧失败后跳过剩余成员一致（后续交付随连接/ channel 恢复重投，
+        /// at-least-once 由 unacked 状态兜底）。
+        /// </remarks>
+        public async ValueTask<bool> TryAcknowledgeBatchAsync(IMessageAck[] batch, CancellationToken ct)
+        {
+            if (!TryPrepareAggregate(batch, out var maxTag))
+                return false;
+
+            await broker.TryAckMultipleSafeAsync(channel, maxTag, queueName).ConfigureAwait(false);
+            return true;
+        }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// 聚合路径与 ack 同型（multiple:true + requeue 单帧）。Kafka 的逆序委派理由
+        /// （Seek 最后一次生效）对本实现不适用：单帧无顺序语义。
+        /// </remarks>
+        public async ValueTask<bool> TryRejectBatchAsync(IMessageAck[] batch, bool requeue, CancellationToken ct)
+        {
+            if (!TryPrepareAggregate(batch, out var maxTag))
+                return false;
+
+            await broker.TryNackMultipleSafeAsync(channel, maxTag, requeue, queueName).ConfigureAwait(false);
+            return true;
+        }
+
+        /// <summary>
+        /// 聚合前置校验与占位：授权在场、首成员即本确认器（<c>MessageBatchAck</c> 以首成员
+        /// 路由聚合器）、全员同 channel、deliveryTag 严格连续递增（洞 = broker 兜底已弃置的
+        /// 交付——不在服务端 unacked map，语义上安全，但保守回退逐条，把「正确性依赖服务端
+        /// map 状态」收窄到可静态判定的形态）。校验失败零占位零副作用，调用方逐条结算。
+        /// </summary>
+        private bool TryPrepareAggregate(IMessageAck[] batch, out ulong maxTag)
+        {
+            maxTag = 0;
+            if (!batchAggregateEnabled || batch.Length == 0)
+                return false;
+
+            var previous = deliveryTag;
+            for (var i = 0; i < batch.Length; i++)
+            {
+                if (batch[i] is not RabbitMqMessageAck rabbitAck
+                    || !ReferenceEquals(rabbitAck.Channel, channel))
+                    return false;
+
+                if (i == 0)
+                {
+                    // 首成员即本聚合器（路由协议）；防御非首成员路由的未来变化。
+                    if (!ReferenceEquals(rabbitAck, this))
+                        return false;
+                }
+                else if (rabbitAck.DeliveryTag != previous + 1)
+                {
+                    // 乱序（并发 dispatch 已被授权判定排除，防御保留）或洞 → 拒绝聚合。
+                    return false;
+                }
+
+                previous = rabbitAck.DeliveryTag;
+            }
+
+            // 校验全过才占位（失败路径零副作用）；已结算成员（防御，正常不可达）跳过——
+            // 其 tag 不在服务端 unacked map，multiple 帧不波及。
+            foreach (var candidate in batch)
+                if (candidate is RabbitMqMessageAck rabbitAck)
+                    _ = rabbitAck.TryClaim();
+
+            maxTag = previous;
+            return true;
         }
     }
 

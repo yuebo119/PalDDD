@@ -1300,6 +1300,11 @@ class PalDDD.PalORM.MySql.MySqlSagaStateStore<TState>
   ctor(PalORM.DataSession<PalORM.MySql.MySqlProvider> session, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo, System.TimeProvider clock)
 
 # PalDDD.PalORM.PostgreSql
+class PalDDD.PalORM.PostgreSql.PalOrmPostgreSqlOutboxNotifier
+  ctor(System.String connectionString, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, PalDDD.Core.Logging.IPalLogger<PalDDD.PalORM.PostgreSql.PalOrmPostgreSqlOutboxNotifier> logger, System.String channelName)
+  method System.Threading.Tasks.ValueTask DisposeAsync()
+  method System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken cancellationToken)
 class PalDDD.PalORM.PostgreSql.PostgreSqlEventLog
   ctor(PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider> session, System.TimeProvider clock)
 class PalDDD.PalORM.PostgreSql.PostgreSqlIdempotencyStore
@@ -1310,6 +1315,7 @@ class PalDDD.PalORM.PostgreSql.PostgreSqlOutboxStore
   ctor(PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider> session, System.TimeProvider clock, PalDDD.Transactions.IOutboxWakeUpSignal wakeUpSignal)
 static class PalDDD.PalORM.PostgreSql.PostgreSqlPalOrmExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmPostgreSql(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.String connectionString, PalORM.DbOptions options, System.TimeProvider clock, System.Action<PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider>> configureResilience, System.Int32 prewarmConnectionCount, System.Boolean useSessionPool)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmPostgreSqlOutboxNotifier(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.String connectionString, System.String channelName)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmPostgreSqlSagaSnapshot(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo)
 class PalDDD.PalORM.PostgreSql.PostgreSqlPalOrmUnitOfWork
   ctor(PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider> session)

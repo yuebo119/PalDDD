@@ -119,6 +119,22 @@ services.AddPalOrmSqlite(connectionString);
 - 归还门禁：有未收口事务、在飞操作或未释放的并行读作用域时 `DisposeAsync` 抛出（上游契约），事务必须经 `IUnitOfWork` 收口。
 - 池化工厂只实现 `IAsyncDisposable`，根容器应使用 `DisposeAsync` 释放（与 `DataSession` 同款约束）。
 
+#### 4.1.2 PG LISTEN/NOTIFY Outbox 唤醒（可选，2026-11-23）
+
+`AddPalOrmPostgreSqlOutboxNotifier(services, connectionString, channelName = "outbox_channel")` 在
+PalORM 栈补齐 PG 跨进程唤醒（此前仅 Dapper 栈有）：NOTIFY 到达即触发
+`OutboxBatchProcessor.ProcessBatchAsync`（`AddPalOutbox()` 注册），消除轮询周期延迟；默认
+PeriodicTimer 轮询保留作兜底。监听载体是 PalORM 6.9.0 的 `PgNotificationListener`（30s 心跳
+保活 + 线性递增全量抖动重连），通道契约与 Dapper 版 `PostgreSqlOutboxNotifier` 完全一致
+（`outbox_channel` + 过渡表触发器，DDL 见其头注释）——同一库两栈共用同一触发器面。
+连接串必须与 `AddPalOrmPostgreSql` 一致（listener 持独立长连接，不走会话池）。
+
+```csharp
+services.AddPalOutbox();
+services.AddPalOrmPostgreSql(connectionString);
+services.AddPalOrmPostgreSqlOutboxNotifier(connectionString); // 默认通道 outbox_channel
+```
+
 ### 4.2 Saga 快照持久化注册（saga_data 列）— 必读
 
 三方言的一键注册中，`ISagaStateStore<>` 开放泛型（如 `PostgreSqlSagaStateStore<>`）无 `JsonTypeInfo` 传入通道——`jsonTypeInfo` 恒 null。

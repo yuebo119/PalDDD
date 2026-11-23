@@ -380,6 +380,80 @@ public sealed class MessageAckTests
         await Assert.That(string.Join(",", settled)).IsEqualTo("reject-0-False,reject-1-False");
     }
 
+    /// <summary>
+    /// 聚合路由的零副作用回退（2026-11-23 性能轮）：聚合器返回 false 时必须走逐条路径
+    /// 且未结算任何成员（IBatchAckAggregator 契约：false = 零副作用）。
+    /// </summary>
+    [Test]
+    public async Task BatchAck_AggregatorDeclines_FallsBackToPerItemSettlement()
+    {
+        var log = new List<string>();
+        var batchAck = new MessageBatchAck(
+        [
+            new AggregatingAck(aggregate: false, log, tag: 0),
+            new AggregatingAck(aggregate: false, log, tag: 1),
+            new AggregatingAck(aggregate: false, log, tag: 2),
+        ]);
+
+        await batchAck.AcknowledgeAsync();
+
+        // 首成员拒绝（零副作用）→ 逐条 ack-0,ack-1,ack-2；后续成员的聚合器不再被探测。
+        await Assert.That(string.Join(",", log)).IsEqualTo("declined,ack-0,ack-1,ack-2");
+        await Assert.That(batchAck.IsSettled).IsTrue();
+    }
+
+    /// <summary>
+    /// 聚合成功路径：单次聚合调用结算整批（成员不再逐条 ack）。
+    /// </summary>
+    [Test]
+    public async Task BatchAck_AggregatorAccepts_SettlesWholeBatchInOneCall()
+    {
+        var log = new List<string>();
+        var batchAck = new MessageBatchAck(
+        [
+            new AggregatingAck(aggregate: true, log, tag: 0),
+            new AggregatingAck(aggregate: false, log, tag: 1),
+            new AggregatingAck(aggregate: false, log, tag: 2),
+        ]);
+
+        await batchAck.AcknowledgeAsync();
+
+        // 首成员聚合器接管整批（聚合看到 3 个成员），其余成员的 per-item 方法零调用。
+        await Assert.That(string.Join(",", log)).IsEqualTo("aggregated-ack:3:0+1+2");
+        await Assert.That(batchAck.IsSettled).IsTrue();
+    }
+
+    /// <summary>非聚合首成员（Kafka/NoOp 形态）不探测聚合器，行为零变化（负向对照）。</summary>
+    [Test]
+    public async Task BatchAck_PlainMembers_SkipAggregationEntirely()
+    {
+        var log = new List<string>();
+        var batchAck = new MessageBatchAck([new RecordingAck(0, log), new RecordingAck(1, log)]);
+
+        await batchAck.AcknowledgeAsync();
+
+        await Assert.That(string.Join(",", log)).IsEqualTo("ack-0,ack-1");
+    }
+
+    /// <summary>
+    /// 聚合拒绝路径的拒绝侧：TryRejectBatchAsync 返回 false 时走逆序逐条。
+    /// </summary>
+    [Test]
+    public async Task BatchAck_AggregatorDeclinesReject_FallsBackToReversePerItem()
+    {
+        var log = new List<string>();
+        var batchAck = new MessageBatchAck(
+        [
+            new AggregatingAck(aggregate: false, log, tag: 0),
+            new AggregatingAck(aggregate: false, log, tag: 1),
+            new AggregatingAck(aggregate: false, log, tag: 2),
+        ]);
+
+        await batchAck.RejectAsync(requeue: true);
+
+        await Assert.That(string.Join(",", log)).IsEqualTo("declined,reject-2-True,reject-1-True,reject-0-True");
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, string message)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);
@@ -408,6 +482,60 @@ public sealed class MessageAckTests
             lock (log)
                 log.Add($"reject-{id}-{requeue}");
             return ValueTask.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// 聚合器形态的记录确认器（2026-11-23 性能轮）：实现 IBatchAckAggregator，
+    /// aggregate=true 时记录一次聚合动作（含看到的全批成员 tag）；false 时记录拒绝并
+    /// 返回 false（零副作用），per-item 方法记录逐条结算。
+    /// </summary>
+    private sealed class AggregatingAck(
+        bool aggregate,
+        List<string> log,
+        int tag) : IMessageAck, IBatchAckAggregator
+    {
+        internal int Tag => tag;
+        public ValueTask AcknowledgeAsync(CancellationToken ct = default)
+        {
+            lock (log)
+                log.Add($"ack-{tag}");
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask RejectAsync(bool requeue, CancellationToken ct = default)
+        {
+            lock (log)
+                log.Add($"reject-{tag}-{requeue}");
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<bool> TryAcknowledgeBatchAsync(IMessageAck[] batch, CancellationToken ct)
+        {
+            if (!aggregate)
+            {
+                lock (log)
+                    log.Add("declined");
+                return ValueTask.FromResult(false);
+            }
+
+            lock (log)
+                log.Add($"aggregated-ack:{batch.Length}:{string.Join("+", batch.Select(static a => ((AggregatingAck)a).Tag))}");
+            return ValueTask.FromResult(true);
+        }
+
+        public ValueTask<bool> TryRejectBatchAsync(IMessageAck[] batch, bool requeue, CancellationToken ct)
+        {
+            if (!aggregate)
+            {
+                lock (log)
+                    log.Add("declined");
+                return ValueTask.FromResult(false);
+            }
+
+            lock (log)
+                log.Add($"aggregated-reject:{string.Join("+", batch.Select(static a => ((AggregatingAck)a).Tag))}");
+            return ValueTask.FromResult(true);
         }
     }
 

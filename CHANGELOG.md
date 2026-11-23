@@ -14,15 +14,18 @@
 
 ### Added
 
+- **PalORM PG 栈 LISTEN/NOTIFY Outbox 唤醒（2026-11-23）**：新增 `PalOrmPostgreSqlOutboxNotifier`（IHostedService）与注册入口 `AddPalOrmPostgreSqlOutboxNotifier(services, connectionString, channelName)`——PG 跨进程唤醒此前仅在 Dapper 栈，PalORM 栈的 Outbox 端到端延迟受 PeriodicTimer 轮询周期钳制。监听载体是 PalORM 6.9.0 的 `PgNotificationListener`（30s 心跳保活 + 线性递增全量抖动重连），NOTIFY 到达即触发 `OutboxBatchProcessor`，通道契约与 Dapper 版完全一致（`outbox_channel` + 过渡表触发器，同一库两栈共用触发器面）。公共 API 快照 +6。真库通路（wslc pg186 实测 NOTIFY 送达）与非真库面（通道白名单/DI 注册/幂等释放，22 用例）均验证。
 - **IPalLogger 插值重载与零分配关闭路径（2026-11-23）**：新增非泛型基接口 `IPalLogger`（承载 `IsEnabled`，供插值 handler 构造使用）与四个级别 handler（`PalDebugLogHandler` / `PalInformationLogHandler` / `PalWarningLogHandler` / `PalErrorLogHandler`）。`IPalLogger<T>` 每个级别新增一个插值重载，调用形态为 `_logger.Debug($"id={id} name={name}")`。**关闭态零分配**：级别未启用时编译器跳过整个插值表达式（实测 N=2000：MEL 参数化重载 96.0 B/op → 0.0 B/op）；启用态 336.0 → 约 196.0 B/op。纯加法，旧实现者走 DIM 默认实现零迁移成本。公共 API 快照 +51/−1（唯一删除为 `IPalLogger<T>` 的 `IsEnabled` 上移到基接口）。
 
 ### Performance
 
+- **Rabbit 批量结算单帧聚合（multiple:true，2026-11-23）**：批量订阅（`SubscribeBatchAsync`）的批次级确认在安全前提下压成单帧——默认形态（每订阅独立 consumer channel + 串行 dispatch，`ConsumerDispatchConcurrency` 默认 1）下 deliveryTag 严格单调入批，`BasicAckAsync(maxTag, multiple: true)` 一帧等价逐条 N 帧（64 条批 64 帧 → 1 帧）。实现为程序集内部的 `IBatchAckAggregator` 扩展点（`MessageBatchAck` 首成员探测路由，Kafka/NoOp 形态行为零变化）；聚合开关判据提为纯函数 `CanAggregateBatchAck`（白盒判定表锁定：共享 channel 或并发 dispatch >1 恒回退逐条）。共享 channel 模式（`UseSharedConsumerChannel=true`）与 `ConsumerDispatchConcurrency > 1` 下自动回退逐条，语义恒正确。帧级回归依赖三层锁定：聚合路由单测（变异验证红/绿）、判定表单测、真库语义探针（64 条批 channel 存活 + 零重投 + 零 Warning，11/11 绿）。
 - **RabbitMQ 发布接入 7.3.0 bodyOwner（免整载荷拷贝，2026-11-23）**：`BasicPublishAsync(..., bodyOwner:)` 把 `PooledBodyWriter` 的所有权移交客户端，由客户端在发送完成或发布失败后释放一次。7.2.x 无 owner 时客户端必须在确认与流控两次可挂起 await 之后把 body 复制进内部缓冲，本形态省掉该拷贝。配套加固：`PooledBodyWriter.Dispose` 加 Interlocked 幂等门（客户端与发布路径 `finally` 各释放一次，重复 Return 同一数组会让两个租用者共享同一缓冲）；发布路径改为 `finally` 兜底，覆盖序列化或 exchange 声明阶段抛出、所有权未转移的路径。
 - **MemoryPack 直写重载兑现（ADR-029 延后段，2026-11-23）**：`MemoryPackMessageSerializer` 覆写 `Serialize(object, descriptor, IBufferWriter<byte>)`，改走 `MemoryPackSerializer.Serialize<TBufferWriter>(Type, in writer, object, options)` 非泛型直写。实测（N=10000，47 B 载荷）：复用缓冲 **0.0 B/op**，原 DIM 回退 72.0 B/op，两者产出逐字节一致。原注释「MemoryPack 1.21.4 无 (writer, Type, object) 重载」经反射枚举证伪并勘正（1.22.0 存在该重载）。
 
 ### Fixed
 
+- **MySQL 会话优化池扩容缺口闭环（ITM-211，2026-11-23）**：`AddPalMySqlDataSource` 的 InnoDB 性能优化改经 `MySqlDataSourceBuilder.UseConnectionOpenedCallback` 对**每个新开物理连接**（含并发高峰池扩容按需新建的连接）重放 `SET SESSION`——此前仅首连接被优化，池扩容出的新连接使用服务端默认（REPEATABLE-READ），同池内 RC/RR 隔离级别混跑（间隙锁/死锁行为不一致）。原注释「MySqlDataSource 无 on-open 回调，应用内无法闭环」失实（MySqlConnector 2.6.2/3.0.0 均提供该 API，XML 实证）。真库探针（wslc mysql84）：6 条连接（首连接 + 归池复用 + 4 并发池扩容）全部 READ-COMMITTED；变异验证（移除 Optimize）转 REPEATABLE-READ 红。init_connect 服务端方案从「推荐」降为「可选兜底」。
 - **PalLogger 结构化重载补 IsEnabled 门控（2026-11-23）**：MEL 的 `LogDebug/LogInformation/LogWarning/LogError(EventId, string, params object?[])` 重载**不做**级别检查，直接构造 `FormattedLogValues` 交给 provider 过滤，关闭态下 params 数组、装箱与 state 全部照常分配（实测 96.0 B/op）。四个结构化重载与四个插值重载均补门控，关闭态实现零分配且不调用 provider。
 
 ### Dependencies
