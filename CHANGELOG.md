@@ -18,6 +18,7 @@
 
 ### Performance
 
+- **RabbitMQ 发布接入 7.3.0 bodyOwner（免整载荷拷贝，2026-11-23）**：`BasicPublishAsync(..., bodyOwner:)` 把 `PooledBodyWriter` 的所有权移交客户端，由客户端在发送完成或发布失败后释放一次。7.2.x 无 owner 时客户端必须在确认与流控两次可挂起 await 之后把 body 复制进内部缓冲，本形态省掉该拷贝。配套加固：`PooledBodyWriter.Dispose` 加 Interlocked 幂等门（客户端与发布路径 `finally` 各释放一次，重复 Return 同一数组会让两个租用者共享同一缓冲）；发布路径改为 `finally` 兜底，覆盖序列化或 exchange 声明阶段抛出、所有权未转移的路径。
 - **MemoryPack 直写重载兑现（ADR-029 延后段，2026-11-23）**：`MemoryPackMessageSerializer` 覆写 `Serialize(object, descriptor, IBufferWriter<byte>)`，改走 `MemoryPackSerializer.Serialize<TBufferWriter>(Type, in writer, object, options)` 非泛型直写。实测（N=10000，47 B 载荷）：复用缓冲 **0.0 B/op**，原 DIM 回退 72.0 B/op，两者产出逐字节一致。原注释「MemoryPack 1.21.4 无 (writer, Type, object) 重载」经反射枚举证伪并勘正（1.22.0 存在该重载）。
 
 ### Fixed
@@ -26,11 +27,13 @@
 
 ### Dependencies
 
+- **RabbitMQ.Client 7.2.2 → 7.3.0**（2026-11-23，稳定版发布后升位）：`7.3.0-beta.0` 之后的稳定版已发布，先前「beta 不入线」的排除依据失效。破坏面逐条核查后对本仓零触及：唯一硬源码破坏是 `IChannel` 新增 4 个抽象成员（本仓不实现该接口，仅消费）；5 个新增 `[Obsolete]` 成员（`RabbitMQActivitySource.ContextInjector` / `ContextExtractor` / `UseRoutingKeyAsOperationName` / `TracingOptions`）本仓仅在注释中提及、无调用，不触发 warnings-as-errors；TLS 行为变更（amqps 校验主机名、TLS 工厂拒绝明文回退）本仓无 `Ssl` 配置；`ConsumerDispatchConcurrency=0` 本仓已在 `RabbitMqBroker` 构造期拒绝 0；`CreateChannelAsync` 不再写回传入 options 而本仓显式构造、不依赖写回；短字符串超长异常类型变化与字段表 32 层嵌套限制本仓无超限调用面。许可表达式两版一致（`Apache-2.0 OR MPL-2.0`，license-policy 白名单内含）。消费者可见变化仅依赖面上移，公共 API 与行为契约不变。
 - **PalORM ×5 6.8.0 → 6.9.0**（2026-11-23 全量核新，NuGet 双通道实测）：上游行为变更 4 处——MySQL 批量写入默认整段单批（与 PostgreSQL 对齐）、PG `DateTime` 列统一 `timestamptz`、`ToPageAsync` 遇 `Skip()` 与 SQLite 行锁 API 改调用期抛错，另新增迁移漂移检测（默认开启）与四项生命周期 API。本仓零代码适配：唯一批插消费点的批宽由调用方控制且事务内入事务（MySqlBulkCopyInserter 源码实证无隐式提交切断）、PalORM 模型全部 `DateTimeOffset`、后两组 API 本仓零调用、迁移与 `SaveAsync` 路径零调用。消费者可见变化为依赖面上移，公共 API 与行为契约不变。
 - **Meziantou.Analyzer 3.0.341 → 3.0.342**（补丁位）：分析器规则更新，Release 构建仍 0 警告。
 
 ### Documentation
 
+- **版本声明四方同步（2026-11-23）**：README 中英「生产环境有谁在用」段从预览叙述改为 GA 状态（`5.0.0` 于 2026-11-22 由 `5.0.0-preview.1` 转正，发布时间点待 tag），依赖声明同步为 .NET 11 GA `11.0.0` + PalORM `6.9.0` + TUnit `1.87.12`；`docs/conventions.md` §10.6 与 `docs/testing.md` §2.1 的测试框架声明同步为 TUnit `1.87.12` + MTP `2.5.3`（实际解析值，由 `project.assets.json` 核对）。失实成因是升级轮只同步了 `Directory.Packages.props` 与 CHANGELOG，未回扫「当前版本」叙述面；`doc-consistency` 与 `count-audit` 两门禁均不管版本号与发布状态，属机械防线已知边界。
 - **README（中英）许可证说明按发布版本划分重写（2026-11-23）**：参照上游 PalORM 许可说明结构改为「划分总纲 + 版本区间列表 + 当前仓库授权」结构，区间边界经 NuGet.org 逐版本 nuspec 实证（下载 12 个已发布 nupkg 读 nuspec）：`v1.0.0` ~ `v4.0.0` 共 10 个已发布版本（2026-07-30 ~ 2026-10-11）为 AGPL-3.0-or-later，`v5.0.0-preview.1`（2026-10-27 起）为 Apache-2.0；`v1.0.0-preview.1`（2026-07-04）实证为 MIT，属预览版，按维护者裁决不列入公开说明。许可口径不变（v5.0 起 Apache-2.0、更早已发布版本不追溯），纯结构优化，消费方锁定旧版本时的合规评估路径更清晰。
 
 ## [5.0.0] — 2026-11-22

@@ -23,7 +23,14 @@ namespace PalDDD.Messaging.RabbitMQ;
 /// </remarks>
 /// <remarks>
 /// <b>内置 tracing 与本仓手工 traceparent 头的共存语义</b>（2026-09-25 特性审计，源码级结论
-/// ——反编译 RabbitMQ.Client 7.2.2 RabbitMQActivitySource）：
+/// ——反编译 RabbitMQ.Client 7.2.2 RabbitMQActivitySource；<b>7.3.0 勘正 2026-11-23</b>：
+/// <c>RabbitMQActivitySource.ContextInjector</c> / <c>ContextExtractor</c> /
+/// <c>UseRoutingKeyAsOperationName</c> / <c>TracingOptions</c> 自 7.3.0 起标记
+/// <c>[Obsolete]</c>，传播配置迁移到 <c>ConnectionFactory.TracingOptions.Propagator</c>
+/// （<c>DistributedContextPropagator</c>）与同级的 <c>ConnectionTracingOptions</c>；本仓两条
+/// 共存规则的语义不变——本仓不注册 ActivityListener、不配置 propagator，默认传播器仍是
+/// 进程级 <c>DistributedContextPropagator.Current</c>，故 header 同键与短路行为逐位一致。
+/// 上文与下文仅在语义层保留旧成员名，新增代码请改用 <c>ConnectionTracingOptions</c>）：
 /// <para>客户端内建 tracing（<c>RabbitMQActivitySource.ContextInjector/ContextExtractor</c>）
 /// 经 <see cref="System.Diagnostics.DistributedContextPropagator.Current"/>（W3C）注入/提取，
 /// header 键即 <c>"traceparent"</c>——与本仓 <see cref="MessageConsumeContext.HeaderNames.TraceParent"/>
@@ -35,7 +42,8 @@ namespace PalDDD.Messaging.RabbitMQ;
 /// 消息到达时头部里的本仓值（出站时序：本仓 <c>CreateHeaders</c> 先写、客户端 Injector 后写
 /// 同键覆盖）——W3C 链条衔接正确；发布侧 OutboxProcessor 的 Activity.Current 链会覆盖本仓
 /// 还原的原始发布上下文头。若业务需保留 outbox 原始上下文而非 outbox 投递 activity 链，
-/// 请自定义 <c>RabbitMQActivitySource.ContextInjector</c>（先取本仓头再透传）。</para>
+/// 请设置自定义 <c>ConnectionTracingOptions.Propagator</c>（7.3.0+；旧版本为
+/// <c>RabbitMQActivitySource.ContextInjector</c>）先取本仓头再透传。</para>
 /// </remarks>
 [SuppressMessage("Design", "CA1031:Do not catch general exception types",
     Justification = "Broker 消费回调需记录毒消息失败并执行合理 nack，需捕获 Exception 基类。")]
@@ -222,13 +230,17 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         // FIX-011（2026-11-08）：EnsureExchangeAsync 与 Serialize 移入 try——broker 不可达
         // （exchange 声明失败）与序列化失败同计 BrokerPublishFailed（修前两者逃逸出 try，
         // 成为不计数的静默失败）。
+        // 7.3.0 bodyOwner（2026-11-23）：writer 的所有权在发布成功后转移给客户端，
+        // 因此不能在 try 内 using；失败/未转移路径由 finally 兜底释放（Dispose 幂等）。
+        PooledBodyWriter? bodyWriter = null;
         try
         {
             var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
 
-            // A2：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
-            // using 保证发布抛出后缓冲归还池（池化 writer 无 Clear 复位需求，天然干净入口）
-            using var bodyWriter = new PooledBodyWriter(InitialBodyBufferBytes);
+            // A2 + 7.3.0 bodyOwner：IBufferWriter 直写 + WrittenMemory 直传，并把 writer 交给
+            // 客户端作 bodyOwner——客户端在发送完成或发布失败后释放一次，7.2.x 无 owner 时
+            // 客户端必须把 body 复制进内部缓冲，本形态省掉该整载荷拷贝。
+            bodyWriter = new PooledBodyWriter(InitialBodyBufferBytes);
             Serializer.Serialize(message, descriptor, bodyWriter);
             // ITM-213 修复（三十二轮）：mandatory:true——无绑定队列时发布抛 PublishException，
             // 不再静默丢弃（原 mandatory:false 使 Outbox 标记 Processed 但消息实际未路由）。
@@ -243,7 +255,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 mandatory: true,
                 basicProperties: CreateProperties(descriptor, messageId, context),
                 body: bodyWriter.WrittenMemory,
+                bodyOwner: bodyWriter,
                 cancellationToken: ct).ConfigureAwait(false);
+            bodyWriter = null; // 所有权已移交客户端
         }
         catch (PublishReturnException ex)
         {
@@ -268,6 +282,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             publishActivity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             PalMetrics.BrokerPublishFailed.Add(1);
             throw;
+        }
+        finally
+        {
+            // 覆盖「序列化或 exchange 声明阶段抛出，所有权未转移」路径；发布失败时客户端已释放
+            // bodyOwner，PooledBodyWriter.Dispose 的 Interlocked 门保证池缓冲只归还一次。
+            bodyWriter?.Dispose();
         }
 
         // 优化（二十五轮 Z-1）：同 KafkaBroker——Debug 级门控免白做插值
@@ -942,6 +962,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
     {
         private byte[] _buffer;
         private int _written;
+        private int _disposed;
 
         public PooledBodyWriter(int initialCapacity)
             => _buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(256, initialCapacity));
@@ -974,7 +995,18 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             _buffer = next;
         }
 
-        public void Dispose() => System.Buffers.ArrayPool<byte>.Shared.Return(_buffer);
+        /// <summary>
+        /// 归还池缓冲。<b>幂等</b>：RabbitMQ.Client 7.3.0 起 <c>BasicPublishAsync(bodyOwner:)</c>
+        /// 由客户端在发送完成或发布失败后释放一次，发布路径的 <c>finally</c> 也会释放一次。
+        /// 双重释放会把同一数组重复 Return 给 <see cref="System.Buffers.ArrayPool{T}"/>，
+        /// 使同一缓冲被两个租用者同时持有。Interlocked 门保证只归还一次。
+        /// </summary>
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            System.Buffers.ArrayPool<byte>.Shared.Return(_buffer);
+        }
     }
 
     private sealed class AsyncSubscription(Func<Task> unsubscribe) : IAsyncDisposable
