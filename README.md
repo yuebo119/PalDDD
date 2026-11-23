@@ -557,7 +557,7 @@ MediatR 是进程内命令分发器。Pal.DDD 内置与之等价的 Dispatcher +
 不支持 .NET 8/9/10（单目标 net11.0）。AOT 场景三处限制（源码 `[RequiresDynamicCode]` 诚实声明）：① Saga 的 ChildSaga 子流程分发（`MakeGenericMethod`/`MakeGenericType`，见 `Saga.cs`）与②动态事件路由同源；③ `ISpecification.Compile()` 表达式树编译在 Native AOT 下不受支持，AOT 场景改用 `ToExpression()` 传给查询提供者（内存路径 `IsSatisfiedBy` 走 `Expression.Compile`，Native AOT 下不支持）。不含内置 EventStore 快照机制，需要快照策略的项目自行实现。CQRS 管道注意：无参开放泛型 `AddPalPipelineBehaviors()` 在 Native AOT 下对值类型响应触发 `AotCannotCreateGenericValueType`，AOT 应用改用 `AddPalCommandHandler<T...>` 或显式 `AddPalPipelineBehaviors<TRequest, TResponse>()`（两种注册先到先得互斥）。
 
 **生产环境有谁在用？**
-当前版本 v5.0.0 **预览版**（`5.0.0-preview.1`，SemVer Major 预览；.NET 11 GA 后同内容转正 5.0.0，预览期反馈并入 GA 轮——公共 API 快照 +468/−64：`AddPalFullStack` 扩展与 `MySqlLeasePolicy` 类移除、`SagaState.ExecutedStepKeys` 改 `List<string>`（ADR-035）、`AddPalOrm*` 三扩展与多处 ctor/方法签名变更（迁移说明见 CHANGELOG `[5.0.0-preview.1]` 兼容性引用块与各 Changed/Removed 条）；许可证 AGPL-3.0-or-later → Apache-2.0（ADR-036，已发布历史版本保持 AGPL）；新增 SSE 流式读（ADR-030）、断线续跑（ADR-031）、SQLite FTS5/JSON1 双栈 API（ADR-032）、Outbox Auto 批量投递（ADR-033）与性能迁移四项（ADR-034）；依赖全量核新（微软 11 线 rc.3 + PalORM 6.8.0 + TUnit 1.76.28））。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试口径见文首速览表脚注¹。自定义 store/扩展实现方升级前请先读 CHANGELOG 迁移说明。欢迎在非生产环境中试用并反馈。
+当前版本 v5.0.0 **预览版**（`5.0.0-preview.1`，SemVer Major 预览；.NET 11 GA 后同内容转正 5.0.0，预览期反馈并入 GA 轮——公共 API 快照 +468/−64：`AddPalFullStack` 扩展与 `MySqlLeasePolicy` 类移除、`SagaState.ExecutedStepKeys` 改 `List<string>`（ADR-035）、`AddPalOrm*` 三扩展与多处 ctor/方法签名变更（迁移说明见 CHANGELOG `[5.0.0-preview.1]` 兼容性引用块与各 Changed/Removed 条）；许可证 AGPL-3.0-or-later → Apache-2.0（ADR-036，更早已发布版本按 MIT/AGPL 不追溯，见「许可证」节）；新增 SSE 流式读（ADR-030）、断线续跑（ADR-031）、SQLite FTS5/JSON1 双栈 API（ADR-032）、Outbox Auto 批量投递（ADR-033）与性能迁移四项（ADR-034）；依赖全量核新（微软 11 线 rc.3 + PalORM 6.8.0 + TUnit 1.76.28））。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试口径见文首速览表脚注¹。自定义 store/扩展实现方升级前请先读 CHANGELOG 迁移说明。欢迎在非生产环境中试用并反馈。
 
 ## 贡献
 
@@ -571,6 +571,12 @@ QQ 交流群 **1125599744**（C#/.NET 新技术交流群）：使用问题、特
 
 ## 许可证
 
-**版本分界**：v5.0 及以后（含 `5.0.0-preview.1`）采用 [Apache-2.0](LICENSE)；v5.0 之前的已发布版本（v1.x–v4.0.0 及已上 NuGet.org 的包）为 AGPL-3.0-or-later，不可追溯变更（见 [ADR-036](docs/decisions/036-license-apache-2.0.md)）。
+许可按发布版本划分，不按代码引入时间划分：
+
+- **`v1.0.0-preview.1`**（2026-07-04 已发布）：MIT
+- **`v1.0.0` ~ `v4.0.0`**（2026-07-30 ~ 2026-10-11 已发布，含已上 NuGet.org 的包）：AGPL-3.0-or-later（已发布的授权不因后续换证而撤销）
+- **v5.0 及以后**（含 `5.0.0-preview.1`，2026-10-27 起发布）：[Apache-2.0](LICENSE)（覆盖该版本的全部源码，含更早版本继承而来的代码）
+
+仓库当前全部源码以 Apache-2.0 授权（换证决策见 [ADR-036](docs/decisions/036-license-apache-2.0.md)）。
 
 Copyright (C) 2026 SuperLee
