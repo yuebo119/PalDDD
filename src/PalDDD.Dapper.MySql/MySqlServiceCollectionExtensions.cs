@@ -134,6 +134,7 @@ public static class MySqlServiceCollectionExtensions
                 // init_connect 兜底方案。MySqlException 与其他异常同处置（连不上库时
                 // SET 必失败，无需细分形态）。
 #pragma warning disable CA1031 // 回调由 provider 在连接建立路径调用，异常逃逸会打断建连
+#pragma warning disable RCS1075 // 刻意吞掉：优化失败不得阻断连接交付，连接器保持服务端默认参数
                 try
                 {
                     MySqlPerformanceOptimizer.Optimize(context.Connection);
@@ -143,6 +144,7 @@ public static class MySqlServiceCollectionExtensions
                 {
                     // 优化失败——连接保持可用（服务端默认设置）
                 }
+#pragma warning restore RCS1075
 
                 return ValueTask.CompletedTask;
             });

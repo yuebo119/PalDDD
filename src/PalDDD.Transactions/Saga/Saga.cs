@@ -866,7 +866,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         return current;
 
         // v13：观察者故障的统一记录点（同步 catch 与异步 OnlyOnFaulted 延续共用）
-        void RecordObserverFault(Exception obsEx)
+        static void RecordObserverFault(Exception obsEx)
         {
             System.Diagnostics.Activity.Current?.AddEvent(new(
                 "saga.observer.status-changed-failed",
