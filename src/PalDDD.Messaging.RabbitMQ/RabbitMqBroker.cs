@@ -560,19 +560,27 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         // 网络分区等导致 channel 关闭而消费空闲时，无任何包装被调用 → 故障位保持 null →
         // IsConsumingHealthy 恒 true → /health 恒绿，实例停止消费却不被摘流量。
         // 上游 AsyncEventingBasicConsumer.ShutdownAsync 会主动通知（client/server initiated），
-        // 本订阅补齐该观测点。Initiator.Application = 本仓正常关停（DisposeAsync/Cancel
-        // 先于 channel 释放），不置位；Library/Peer = 外部不可恢复断连，置位。
-        // linkedCts.IsCancellationRequested 双保险：正常关停句柄释放时先 Cancel 再关 channel，
-        // 即便 shutdown 事件标成非 Application 也不误红。
+        // 本订阅补齐该观测点。判据只用 linkedCts.IsCancellationRequested：本仓正常关停
+        // （订阅句柄释放/DisposeAsync）先 Cancel 再关 channel，故 shutdown 事件到达时
+        // linkedCts 必已取消（不置位）；外部断连或测试/他方主动关闭连接时 linkedCts 未取消
+        // （置位）。不能用 Initiator=Application 判「本仓关停」——实测客户端主动 CloseAsync(200)
+        // 也标成 Application，无法区分，会漏掉空闲断连（CI 真 broker 实证）。
         Task OnConsumerShutdownAsync(object _, ShutdownEventArgs args)
         {
-            if (args.Initiator != ShutdownInitiator.Application
-                && !(linkedCts?.IsCancellationRequested ?? true))
+            if (!(linkedCts?.IsCancellationRequested ?? true))
             {
                 var reason = args.Exception?.Message ?? args.ReplyText;
-                MarkChannelFaultIfClosed(consumerChannel,
-                    new InvalidOperationException($"consumer channel shutdown ({args.Initiator}): {reason}"),
-                    queueName);
+                // ShutdownAsync 事件本身即 channel 关闭的权威信号——不走
+                // MarkChannelFaultIfClosed 的 IsOpen 二次检查：事件回调早于 IsOpen
+                // 翻转时被挡掉会漏置（CI 真 broker 实证）。
+                // initiator 仅作原因文本的一部分（Application 也记录，便于诊断谁关的连接）；
+                // 置位判据不靠它——客户端 CloseAsync(200) 同样标 Application，
+                // 与「本仓正常关停」不可区分，唯一可靠信号是 linkedCts 是否已取消。
+                var initiatorText = args.Initiator == ShutdownInitiator.Application
+                    ? "application-initiated"
+                    : args.Initiator.ToString();
+                var fault = new InvalidOperationException($"consumer channel shutdown ({initiatorText}): {reason}");
+                _consumeFaultReason ??= $"{fault.GetType().Name}: {fault.Message} ({queueName})";
             }
             return Task.CompletedTask;
         }

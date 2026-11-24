@@ -9,9 +9,15 @@
 // 为什么用源码级不变式：行为探针需真 broker 空闲断连且不产生结算动作（Integration
 // 车道），本仓 R16/R17 的同族健康位接线（KafkaConsumeHealthWiringTests）已确立
 // 「源码级断言不可恢复故障面接线」形态。此处断言两条不变式：
-//   ① 订阅存在且用 Initiator 区分正常关停；② 退订在订阅句柄闭包内成对。
+//   ① 订阅存在且用 linkedCts 判据区分正常关停；② 退订在订阅句柄闭包内成对。
 // 逐行扫描并跳过 `//` 注释行：全文 Contains 会把「注释掉的订阅」也算命中（假绿），
 // 变异验证实测过这个陷阱，故判据必须只认真实代码行。
+//
+// 2026-11-24 发行轮勘正：Initiator.Application 不足以区分「本仓正常关停」——客户端
+// CloseAsync(200) 也标 Application（CI 真 broker 实证：测试关连接后事件带 Application，
+// 旧判据漏置故障位）。置位判据改为 linkedCts.IsCancellationRequested（本仓关停先 Cancel），
+// Initiator 仅作原因文本的一部分。断言相应改为：订阅存在 + linkedCts 判据在场 +
+// 原因文本引用 ShutdownInitiator.Application（仍要求该字面量在场，防整条分支被删）。
 // ─────────────────────────────────────────────────────────────
 
 namespace PalDDD.Messaging.Tests;
@@ -22,9 +28,10 @@ namespace PalDDD.Messaging.Tests;
 public sealed class RabbitConsumeHealthWiringTests
 {
     /// <summary>
-    /// consumer 必须订阅 ShutdownAsync，并用 Initiator 把正常关停（Application）与
-    /// 外部断连（Library/Peer）区分开；只有后者才置 _consumeFaultReason。
-    /// 修前零订阅，本测试红。
+    /// consumer 必须订阅 ShutdownAsync，并用 linkedCts.IsCancellationRequested 区分
+    /// 本仓正常关停（先 Cancel 再关 channel）与外部断连；后者才置 _consumeFaultReason。
+    /// Initiator 仅作原因文本的一部分（客户端 CloseAsync(200) 也标 Application，
+    /// 不能作为关停判据）。修前零订阅，本测试红。
     /// </summary>
     [Test]
     public async Task SubscribeAsync_WiresShutdownEventWithInitiatorGuard()
@@ -39,8 +46,10 @@ public sealed class RabbitConsumeHealthWiringTests
         var shutdown = body.IndexOf("consumer.ShutdownAsync +=", StringComparison.Ordinal);
         await Assert.That(shutdown).IsGreaterThan(-1)
             .Because("consumer 必须订阅 ShutdownAsync 以捕获空闲断连（修前零订阅，健康位不置位）");
+        await Assert.That(body.Contains("linkedCts?.IsCancellationRequested", StringComparison.Ordinal)).IsTrue()
+            .Because("shutdown 回调必须用 linkedCts 区分本仓正常关停（先 Cancel）与外部断连，避免 Dispose 误红");
         await Assert.That(body.Contains("ShutdownInitiator.Application", StringComparison.Ordinal)).IsTrue()
-            .Because("shutdown 回调必须用 Initiator 区分正常关停与故障断连，避免 Dispose 误红");
+            .Because("shutdown 回调原因文本须引用 ShutdownInitiator.Application（initiator 仅作诊断，不作判据）");
         await Assert.That(body.Contains("_consumeFaultReason", StringComparison.Ordinal)).IsTrue()
             .Because("shutdown 回调必须置健康故障位");
     }

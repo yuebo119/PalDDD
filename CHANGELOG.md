@@ -453,7 +453,8 @@
 
 ### Tests
 
-- **发布闸门 quality-baseline 归零（2026-11-24 发行轮）**：首推 main 的 CI `quality-analyzers` job 报 9 条新增第三方分析器警告（基线 0）——S3427×4（插值 handler 的 `AppendFormatted(ReadOnlySpan<char>, ...)` 默认参数与单参重载签名重叠，去默认值）、S9415（Saga 局部函数可 static）、S1125（Rabbit shutdown 判断多余布尔字面量）、S1144（Rabbit 聚合授权属性零引用，删除）、RCS1075（MySQL 连接回调空 catch，局部 pragma 说明刻意吞掉）、S8949×2（PalORM 通知器 `Wait(0)` 与 `Task.Run` 刻意不传 token，pragma 移到准确行）。本地 `quality-baseline` 9→0，Release build 0W0E，测试面板 2148/0 败/112 环境跳过；公共 API 快照零 diff（去默认值不改签名文本）。
+- **发布闸门 quality-baseline 归零 + Rabbit 健康位断连判据勘正（2026-11-24 发行轮）**：首推 main 的 CI `quality-analyzers` job 报 9 条新增第三方分析器警告（基线 0）——S3427×4（插值 handler 的 `AppendFormatted(ReadOnlySpan<char>, ...)` 默认参数与单参重载签名重叠，去默认值）、S9415（Saga 局部函数可 static）、S1125（Rabbit shutdown 判断多余布尔字面量）、S1144（Rabbit 聚合授权属性零引用，删除）、RCS1075（MySQL 连接回调空 catch，局部 pragma 说明刻意吞掉）、S8949×2（PalORM 通知器 `Wait(0)` 与 `Task.Run` 刻意不传 token，pragma 移到准确行）。本地 `quality-baseline` 9→0，Release build 0W0E，测试面板 2148/0 败/112 环境跳过；公共 API 快照零 diff（去默认值不改签名文本）。
+  CI `build-and-test` 随后暴露两处 dev 存量问题并修复：① 3 个新增文件末尾缺 CRLF（encoding-gate 的 FINALNEWLINE）；② R18 缺陷 1 的 Rabbit 空闲断连锁定测试在真 broker 上失败——`ShutdownAsync` 事件的 `Initiator` 对客户端 `CloseAsync(200)` 也标 `Application`，原判据据此排除导致故障位漏置。判据改为只看 `linkedCts.IsCancellationRequested`（本仓正常关停必先 Cancel），initiator 降为原因文本诊断字段；布线单测同步更新。本地真 broker 复测 `Health_HealthyOnLiveBroker_UnhealthyAfterChannelFault` 1/1 通过（此前 CI 失败）。
 
 - **P3 卫生 18 项盘点（2026-11-06 全量审计附录 A，批 H）**：逐项标注闭合状态——
   **已闭合 6 项**：⑬ 发布侧自定义头（批 G A3）、⑭ broker 层 Activity（批 G A5）、
