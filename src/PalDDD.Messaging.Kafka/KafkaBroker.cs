@@ -779,13 +779,20 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
             // v36 勘正：外层非关停 OCE 兜底——handler 的非关停 OCE 已在 HandleMessageAsync
             // 内 catch 后返回；到达本外层 catch 的是 while 条件求值等循环骨架位置的非关停
             // OCE——此处终止是真实语义（骨架异常无法安全 continue），文案如实描述终止。
+            // R16 修复（2026-11-24）：本 worker 循环终止同样置健康故障位。修前只记 Error
+            // （与 R14 修复的消费线程 :637 同族漏格）——worker 死后 finally 取消 cts，
+            // 消费线程走「token 已取消」分支静默退出（:601-604）不置位，订阅句柄仍有效、
+            // IsConsumingHealthy 恒 true，/health 保持 Healthy 而本实例已停止消费。
             catch (OperationCanceledException ex)
             {
+                // ??= 保留首因：消费线程（:637）若已先置位根因，此处不覆盖
+                _consumeFaultReason ??= $"{ex.GetType().Name}: {ex.Message}";
                 _logger.Error(ex, $"Kafka consume loop terminated by non-shutdown cancellation at loop skeleton: {topic} @ {_consumerConfig.GroupId}");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // 兜底：记录未被内层捕获的异常
+                _consumeFaultReason ??= $"{ex.GetType().Name}: {ex.Message}";
                 _logger.Error(ex, $"Kafka consume loop terminated unexpectedly: {topic} @ {_consumerConfig.GroupId}");
             }
             finally
@@ -946,6 +953,16 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         // （Set 前若被 Dispose，DisposeAsync 走 null 窗口路径：cts 已取消，
         // 委托侧 finally 释放 consumer + 兜底 Dispose 幂等，无泄漏）
         subscription.SetConsumeTask(consumeTask);
+
+        // R17 审计发现 D8：健康位恢复——新订阅的消费线程启动成功后清除粘滞故障位。
+        // 修前只置不清：消费线程/worker 因非关停异常终止（:637/:789/:795 置位）后，
+        // 调用方 Dispose 旧订阅并重新 SubscribeAsync 恢复消费，_consumeFaultReason 仍非 null
+        // → IsConsumingHealthy 恒 false → /health 永久 Unhealthy，实例被摘流量直到 broker 重启。
+        // 清理放在 SetConsumeTask 之后（消费线程已启动），避免启动失败路径误报健康。
+        // 局限（broker 级标志）：一个订阅恢复会清掉另一订阅的故障——按订阅跟踪是更严谨的
+        // 后续加固（同 Rabbit FIX-020 :697-699 的声明）；当前多订阅场景以「任一消费线程
+        // 恢复即整体健康」为口径，与 Rabbit 侧一致。
+        _consumeFaultReason = null;
         return new ValueTask<IAsyncDisposable>(subscription);
     }
 

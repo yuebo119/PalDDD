@@ -241,6 +241,18 @@ public static class EndpointExtensions
                 await WriteValidationProblemAsync(context, ex, context.RequestAborted).ConfigureAwait(false);
                 return;
             }
+            // R17 D5：输入解析族异常同 MapQuery（:152）归 400——ITM-696 只修了 MapQuery，
+            // 流式端点同语义的 Guid.Parse/int.Parse 失败仍以 500 逃逸。按异常类型白名单
+            // 收窄（不 catch-all，真正的服务端 bug 仍 500 逃逸）。
+            catch (Exception ex) when (ex is FormatException or ArgumentException or OverflowException)
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateBadRequest(StatusCodes.Status400BadRequest, $"Invalid query binding: {ex.Message}"),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
+                return;
+            }
             if (query is null)
             {
                 // 同 MapQuery v65 P3 对称守卫：绑定返回 null（缺必需查询参数）→ 400

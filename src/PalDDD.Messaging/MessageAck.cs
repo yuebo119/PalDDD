@@ -70,6 +70,31 @@ public sealed class NoOpMessageAck : IMessageAck
 }
 
 /// <summary>
+/// 批量结算的聚合扩展点（程序集内部，零公共 API 面，2026-11-23 性能轮）。
+/// </summary>
+/// <remarks>
+/// 实现者（如 RabbitMQ 的 <c>multiple:true</c> ack/nack）可在单帧内结算整批，
+/// 替代默认的逐条循环。路由协议：<see cref="MessageBatchAck"/> 探测<b>首成员</b>是否
+/// 实现本接口；是则把整批交给它，由其决定聚合或回退。实现者的硬契约：
+/// <b>返回 <c>false</c> 时必须零副作用</b>（不结算任何成员、不发送任何帧），
+/// 调用方随后走逐条路径——否则回退路径会二次结算或跳过成员。
+/// <para>
+/// 批量泵按单一订阅收集确认器，正常路径下整批同源（同 broker 同 channel）；
+/// 实现者仍须校验批成员归属（如 channel 一致），不符即返回 <c>false</c> 回退。
+/// </para>
+/// </remarks>
+internal interface IBatchAckAggregator
+{
+    /// <summary>尝试把整批确认为单次 broker 侧动作（如一帧 multiple ack）。</summary>
+    /// <returns><c>true</c> = 整批已结算（含逐成员占位）；<c>false</c> = 零副作用，调用方逐条结算。</returns>
+    ValueTask<bool> TryAcknowledgeBatchAsync(IMessageAck[] batch, CancellationToken ct);
+
+    /// <summary>尝试把整批拒绝为单次 broker 侧动作（如一帧 multiple nack）。</summary>
+    /// <returns><c>true</c> = 整批已结算；<c>false</c> = 零副作用，调用方逆序逐条拒绝。</returns>
+    ValueTask<bool> TryRejectBatchAsync(IMessageAck[] batch, bool requeue, CancellationToken ct);
+}
+
+/// <summary>
 /// 批次级确认器 —— 一个实例对应一整批交付，委托给逐条确认器。
 /// </summary>
 /// <remarks>
@@ -78,6 +103,12 @@ public sealed class NoOpMessageAck : IMessageAck
 /// 若按批内顺序逐条 seek，最终位置会落在最后一条而不是最早一条，导致重投只回放尾部。
 /// 逆序委派使最后一次 seek 指向批内最早 offset，整批重新投递；RabbitMQ 每个 delivery 独立
 /// nack，与顺序无关，逆序同样正确。
+/// </para>
+/// <para>
+/// <b>批量聚合（2026-11-23 性能轮）</b>：首成员实现 <see cref="IBatchAckAggregator"/> 时整批
+/// 交给它聚合结算（RabbitMQ 独立 consumer channel + 串行 dispatch 下，
+/// <c>multiple:true</c> 一帧等价逐条 N 帧，64 条批从 64 帧压到 1 帧）；不支持聚合的
+/// 成员（Kafka / NoOp）或聚合器回退时走原逐条路径，行为零变化。
 /// </para>
 /// <para>
 /// <b>批次级单次结算</b>：整批要么全部确认要么全部拒绝，不支持批内部分确认——批量 handler
@@ -105,6 +136,11 @@ internal sealed class MessageBatchAck(IMessageAck[] inner) : IMessageAck
         if (_inner.Length == 0 || Interlocked.Exchange(ref _settled, 1) != 0)
             return;
 
+        // 首成员聚合探测（2026-11-23 性能轮）：RabbitMQ 独立 channel 串行 dispatch 下
+        // multiple:true 一帧结算整批。聚合器返回 false = 零副作用，回退逐条。
+        if (_inner[0] is IBatchAckAggregator aggregator && await aggregator.TryAcknowledgeBatchAsync(_inner, ct).ConfigureAwait(false))
+            return;
+
         for (var i = 0; i < _inner.Length; i++)
             await _inner[i].AcknowledgeAsync(ct).ConfigureAwait(false);
     }
@@ -113,6 +149,9 @@ internal sealed class MessageBatchAck(IMessageAck[] inner) : IMessageAck
     public async ValueTask RejectAsync(bool requeue, CancellationToken ct = default)
     {
         if (_inner.Length == 0 || Interlocked.Exchange(ref _settled, 1) != 0)
+            return;
+
+        if (_inner[0] is IBatchAckAggregator aggregator && await aggregator.TryRejectBatchAsync(_inner, requeue, ct).ConfigureAwait(false))
             return;
 
         for (var i = _inner.Length - 1; i >= 0; i--)

@@ -86,6 +86,17 @@ public static class DetachedStreamEndpoints
                 await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
                 return;
             }
+            // R17 D5：输入解析族异常同 MapQuery/MapStreamQuery 归 400——按异常类型白名单
+            // 收窄（不 catch-all，服务端 bug 仍 500 逃逸）。
+            catch (Exception ex) when (ex is FormatException or ArgumentException or OverflowException)
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateBadRequest(StatusCodes.Status400BadRequest, $"Invalid query binding: {ex.Message}"),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
+                return;
+            }
             await StartAndAttachAsync(context, query, itemJsonTypeInfo, eventSelector, idSelector, keepAliveInterval)
                 .ConfigureAwait(false);
         });

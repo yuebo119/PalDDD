@@ -124,6 +124,23 @@ public static class HealthCheckExtensions
 
     internal static async Task WriteHealthResponseAsync(HttpContext context, HealthReport report, TimeProvider clock)
     {
+        // R17 审计发现 D6：FIX-019 承诺「故障详情只进日志」此前无落点——响应写器把
+        // Unhealthy entry 的 Description/Exception 全丢弃换成固定文案，而本方法零 logger
+        // 调用，故障原因既不回传也不进日志（排障只见红灯）。现从请求作用域解析日志门面，
+        // 对每个 Unhealthy 组件记一条日志（带异常对象保堆栈）。仅当 RequestServices 可用时
+        // 记录——内部静态调用（无 HTTP 作用域）与既有测试用裸 DefaultHttpContext 不受影响。
+        var logger = context.RequestServices?.GetService<IPalLogger<PalOutboxHealthCheck>>();
+        if (logger is not null)
+        {
+            foreach (var entry in report.Entries.Where(static e => e.Value.Status == HealthStatus.Unhealthy))
+            {
+                if (entry.Value.Exception is { } ex)
+                    logger.Error(ex, $"Health check '{entry.Key}' is Unhealthy: {entry.Value.Description}");
+                else
+                    logger.Warning($"Health check '{entry.Key}' is Unhealthy: {entry.Value.Description}");
+            }
+        }
+
         // ITM-800（2026-09-19）：删除手动 ContentType 赋值——WriteAsJsonAsync(contentType:null)
         // 用框架默认 "application/json; charset=utf-8" 覆盖此设置（死代码）；行为由
         // WriteHealthResponse_FinalContentTypeIsFrameworkDefault_NotManualSet 测试锁定

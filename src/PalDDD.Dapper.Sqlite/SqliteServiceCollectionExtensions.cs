@@ -25,6 +25,7 @@
 
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 namespace PalDDD.Dapper.Sqlite;
 
 /// <summary>SQLite 优化级别</summary>
@@ -69,11 +70,18 @@ public static class SqliteServiceCollectionExtensions
         {
             // ⚠️ 线程安全契约（八轮评审 P3 补强声明，不加 SemaphoreSlim 串行化——包装连接改动面大）：
             // :memory: 必须 Singleton（连接关闭数据即销毁），但 SqliteConnection 非线程安全——
-            // 并发 scope 共享此 Singleton 连接属未定义行为（SQLite Error 5 "database is locked" /
-            // 交叉读写损坏）。契约：调用方必须串行访问（单线程应用 / 逐个 await 的测试）；
-            // 需要并发时改用文件模式（Scoped 连接隔离）——v28 P3 勘正：原指向
-            // AddPalSqliteInMemory(sharedCache: true) 作并发出口失实，该重载同样落此 Singleton
-            // 单连接分支，不改变并发行为（见其 sharedCache 参数注释）。
+            // 并发 scope 共享此 Singleton 连接属未定义行为。契约：调用方必须串行访问
+            //（单线程应用 / 逐个 await 的测试）；需要并发时改用文件模式（Scoped 连接隔离）——
+            // v28 P3 勘正：原指向 AddPalSqliteInMemory(sharedCache: true) 作并发出口失实，
+            // 该重载同样落此 Singleton 单连接分支，不改变并发行为（见其 sharedCache 参数注释）。
+            // R16 探针实证（2026-11-24，4 线程 × 500 次并发 SELECT）：2000 次中 18 次抛
+            // ArgumentOutOfRangeException / IndexOutOfRangeException——是驱动内部状态被并发
+            // 踩坏的越界异常，不是 "database is locked"。该形态被 catch 后重试也无意义，
+            // 且异常类型与并发无关的表象会让排障走向错误方向。
+            // R16 补强：本契约的第二半——**框架自带后台服务也算第二个写入者**。AddPalOutbox()
+            // 注册的 OutboxProcessor、SagaProcessor、RetentionProcessorService 都是 BackgroundService，
+            // 与请求路径共用同一个 Singleton 连接即落入上述未定义行为。故下方在内存分支注册
+            // 一个启动期守卫（见 PalSqliteMemorySingleConnectionGuard 注释）。
             var connection = new SqliteConnection(connectionString);
             // 工厂半成品泄漏防护：ApplyOptimization 抛出（如 WAL 确认失配的
             // InvalidOperationException）时连接已 Open 但尚未交给容器，无人 Dispose
@@ -90,6 +98,8 @@ public static class SqliteServiceCollectionExtensions
             }
             services.AddSingleton(connection);
             services.AddSingleton<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<SqliteConnection>());
+            // R16（2026-11-24，F6）：内存单连接的第二个写入者守卫。见类注释。
+            services.AddSingleton<IHostedService, PalSqliteMemorySingleConnectionGuard>();
         }
         else
         {
@@ -235,4 +245,70 @@ public static class SqliteServiceCollectionExtensions
         }
         return false;
     }
+}
+
+/// <summary>
+/// <c>:memory:</c> 单连接注册的启动期守卫（R16，2026-11-24，F6）。<br/>
+/// 内存数据源必须是 Singleton 单连接（连接关闭数据即销毁），而
+/// <see cref="SqliteConnection"/> 非线程安全。本仓自己的后台服务
+///（<c>AddPalOutbox()</c> → <c>OutboxProcessor</c>、<c>AddPalSaga</c> → <c>SagaProcessor</c>、
+/// <c>RetentionProcessorService</c>）都会在独立线程上访问同一个 Singleton 连接——
+/// 契约「调用方必须串行访问」在此组合下由框架自身违反。
+/// </summary>
+/// <remarks>
+/// 探针实证（2026-11-24，4 线程 × 500 次并发 SELECT 同一 <c>:memory:</c> 连接）：
+/// 2000 次中 18 次抛 <see cref="ArgumentOutOfRangeException"/> /
+/// <see cref="IndexOutOfRangeException"/>——驱动内部状态被并发踩坏的越界异常，
+/// 不是 "database is locked"。此类异常与并发无表象关联，排障会走向错误方向。
+/// <para>
+/// 本守卫在宿主启动时（<see cref="IHostedService.StartAsync"/>，早于各后台服务的首个 tick）
+/// 检查容器内是否注册了本框架的后台服务；命中即 fail-fast。错误信息给出两条出路：
+/// 改用文件模式（Scoped 连接隔离），或把业务库与 Outbox 库拆开。
+/// </para>
+/// <para>
+/// 只拦「本框架注册的已知后台服务」，不拦用户自建的 <see cref="IHostedService"/>——
+/// 后者是否与内存库共用连接属调用方决策，框架无法可靠判定。
+/// </para>
+/// </remarks>
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "Performance", "CA1812:Avoid uninstantiated internal classes",
+    Justification = "实例化由 DI 容器完成（AddSingleton<IHostedService, ...>），编译器看不到调用点。")]
+internal sealed class PalSqliteMemorySingleConnectionGuard(IServiceProvider services) : IHostedService
+{
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        var offenders = new List<string>();
+
+        // 按类型名匹配：PalDDD.Transactions 不在本包引用面内（Dapper.Sqlite 只依赖 Dapper），
+        // 故不能直接引用 OutboxProcessor/SagaProcessor 类型。类型名匹配对已知三类足够，
+        // 且新增后台服务时本守卫的失败信息会明确列出实际类型名，便于补齐。
+        foreach (var descriptor in services.GetServices<IHostedService>())
+        {
+            var type = descriptor.GetType();
+            if (type.Namespace is null
+                || !type.Namespace.StartsWith("PalDDD.", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            if (type == typeof(PalSqliteMemorySingleConnectionGuard))
+                continue;
+
+            offenders.Add(type.Name);
+        }
+
+        if (offenders.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "AddPalSqliteInMemory/AddPalSqlite(:memory:) 注册的是 Singleton 单连接，"
+                + "而 SqliteConnection 非线程安全——本框架的后台服务会与请求路径并发访问同一连接，"
+                + "导致驱动内部状态损坏（实测抛 ArgumentOutOfRangeException/IndexOutOfRangeException）。"
+                + $"检测到同时注册的后台服务：{string.Join(", ", offenders)}。"
+                + "出路：① 改用文件模式 AddPalSqlite(\"Data Source=pal.db\")（Scoped 连接隔离）；"
+                + "② 内存库只用于不含后台服务的单元测试。");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

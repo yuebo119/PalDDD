@@ -825,6 +825,17 @@ public sealed class RabbitAckTests
             cancellationToken: cancellationToken);
         await Assert.That(connection.IsOpen).IsFalse();
 
+        // R18 缺陷 1：修前本测试名带 Unhealthy 却无任何 IsFalse 断言（只验健康态与毒消息
+        // 不置位）。空闲断连无结算动作时，ShutdownAsync 事件必须把健康位转 false——
+        // 这里在结算尝试之前先断言，确保覆盖的正是「无结算动作」面，而非结算 catch 路径。
+        var healthyAfterIdleClose = new Func<bool>(() => broker.IsConsumingHealthy);
+        for (var i = 0; i < 50 && healthyAfterIdleClose(); i++)
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        await Assert.That(broker.IsConsumingHealthy).IsFalse()
+            .Because("空闲断连（无结算动作）必须由 ShutdownAsync 事件置健康故障位");
+        await Assert.That(broker.LastFaultReason).Contains("shutdown")
+            .Because("健康位转 false 时原因必须可读且指向 shutdown 事件");
+
         // 触发一次结算尝试（发布到已关闭的连接 → 失败路径走安全包装）
         try
         {
@@ -988,6 +999,113 @@ public sealed class RabbitAckTests
         var received = await fullBatch.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
         await Assert.That(received.Count).IsEqualTo(batchSize);
         await Assert.That(logger.WarningCount).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// 聚合授权判定表（白盒，2026-11-23 性能轮）：CanAggregateBatchAck 是聚合安全性的
+    /// 单一判据——独立 channel + 串行 dispatch 才允许单帧 multiple。共享 channel（多订阅
+    /// 共 tag 空间）与并发 dispatch（打乱单调性）必须拒绝聚合（回退逐条，语义恒正确）。
+    /// </summary>
+    [Test]
+    public async Task CanAggregateBatchAck_AuthorizationMatrix()
+    {
+        // 独立 channel + null（客户端默认 1，串行）→ 授权
+        await Assert.That(RabbitMqBroker.CanAggregateBatchAck(ownsConsumerChannel: true, consumerDispatchConcurrency: null)).IsTrue();
+        // 独立 channel + 显式 1（串行）→ 授权
+        await Assert.That(RabbitMqBroker.CanAggregateBatchAck(true, 1)).IsTrue();
+        // 独立 channel + 并发 >1 → 拒绝（dispatch 乱序打破 tag 单调入批）
+        await Assert.That(RabbitMqBroker.CanAggregateBatchAck(true, 2)).IsFalse();
+        await Assert.That(RabbitMqBroker.CanAggregateBatchAck(true, 16)).IsFalse();
+        // 共享 channel → 恒拒绝（多订阅共 tag 空间，批区间含他订阅交付）
+        await Assert.That(RabbitMqBroker.CanAggregateBatchAck(false, null)).IsFalse();
+        await Assert.That(RabbitMqBroker.CanAggregateBatchAck(false, 1)).IsFalse();
+    }
+
+    /// <summary>
+    /// 2026-11-23 性能轮锁定：批量结算的 multiple:true 聚合帧——独立 consumer channel +
+    /// 串行 dispatch（默认）下，64 条批的整批确认压成单帧。语义探针（非帧计数——broker
+    /// 内部建 channel 无注入点，同 FIX-003 的变异限制注记；聚合开关的白盒锁定在
+    /// <see cref="CanAggregateBatchAck_AuthorizationMatrix"/>）：
+    /// ① 批量 AcknowledgeAsync 后 channel 必须存活（非法 tag 的 multiple 帧会
+    /// PRECONDITION_FAILED 关 channel → 后续消息永不投递）；② 消息全部确认
+    /// （3s 稳定窗口内零重投）；③ 零 Warning（double-ack / 帧失败都留痕）。
+    /// <para>
+    /// 变异边界（2026-11-23 实测）：maxTag 漏 1（漏确认末条）本用例不转红——慢重投要等
+    /// consumer_timeout（默认 30 分钟），短窗口不敏感；帧级回归依赖
+    /// <see cref="CanAggregateBatchAck_AuthorizationMatrix"/> 与单元层
+    /// BatchAck_Aggregator* 系列的组合锁定（聚合路由 + 判据 + 单帧形态）。
+    /// </para>
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task BatchSubscription_AggregateAck_Settles64ItemsChannelAliveNoRedelivery(CancellationToken cancellationToken)
+    {
+        const int batchSize = 64;
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger, prefetchCount: batchSize);
+        await using var broker = created.Item1;
+
+        var prefix = $"rmq-agg-{Guid.NewGuid():N}";
+        var settled = 0;
+        var fullBatch = new TaskCompletionSource<IReadOnlyList<ConsumedMessage<TestMessage>>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var sub = await broker.SubscribeBatchAsync<TestMessage>(
+            async (batch, ack, ct) =>
+            {
+                var mine = batch
+                    .Where(m => m.Message.Name.StartsWith(prefix, StringComparison.Ordinal))
+                    .ToList();
+                if (mine.Count >= batchSize && !fullBatch.Task.IsCompleted)
+                {
+                    fullBatch.TrySetResult(mine);
+                    // 整批一次结算：走聚合器（RabbitMqMessageAck 实现 IBatchAckAggregator）。
+                    await ack.AcknowledgeAsync(ct);
+                    Interlocked.Increment(ref settled);
+                }
+                else
+                {
+                    // 后续小批（含 follow-up 单条时间界批）：逐批确认（小批聚合或逐条均合法）。
+                    await ack.AcknowledgeAsync(ct);
+                    Interlocked.Increment(ref settled);
+                }
+            },
+            maxBatchSize: batchSize,
+            maxDelay: TimeSpan.FromSeconds(3),
+            cancellationToken);
+
+        for (var i = 0; i < batchSize; i++)
+            await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
+
+        var received = await fullBatch.Task.WaitAsync(TimeSpan.FromSeconds(60), cancellationToken);
+        await Assert.That(received.Count).IsEqualTo(batchSize);
+
+        // ② 零重投：聚合帧正确确认了全部 64 条（等价逐条 ack 的可观测证明）。
+        // 稳定窗口内任何成员未被确认都会重投（redelivered=true 投递），fullBatch 二次完成。
+        await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+        await Assert.That(fullBatch.Task.IsCompletedSuccessfully).IsTrue();
+
+        // ① channel 存活：同一订阅继续消费后续发布（聚合帧 PRECONDITION_FAILED 关
+        // channel 时后续消息永不投递——这是聚合 tag 错误的天然红探针）。
+        var followUpPrefix = $"rmq-agg2-{Guid.NewGuid():N}";
+        var followUp = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await broker.PublishAsync(new TestMessage($"{followUpPrefix}-0"), cancellationToken);
+        var followUpDeadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < followUpDeadline && !followUp.Task.IsCompleted)
+        {
+            // handler 对新前缀走 else 分支逐批确认并放行。
+            if (Volatile.Read(ref settled) >= 2)
+                followUp.TrySetResult();
+            await Task.Delay(50, cancellationToken);
+        }
+        await followUp.Task.WaitAsync(TimeSpan.FromSeconds(1), cancellationToken);
+        await Assert.That(Volatile.Read(ref settled)).IsGreaterThanOrEqualTo(2)
+            .Because("聚合帧后 channel 应存活，后续消息应继续被消费（64 条主批 + 至少一轮后续小批）");
+
+        // ③ 零 Warning（double-ack / 帧失败都留痕）。
+        await Assert.That(logger.WarningCount).IsEqualTo(0)
+            .Because($"聚合帧失败或 double-ack：{logger.RecentWarningsSummary}");
+        await Assert.That(logger.ErrorCount).IsEqualTo(0);
     }
 
     /// <summary>

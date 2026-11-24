@@ -193,12 +193,10 @@ TState>
                 // 保存失败/0 行时重复累加（下一 tick 重做补偿再 +1）；声明随 ITM-709 抽取迁入 CompensateTimedOutSagaAsync
                 if (_orchestrator.IsTimedOut(sagaState, now, out var timedOutSteps))
                 {
-                    foreach (var step in timedOutSteps)
-                    {
-                        _logger.Warning(PalLogEventIds.SagaTimedOut,
-                            "Saga {SagaId} timed out at state {State}, step {Step}. Compensating...",
-                            sagaState.SagaId, sagaState.CurrentState, step.Name);
-                    }
+                    // R17 审计发现 D3：删除此处的 SagaTimedOut 告警循环——ITM-709 抽取时把
+                    // 调用方循环复制进了 CompensateTimedOutSagaAsync（:272）却未删本处，
+                    // 同一批超时步发 2N 条告警。告警单一发射点保留在补偿方法内（靠近真实
+                    // 补偿动作，且与 ExecutedStepKeys 过滤后的实际补偿目标一致）。
 
                     // ITM-709（2026-10-27 清零轮）：补偿段抽私有方法——CheckTimeoutsAsync 主体嵌套 7→3，
                     // 语句序与语义逐行保持（fence 获取/OCE 租约释放/终态失效化全部原样迁移）

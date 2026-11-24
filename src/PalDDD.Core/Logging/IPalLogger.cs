@@ -9,9 +9,21 @@
 
 using Microsoft.Extensions.Logging;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 
 namespace PalDDD.Core.Logging;
+
+/// <summary>日志门面的级别判定面（非泛型，供插值 handler 构造使用）。</summary>
+/// <remarks>
+/// 独立成基接口的原因：<c>[InterpolatedStringHandlerArgument("")]</c> 要求 handler 构造函数
+/// 能接收门面实例，而 handler 是非泛型 ref struct，无法引用泛型接口 <see cref="IPalLogger{T}"/>。
+/// </remarks>
+public interface IPalLogger
+{
+    /// <summary>是否启用指定级别——用于避免昂贵的参数计算</summary>
+    bool IsEnabled(LogLevel level);
+}
 
 /// <summary>框架统一日志门面——当前实现为 ZLogger，未来可替换。</summary>
 /// <remarks>
@@ -19,8 +31,15 @@ namespace PalDDD.Core.Logging;
 ///（MEL/ZLogger）视为结构化槽位而非字面量，输出字面花括号需转义（<c>{{</c> / <c>}}</c>）。
 /// 结构化参数使用带 <see cref="EventId"/> 的重载；旧实现者不实现这些重载时会走默认实现，
 /// 把模板格式化成纯文本后转调原有字符串方法（二进制兼容）。
+/// <para>
+/// <b>插值重载（2026-11-23 零分配兑现）</b>：<c>_logger.Debug($"...")</c> 形态经
+/// <see cref="PalDebugLogHandler"/> 等插值 handler，级别未启用时构造期短路、<b>零分配</b>
+///（实测 N=2000：MEL 参数化重载关闭态 96.0 B/op → 本形态 0.0 B/op；启用态 336.0 → 约 196.0 B/op）。
+/// 默认实现把结果转调字符串重载，旧实现者零迁移成本。注意插值形态不产出独立结构化槽位，
+/// 需要字段化输出时继续用 <see cref="EventId"/> 参数化重载。
+/// </para>
 /// </remarks>
-public interface IPalLogger<T>
+public interface IPalLogger<T> : IPalLogger
 {
     /// <summary>调试日志</summary>
     void Debug(string message);
@@ -29,6 +48,13 @@ public interface IPalLogger<T>
     void Debug(EventId eventId, string message, params object?[] args)
         => Debug(PalLogMessage.Format(message, args));
 
+    /// <summary>零分配调试日志：级别未启用时整个插值不执行。</summary>
+    void Debug([InterpolatedStringHandlerArgument("")] ref PalDebugLogHandler handler)
+    {
+        if (handler.ToStringAndClear() is { } message)
+            Debug(message);
+    }
+
     /// <summary>信息日志</summary>
     void Information(string message);
 
@@ -36,12 +62,26 @@ public interface IPalLogger<T>
     void Information(EventId eventId, string message, params object?[] args)
         => Information(PalLogMessage.Format(message, args));
 
+    /// <summary>零分配信息日志：级别未启用时整个插值不执行。</summary>
+    void Information([InterpolatedStringHandlerArgument("")] ref PalInformationLogHandler handler)
+    {
+        if (handler.ToStringAndClear() is { } message)
+            Information(message);
+    }
+
     /// <summary>警告日志</summary>
     void Warning(string message);
 
     /// <summary>结构化警告日志（默认实现格式化后转调 <see cref="Warning(string)"/>）。</summary>
     void Warning(EventId eventId, string message, params object?[] args)
         => Warning(PalLogMessage.Format(message, args));
+
+    /// <summary>零分配警告日志：级别未启用时整个插值不执行。</summary>
+    void Warning([InterpolatedStringHandlerArgument("")] ref PalWarningLogHandler handler)
+    {
+        if (handler.ToStringAndClear() is { } message)
+            Warning(message);
+    }
 
     /// <summary>错误日志 · 必须携带异常</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1716:Identifiers should not match keywords",
@@ -54,8 +94,14 @@ public interface IPalLogger<T>
     void Error(Exception ex, EventId eventId, string message, params object?[] args)
         => Error(ex, PalLogMessage.Format(message, args));
 
-    /// <summary>是否启用指定级别——用于避免昂贵的参数计算</summary>
-    bool IsEnabled(LogLevel level);
+    /// <summary>零分配错误日志：级别未启用时整个插值不执行。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1716:Identifiers should not match keywords",
+        Justification = "Error 是日志领域的标准命名，与 ILogger 的 LogError 扩展方法一致。")]
+    void Error(Exception ex, [InterpolatedStringHandlerArgument("")] ref PalErrorLogHandler handler)
+    {
+        if (handler.ToStringAndClear() is { } message)
+            Error(ex, message);
+    }
 }
 
 /// <summary>日志模板格式化（门面默认实现用；适配器覆写后直接把模板与参数交给 MEL）。</summary>

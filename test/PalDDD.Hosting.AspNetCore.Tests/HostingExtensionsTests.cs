@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using PalDDD.Core.Logging;
 using PalDDD.Hosting.AspNetCore.OutboxHealth;
 using PalDDD.Messaging;
 using System.Globalization;
@@ -276,6 +277,50 @@ public sealed class HealthCheckExtensionsTests
         await Assert.That(() =>
             ((IServiceCollection)null!).AddPalHealthChecks()).Throws<ArgumentNullException>();
     }
+
+    /// <summary>
+    /// R17 审计发现 D6 锁定：/health 响应写「details in logs」时，故障详情必须真的进日志。
+    /// 修前 WriteHealthResponseAsync 无 logger 入参、全文件零日志调用，Unhealthy entry 的
+    /// Exception 被丢弃——排障只见红灯无原因（FIX-019 承诺落空）。
+    /// </summary>
+    [Test]
+    public async Task WriteHealthResponse_UnhealthyEntry_LogsFailureDetail()
+    {
+        var logger = new HealthRecordingLogger();
+        var services = new ServiceCollection();
+        services.AddSingleton<IPalLogger<PalOutboxHealthCheck>>(logger);
+        var context = new DefaultHttpContext
+        {
+            RequestServices = services.BuildServiceProvider(),
+            Response = { Body = new MemoryStream() },
+        };
+        var cause = new InvalidOperationException("outbox DB connection refused (probe)");
+        var entries = new Dictionary<string, HealthReportEntry>
+        {
+            ["outbox"] = new HealthReportEntry(
+                HealthStatus.Unhealthy, "发件箱存储不可用", TimeSpan.Zero, cause, null),
+        };
+        var report = new HealthReport(entries, HealthStatus.Unhealthy, TimeSpan.Zero);
+
+        await HealthCheckExtensions.WriteHealthResponseAsync(context, report, TimeProvider.System);
+
+        await Assert.That(logger.Messages.Count).IsEqualTo(1)
+            .Because("Unhealthy 组件必须记一条日志（修前零日志落点，FIX-019 承诺落空）");
+        await Assert.That(logger.Messages[0]).Contains("outbox")
+            .Because("日志须含组件名以定位故障源");
+        await Assert.That(logger.Messages[0]).Contains("outbox DB connection refused")
+            .Because("日志须含异常原因（修前 Exception 被响应写器丢弃，无任何出口）");
+    }
+
+    private sealed class HealthRecordingLogger : IPalLogger<PalOutboxHealthCheck>
+    {
+        public List<string> Messages { get; } = [];
+        public void Debug(string message) { }
+        public void Information(string message) { }
+        public void Warning(string message) { }
+        public void Error(Exception exception, string message) => Messages.Add($"{message}: {exception.Message}");
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level) => true;
+    }
 }
 
 // 容器类 partial：嵌套 TestJsonContext（源生成 JsonSerializerContext）要求包含类型链全部 partial（SYSLIB1032）
@@ -372,6 +417,44 @@ public sealed partial class EndpointExtensionsTests
 
         var context = CreateGetContext();
         await Assert.That(() => GetRequestDelegate(endpoints)(context)).Throws<InvalidOperationException>();
+    }
+
+    // ── R17 审计发现 D5：两条流式端点的 bindQuery 解析异常归 400（ITM-696 同族漏格）──
+
+    [Test]
+    public async Task MapStreamQuery_BindQueryThrowsFormatException_Returns400Not500()
+    {
+        var endpoints = new TestEndpointRouteBuilder();
+        endpoints.MapStreamQuery<TestStreamQuery, TestResult>(
+            "/stream",
+            static _ => throw new FormatException("Unrecognized Guid format."),
+            TestJsonContext.Default.TestResult);
+
+        var context = CreateGetContext();
+        await GetRequestDelegate(endpoints)(context);
+
+        await Assert.That(context.Response.StatusCode).IsEqualTo(StatusCodes.Status400BadRequest);
+        var body = ReadBody(context);
+        await Assert.That(body).Contains("Invalid query binding");
+        await Assert.That(body).Contains("Unrecognized Guid format");
+    }
+
+    [Test]
+    public async Task MapDetachedStreamQuery_BindQueryThrowsFormatException_Returns400Not500()
+    {
+        var endpoints = new TestEndpointRouteBuilder();
+        endpoints.MapDetachedStreamQuery<TestStreamQuery, TestResult>(
+            "/detached",
+            static _ => throw new FormatException("Unrecognized Guid format."),
+            TestJsonContext.Default.TestResult);
+
+        var context = CreateGetContext();
+        await GetRequestDelegate(endpoints)(context);
+
+        await Assert.That(context.Response.StatusCode).IsEqualTo(StatusCodes.Status400BadRequest);
+        var body = ReadBody(context);
+        await Assert.That(body).Contains("Invalid query binding");
+        await Assert.That(body).Contains("Unrecognized Guid format");
     }
 
     // ── ITM-695（2026-10-27 清零轮）：MapQuery 的授权约定链路可用性 ──
@@ -472,6 +555,9 @@ public sealed partial class EndpointExtensionsTests
 
     /// <summary>MapQuery 绑定测试查询（ITM-695/696）</summary>
     private sealed class TestQuery : CQRS.IQuery<TestResult>;
+
+    /// <summary>MapStreamQuery/MapDetachedStreamQuery 绑定测试查询（R17 D5）</summary>
+    private sealed class TestStreamQuery : CQRS.IStreamQuery<TestResult>;
 
     private sealed class TestCommandWithResult : CQRS.ICommand<TestResult>
     {

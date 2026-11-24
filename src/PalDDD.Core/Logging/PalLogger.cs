@@ -32,26 +32,78 @@ internal sealed class PalLogger<T> : IPalLogger<T>
     public void Debug(string message) => _logger.LogDebug(message);
 
     /// <summary>结构化重载：直接把模板与参数交给 MEL，保留字段而非拼成字符串。</summary>
+    /// <remarks>
+    /// 2026-11-23：补 IsEnabled 门控。MEL 的 <c>LogDebug(EventId, string, params object?[])</c>
+    /// 重载<b>不做</b>级别检查（直接构造 FormattedLogValues 再交给 provider 过滤），关闭态下
+    /// params 数组、装箱与 LogValues 全部照常分配并进入 provider。门控后关闭态实现零分配。
+    /// </remarks>
     public void Debug(EventId eventId, string message, params object?[] args)
-        => _logger.LogDebug(eventId, message, args);
+    {
+        if (!_logger.IsEnabled(LogLevel.Debug))
+            return;
+        _logger.LogDebug(eventId, message, args);
+    }
+
+    /// <summary>零分配重载：handler 在构造期已按级别短路，返回 null 表示未启用。</summary>
+    public void Debug(ref PalDebugLogHandler handler)
+    {
+        if (handler.ToStringAndClear() is { } message)
+            _logger.LogDebug(message);
+    }
 
     public void Information(string message) => _logger.LogInformation(message);
 
     /// <summary>结构化重载：直接把模板与参数交给 MEL，保留字段而非拼成字符串。</summary>
+    /// <remarks>2026-11-23 IsEnabled 门控，理由同 <see cref="Debug(EventId, string, object?[])"/>。</remarks>
     public void Information(EventId eventId, string message, params object?[] args)
-        => _logger.LogInformation(eventId, message, args);
+    {
+        if (!_logger.IsEnabled(LogLevel.Information))
+            return;
+        _logger.LogInformation(eventId, message, args);
+    }
+
+    /// <summary>零分配重载：handler 在构造期已按级别短路，返回 null 表示未启用。</summary>
+    public void Information(ref PalInformationLogHandler handler)
+    {
+        if (handler.ToStringAndClear() is { } message)
+            _logger.LogInformation(message);
+    }
 
     public void Warning(string message) => _logger.LogWarning(message);
 
     /// <summary>结构化重载：直接把模板与参数交给 MEL，保留字段而非拼成字符串。</summary>
+    /// <remarks>2026-11-23 IsEnabled 门控，理由同 <see cref="Debug(EventId, string, object?[])"/>。</remarks>
     public void Warning(EventId eventId, string message, params object?[] args)
-        => _logger.LogWarning(eventId, message, args);
+    {
+        if (!_logger.IsEnabled(LogLevel.Warning))
+            return;
+        _logger.LogWarning(eventId, message, args);
+    }
+
+    /// <summary>零分配重载：handler 在构造期已按级别短路，返回 null 表示未启用。</summary>
+    public void Warning(ref PalWarningLogHandler handler)
+    {
+        if (handler.ToStringAndClear() is { } message)
+            _logger.LogWarning(message);
+    }
 
     public void Error(Exception ex, string message) => _logger.LogError(ex, message);
 
     /// <summary>结构化重载：直接把模板与参数交给 MEL，保留字段而非拼成字符串。</summary>
+    /// <remarks>2026-11-23 IsEnabled 门控，理由同 <see cref="Debug(EventId, string, object?[])"/>。</remarks>
     public void Error(Exception ex, EventId eventId, string message, params object?[] args)
-        => _logger.LogError(eventId, ex, message, args);
+    {
+        if (!_logger.IsEnabled(LogLevel.Error))
+            return;
+        _logger.LogError(eventId, ex, message, args);
+    }
+
+    /// <summary>零分配重载：handler 在构造期已按级别短路，返回 null 表示未启用。</summary>
+    public void Error(Exception ex, ref PalErrorLogHandler handler)
+    {
+        if (handler.ToStringAndClear() is { } message)
+            _logger.LogError(ex, message);
+    }
 
     public bool IsEnabled(LogLevel level) => _logger.IsEnabled(level);
 }

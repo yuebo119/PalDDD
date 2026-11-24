@@ -167,6 +167,48 @@ public static class PostgreSqlPalOrmExtensions
     }
 
     /// <summary>
+    /// 注册 PalORM PG 栈的 LISTEN/NOTIFY Outbox 唤醒（2026-11-23 性能轮，审计在册候选
+    /// #3 收口）——PG 跨进程唤醒此前只在 Dapper 栈，PalORM 栈的 Outbox 延迟受轮询周期
+    /// 钳制。NOTIFY 到达即触发 <see cref="OutboxBatchProcessor"/>（<c>AddPalOutbox()</c>
+    /// 注册，Scoped），消除轮询延迟；默认轮询器保留作兜底。
+    /// <para>
+    /// 监听载体是 PalORM 6.9.0 的 <c>PgNotificationListener</c>（30s 心跳 + 线性递增
+    /// 全量抖动重连，上限 30s），免去手写重连循环。通道契约与 Dapper 版
+    /// <c>PostgreSqlOutboxNotifier</c> 完全一致（outbox_channel + 过渡表触发器，
+    /// DDL 见其头注释）——同一库两栈共用触发器面。
+    /// </para>
+    /// <para>
+    /// ⚠️ <paramref name="connectionString"/> 必须与
+    /// <see cref="AddPalOrmPostgreSql"/> 一致——listener 持有独立长连接（LISTEN 不可与
+    /// 业务会话共用），不走 PalORM 会话池。
+    /// </para>
+    /// </summary>
+    /// <param name="services">DI 容器（须已调用 AddPalOutbox 注册 OutboxBatchProcessor）。</param>
+    /// <param name="connectionString">与 AddPalOrmPostgreSql 相同的 PG 连接串（listener 独立长连接用）。</param>
+    /// <param name="channelName">通知通道名（默认 "outbox_channel"，白名单 [A-Za-z0-9_]）。</param>
+    public static IServiceCollection AddPalOrmPostgreSqlOutboxNotifier(
+        this IServiceCollection services,
+        string connectionString,
+        string channelName = "outbox_channel")
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        services.EnsurePalLoggerFacade();
+
+        // ITM-637 姊妹 + v66 P1（对齐 Dapper 版 AddPalPostgreSqlOutboxNotifier）：
+        // TryAddEnumerable 双泛型去重（重复调用不追加多个监听器），channelName 静默以
+        // 首次为准（描述符层不可比较——多通道场景手动注册不同实现类型）。
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, PalOrmPostgreSqlOutboxNotifier>(sp =>
+            new PalOrmPostgreSqlOutboxNotifier(
+                connectionString,
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp.GetRequiredService<IPalLogger<PalOrmPostgreSqlOutboxNotifier>>(),
+                channelName)));
+
+        return services;
+    }
+
+    /// <summary>
     /// P2/P3 修复（十七轮）：Saga 快照持久化（saga_data 列）便捷注册。
     /// <see cref="AddPalOrmPostgreSql"/> 的开放泛型注册 <c>PostgreSqlSagaStateStore&lt;&gt;</c> 无
     /// <c>JsonTypeInfo</c> 传入通道——jsonTypeInfo 恒 null，TState 业务字段不持久化。

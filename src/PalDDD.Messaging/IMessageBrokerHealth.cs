@@ -10,8 +10,9 @@ namespace PalDDD.Messaging;
 /// 未实现本接口的 broker（含默认 <see cref="NullMessageBroker"/>）保持「注册即健康」语义。
 /// <para>
 /// <b>两栈的故障面不同源</b>（v4 批 C，2026-11-07）：Kafka 以「消费线程不可恢复终止」置位；
-/// RabbitMQ 是 per-delivery <c>ReceivedAsync</c> 回调模型，没有消费线程概念，只能以
-/// 「channel 关闭」置位。两栈的共同契约是「<b>不可恢复</b>才置位」——普通 handler 失败
+/// RabbitMQ 是 per-delivery <c>ReceivedAsync</c> 回调模型，没有消费线程概念，以「channel 关闭」
+/// 置位（R18 缺陷 1 勘正：置位途径含结算异常与 <c>ShutdownAsync</c> 外部断连事件两条，
+/// 覆盖空闲断连无结算动作的面）。两栈的共同契约是「<b>不可恢复</b>才置位」——普通 handler 失败
 /// （毒消息按 at-most-once 弃置）<b>不置位</b>，因此健康端点不会因单条消息失败而变红。
 /// </para>
 /// </remarks>

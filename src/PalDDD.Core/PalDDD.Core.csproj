@@ -18,6 +18,8 @@
     <InternalsVisibleTo Include="PalDDD.Transactions"/>
     <!-- 2026-10-21 R8：PG LISTEN/NOTIFY 通知器是 R7 家族成员，组件级注册复用同一门面注册点。 -->
     <InternalsVisibleTo Include="PalDDD.Dapper.PostgreSql"/>
+    <!-- 2026-11-23 性能轮：PalORM 栈 PG 通知器是 R7/R8 家族姊妹入口，组件级注册同款门面。 -->
+    <InternalsVisibleTo Include="PalDDD.PalORM.PostgreSql"/>
     <!-- R11 F2：Hosting 是 R7 门面家族最后入口——AddPalHealthChecks/AddDetachedStreamRuns
          须自带门面，否则文档独立片段的首个请求构造 ExceptionMiddleware 失败。 -->
     <InternalsVisibleTo Include="PalDDD.Hosting.AspNetCore"/>

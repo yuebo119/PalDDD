@@ -23,7 +23,14 @@ namespace PalDDD.Messaging.RabbitMQ;
 /// </remarks>
 /// <remarks>
 /// <b>内置 tracing 与本仓手工 traceparent 头的共存语义</b>（2026-09-25 特性审计，源码级结论
-/// ——反编译 RabbitMQ.Client 7.2.2 RabbitMQActivitySource）：
+/// ——反编译 RabbitMQ.Client 7.2.2 RabbitMQActivitySource；<b>7.3.0 勘正 2026-11-23</b>：
+/// <c>RabbitMQActivitySource.ContextInjector</c> / <c>ContextExtractor</c> /
+/// <c>UseRoutingKeyAsOperationName</c> / <c>TracingOptions</c> 自 7.3.0 起标记
+/// <c>[Obsolete]</c>，传播配置迁移到 <c>ConnectionFactory.TracingOptions.Propagator</c>
+/// （<c>DistributedContextPropagator</c>）与同级的 <c>ConnectionTracingOptions</c>；本仓两条
+/// 共存规则的语义不变——本仓不注册 ActivityListener、不配置 propagator，默认传播器仍是
+/// 进程级 <c>DistributedContextPropagator.Current</c>，故 header 同键与短路行为逐位一致。
+/// 上文与下文仅在语义层保留旧成员名，新增代码请改用 <c>ConnectionTracingOptions</c>）：
 /// <para>客户端内建 tracing（<c>RabbitMQActivitySource.ContextInjector/ContextExtractor</c>）
 /// 经 <see cref="System.Diagnostics.DistributedContextPropagator.Current"/>（W3C）注入/提取，
 /// header 键即 <c>"traceparent"</c>——与本仓 <see cref="MessageConsumeContext.HeaderNames.TraceParent"/>
@@ -35,7 +42,8 @@ namespace PalDDD.Messaging.RabbitMQ;
 /// 消息到达时头部里的本仓值（出站时序：本仓 <c>CreateHeaders</c> 先写、客户端 Injector 后写
 /// 同键覆盖）——W3C 链条衔接正确；发布侧 OutboxProcessor 的 Activity.Current 链会覆盖本仓
 /// 还原的原始发布上下文头。若业务需保留 outbox 原始上下文而非 outbox 投递 activity 链，
-/// 请自定义 <c>RabbitMQActivitySource.ContextInjector</c>（先取本仓头再透传）。</para>
+/// 请设置自定义 <c>ConnectionTracingOptions.Propagator</c>（7.3.0+；旧版本为
+/// <c>RabbitMQActivitySource.ContextInjector</c>）先取本仓头再透传。</para>
 /// </remarks>
 [SuppressMessage("Design", "CA1031:Do not catch general exception types",
     Justification = "Broker 消费回调需记录毒消息失败并执行合理 nack，需捕获 Exception 基类。")]
@@ -44,7 +52,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
     private int _disposed;
     // v4 批 C（S1）：channel 级不可恢复故障原因（健康检查读取；普通 handler 失败不置位）。
     // Rabbit 无 Kafka 式「消费线程终止」观测点——per-delivery ReceivedAsync 回调模型下，
-    // 可观测的故障面只有 channel 关闭（BasicNack/BasicAck/BasicCancel 抛异常且 IsOpen=false）。
+    // 可观测的故障面是 channel 关闭。R18 缺陷 1 勘正：修前注释称「只有结算抛异常且
+    // IsOpen=false」才置位，漏了「channel 关闭但无结算动作」的空闲断连面；现由
+    // consumer.ShutdownAsync 主动通知补齐（Initiator=Application 的正常关停不置位）。
     private volatile string? _consumeFaultReason;
     private readonly IChannel _channel;
     private readonly IConnection _connection;
@@ -222,13 +232,17 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         // FIX-011（2026-11-08）：EnsureExchangeAsync 与 Serialize 移入 try——broker 不可达
         // （exchange 声明失败）与序列化失败同计 BrokerPublishFailed（修前两者逃逸出 try，
         // 成为不计数的静默失败）。
+        // 7.3.0 bodyOwner（2026-11-23）：writer 的所有权在发布成功后转移给客户端，
+        // 因此不能在 try 内 using；失败/未转移路径由 finally 兜底释放（Dispose 幂等）。
+        PooledBodyWriter? bodyWriter = null;
         try
         {
             var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
 
-            // A2：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
-            // using 保证发布抛出后缓冲归还池（池化 writer 无 Clear 复位需求，天然干净入口）
-            using var bodyWriter = new PooledBodyWriter(InitialBodyBufferBytes);
+            // A2 + 7.3.0 bodyOwner：IBufferWriter 直写 + WrittenMemory 直传，并把 writer 交给
+            // 客户端作 bodyOwner——客户端在发送完成或发布失败后释放一次，7.2.x 无 owner 时
+            // 客户端必须把 body 复制进内部缓冲，本形态省掉该整载荷拷贝。
+            bodyWriter = new PooledBodyWriter(InitialBodyBufferBytes);
             Serializer.Serialize(message, descriptor, bodyWriter);
             // ITM-213 修复（三十二轮）：mandatory:true——无绑定队列时发布抛 PublishException，
             // 不再静默丢弃（原 mandatory:false 使 Outbox 标记 Processed 但消息实际未路由）。
@@ -243,7 +257,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 mandatory: true,
                 basicProperties: CreateProperties(descriptor, messageId, context),
                 body: bodyWriter.WrittenMemory,
+                bodyOwner: bodyWriter,
                 cancellationToken: ct).ConfigureAwait(false);
+            bodyWriter = null; // 所有权已移交客户端
         }
         catch (PublishReturnException ex)
         {
@@ -268,6 +284,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             publishActivity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             PalMetrics.BrokerPublishFailed.Add(1);
             throw;
+        }
+        finally
+        {
+            // 覆盖「序列化或 exchange 声明阶段抛出，所有权未转移」路径；发布失败时客户端已释放
+            // bodyOwner，PooledBodyWriter.Dispose 的 Interlocked 门保证池缓冲只归还一次。
+            bodyWriter?.Dispose();
         }
 
         // 优化（二十五轮 Z-1）：同 KafkaBroker——Debug 级门控免白做插值
@@ -297,9 +319,14 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
 
         var exchange = descriptor.Name;
-        var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
+        // R17 D9：raw 路径补 publish span（对齐对象路径 :229）——修前整条路径无 span，
+        // 链路追踪缺发布跳。FIX-016 的教训：span 必须在 try 外建，catch 分支才能 SetStatus(Error)。
+        using var publishActivity = PalActivitySource.StartBrokerPublish(descriptor.Name, descriptor.Name);
         try
         {
+            // R17 D9：exchange 声明移入 try（对齐对象路径 FIX-011）——修前位于 try 外，
+            // broker 不可达时声明失败逃逸出 BrokerPublishFailed 计数与 span Error。
+            var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
             await _channel.BasicPublishAsync(
                 exchange: cachedExchange,
                 routingKey: CachedString.Empty,
@@ -314,12 +341,14 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
                 $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
             // v4 批 D（S3）：raw 发布路径同计
+            publishActivity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // F2（2026-11-08）：raw 路径非 NO_ROUTE 的发布失败同计（对象路径同形勘正）。
+            publishActivity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }
@@ -464,6 +493,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             ? await _connection.CreateChannelAsync(consumerOptions, ct).ConfigureAwait(false)
             : _channel;
 
+        // 2026-11-23 性能轮：批量 multiple-ack 聚合授权（判据见 ReceivedAsync 处注释）。
+        // 共享 channel（ownsConsumerChannel=false）恒关；并发 dispatch >1 恒关。
+        var batchAggregateEnabled = CanAggregateBatchAck(ownsConsumerChannel, _consumerDispatchConcurrency);
+
         try
         {
             await consumerChannel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct).ConfigureAwait(false);
@@ -522,11 +555,39 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             await DisposeConsumerChannelSafeAsync(consumerChannel, ownsConsumerChannel, queueName).ConfigureAwait(false);
             throw;
         }
+        // R18 审计缺陷 1：订阅 channel shutdown 事件，覆盖「空闲断连无结算动作」的故障面。
+        // 修前 _consumeFaultReason 只在五个结算/取消安全包装 catch 置位；服务端重启、
+        // 网络分区等导致 channel 关闭而消费空闲时，无任何包装被调用 → 故障位保持 null →
+        // IsConsumingHealthy 恒 true → /health 恒绿，实例停止消费却不被摘流量。
+        // 上游 AsyncEventingBasicConsumer.ShutdownAsync 会主动通知（client/server initiated），
+        // 本订阅补齐该观测点。Initiator.Application = 本仓正常关停（DisposeAsync/Cancel
+        // 先于 channel 释放），不置位；Library/Peer = 外部不可恢复断连，置位。
+        // linkedCts.IsCancellationRequested 双保险：正常关停句柄释放时先 Cancel 再关 channel，
+        // 即便 shutdown 事件标成非 Application 也不误红。
+        Task OnConsumerShutdownAsync(object _, ShutdownEventArgs args)
+        {
+            if (args.Initiator != ShutdownInitiator.Application
+                && (linkedCts?.IsCancellationRequested ?? true) is false)
+            {
+                var reason = args.Exception?.Message ?? args.ReplyText;
+                MarkChannelFaultIfClosed(consumerChannel,
+                    new InvalidOperationException($"consumer channel shutdown ({args.Initiator}): {reason}"),
+                    queueName);
+            }
+            return Task.CompletedTask;
+        }
+        consumer.ShutdownAsync += OnConsumerShutdownAsync;
+
         consumer.ReceivedAsync += async (_, ea) =>
         {
             // 批次 A（2026-11-04）：每次交付一个确认器——handler 显式结算时由它调 broker API，
             // 未结算时下方兜底分支按既有规则收尾（成功 BasicAck / 异常 Nack(false)）。
-            var ack = new RabbitMqMessageAck(this, consumerChannel, ea.DeliveryTag, queueName);
+            // 2026-11-23 性能轮：批量聚合授权在订阅时算好传入——独立 consumer channel
+            // （默认）+ 串行 dispatch（ConsumerDispatchConcurrency null 或 ≤1，客户端默认 1）
+            // 时 deliveryTag 严格单调入批，multiple:true 单帧等价逐条；两种语义前提任一
+            // 不满足（共享 channel 多订阅共 tag 空间 / 并发 dispatch 打乱单调性）则关闭。
+            var ack = new RabbitMqMessageAck(
+                this, consumerChannel, ea.DeliveryTag, queueName, batchAggregateEnabled);
             // v4 批 A（B2）：入队确认——只有泵的四参 handler 正常返回才置 true。
             // 批量路径的 handler 就是 MessageBatchPump.EnqueueAsync：它先同步打 deferred
             // 标记，再 WriteAsync 入通道。WriteAsync 在关停/通道关闭时抛 OCE 或
@@ -687,6 +748,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         }
         catch
         {
+            // R18 缺陷 1：初始化失败同样要退订 shutdown 回调（订阅在 ReceivedAsync 前已建立），
+            // 否则委托随 channel 存活到连接关闭，关闭时误触健康位置位。
+            consumer.ShutdownAsync -= OnConsumerShutdownAsync;
             await tokenReg.DisposeAsync().ConfigureAwait(false);
             if (consumerTag is not null)
                 await CancelConsumeSafeAsync(consumerChannel, consumerTag, queueName).ConfigureAwait(false);
@@ -713,6 +777,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         var subscription = new AsyncSubscription(async () =>
         {
             _subscriptions.TryRemove(consumerTag, out _);
+            // R18 缺陷 1：先退订 shutdown 回调，再取消 linkedCts、释放 channel、Dispose CTS——
+            // 避免正常关停时回调被触发后访问已释放资源（成对 API + 顺序保证）。
+            consumer.ShutdownAsync -= OnConsumerShutdownAsync;
             await tokenReg.DisposeAsync().ConfigureAwait(false);
             await linkedCts.CancelAsync().ConfigureAwait(false);
             await CancelConsumeSafeAsync(consumerChannel, consumerTag, queueName).ConfigureAwait(false);
@@ -727,7 +794,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
     /// <remarks>
     /// v4 批 C（S1）：Rabbit 的健康态定义为「channel 级不可恢复故障」——per-delivery
     /// <c>ReceivedAsync</c> 回调模型没有 Kafka 式「消费线程终止」观测点，可观测的故障面是
-    /// channel 关闭（结算/取消的安全包装抛异常且 <c>IChannel.IsOpen == false</c>）。
+    /// channel 关闭。R18 缺陷 1 勘正：置位点有二，一是结算/取消安全包装抛异常且
+    /// <c>IChannel.IsOpen == false</c>，二是 <c>consumer.ShutdownAsync</c> 外部断连事件
+    /// （修前只有前者，空闲断连无结算动作时不置位，/health 恒绿）。
     /// 普通 handler 失败（毒消息弃置）<b>不置位</b>——那是 at-most-once 弃置，不是链路终止。
     /// </remarks>
     public bool IsConsumingHealthy => _consumeFaultReason is null;
@@ -793,6 +862,16 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
     }
 
     /// <summary>
+    /// 批量聚合授权判定（2026-11-23 性能轮）——提为纯函数供白盒测试锁定：
+    /// 独立 consumer channel（每订阅独占 tag 空间）且消费分发串行
+    /// （<paramref name="consumerDispatchConcurrency"/> null = 客户端默认 1，或显式 ≤1）
+    /// 时，deliveryTag 严格单调入批，单帧 multiple ack/nack 语义等价逐条；任一前提
+    /// 不满足（共享 channel 多订阅共 tag 空间 / 并发 dispatch 打乱单调性）返回 false。
+    /// </summary>
+    internal static bool CanAggregateBatchAck(bool ownsConsumerChannel, ushort? consumerDispatchConcurrency)
+        => ownsConsumerChannel && consumerDispatchConcurrency is not > 1;
+
+    /// <summary>
     /// ACK 的安全包装——与 TryNackSafeAsync 同型（P3 修复：成功路径 channel 已关时
     /// BasicAckAsync 抛异常同样会逃逸进消费者回调）。
     /// </summary>
@@ -805,6 +884,41 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicAck failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
+            MarkChannelFaultIfClosed(channel, ex, queueName);
+        }
+    }
+
+    /// <summary>
+    /// 批量聚合 ACK 的安全包装（2026-11-23 性能轮）——单帧 <c>multiple:true</c> 结算整批，
+    /// 与 <see cref="TryAckSafeAsync"/> 同型的 channel 已关防护。成员占位已在聚合器内完成，
+    /// 帧失败只记 Warning（语义对齐逐条路径第 i 帧失败后跳过剩余成员）。
+    /// </summary>
+    private async Task TryAckMultipleSafeAsync(IChannel channel, ulong maxDeliveryTag, string queueName)
+    {
+        try
+        {
+            await channel.BasicAckAsync(maxDeliveryTag, multiple: true).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Warning($"BasicAck(multiple) failed (channel closed?): {queueName}, deliveryTag={maxDeliveryTag}: {ex.Message}");
+            MarkChannelFaultIfClosed(channel, ex, queueName);
+        }
+    }
+
+    /// <summary>
+    /// 批量聚合 Nack 的安全包装（2026-11-23 性能轮）——单帧 <c>multiple:true</c> 弃置/重投整批，
+    /// 与 <see cref="TryNackSafeAsync"/> 同型的 channel 已关防护。
+    /// </summary>
+    private async Task TryNackMultipleSafeAsync(IChannel channel, ulong maxDeliveryTag, bool requeue, string queueName)
+    {
+        try
+        {
+            await channel.BasicNackAsync(maxDeliveryTag, multiple: true, requeue: requeue).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Warning($"BasicNack(multiple) failed (channel closed?): {queueName}, deliveryTag={maxDeliveryTag}: {ex.Message}");
             MarkChannelFaultIfClosed(channel, ex, queueName);
         }
     }
@@ -826,6 +940,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
 
     /// <summary>
     /// 单次投递的消费确认器（批次 A，2026-11-04）——把既有 manual-ack 动作交给 handler 决策。
+    /// 2026-11-23 性能轮：实现 <c>IBatchAckAggregator</c>（internal），批量泵的批次级
+    /// 结算可聚合成单帧 <c>multiple:true</c> ack/nack。
     /// </summary>
     /// <remarks>
     /// 嵌套在 Broker 内以复用 <see cref="TryAckSafeAsync"/>/<see cref="TryNackSafeAsync"/> 的
@@ -839,6 +955,13 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
     /// 抛出会打断业务逻辑，而结算失败本身已由安全包装记 Warning。
     /// </para>
     /// <para>
+    /// <b>批量聚合（2026-11-23）</b>：授权由订阅时判定（独立 channel + 串行 dispatch，
+    /// 见四参 <c>SubscribeAsync</c> 重载内 <c>batchAggregateEnabled</c>）。聚合校验：① 授权在场；② 全员同 channel；③ 批内
+    /// deliveryTag 严格连续递增（tag 洞只可能来自 broker 兜底已弃置的交付——不在服务端
+    /// unacked map，multiple 帧语义上安全，但保守回退逐条，把「正确性依赖服务端 map 状态」
+    /// 收窄到可静态判定的形态）。任一不满足返回 false（零副作用），调用方逐条结算。
+    /// </para>
+    /// <para>
     /// <c>ct</c> 不参与结算：AMQP 的 ack/nack 是通道级单帧写，无法在中途取消，且结算
     /// 必须尽可能完成（取消语义交由调用方在调用前判断）。
     /// </para>
@@ -847,7 +970,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         RabbitMqBroker broker,
         IChannel channel,
         ulong deliveryTag,
-        string queueName) : IMessageAck
+        string queueName,
+        bool batchAggregateEnabled) : IMessageAck, IBatchAckAggregator
     {
         private int _settled;
 
@@ -856,6 +980,15 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
 
         /// <summary>原子占位：首次返回 <c>true</c>。</summary>
         public bool TryClaim() => Interlocked.Exchange(ref _settled, 1) == 0;
+
+        /// <summary>本确认器的 deliveryTag（聚合校验用；批量路径外不暴露）。</summary>
+        public ulong DeliveryTag => deliveryTag;
+
+        /// <summary>聚合授权（订阅时判定：独立 channel + 串行 dispatch）。</summary>
+        public bool BatchAggregateEnabled => batchAggregateEnabled;
+
+        /// <summary>本确认器所属 channel（同批成员归属校验用）。</summary>
+        public IChannel Channel => channel;
 
         /// <inheritdoc />
         public async ValueTask AcknowledgeAsync(CancellationToken ct = default)
@@ -881,6 +1014,83 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             }
 
             await broker.TryNackSafeAsync(channel, deliveryTag, requeue, queueName).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// 聚合路径：全员 TryClaim 占位后，以最大 deliveryTag 发一帧 <c>multiple:true</c>
+        /// ack——服务端确认该 channel unacked map 中 ≤ tag 的全部条目。占位失败（成员已被
+        /// 单独结算，防御分支——批量泵移交后 broker 不兜底，正常不可达）的成员 tag 不在
+        /// 服务端 unacked map，multiple 帧不受影响，仅跳过其 TryClaim。帧发送失败由
+        /// <see cref="RabbitMqBroker.TryAckMultipleSafeAsync"/> 安全包装吞掉并记 Warning——语义与
+        /// 逐条路径第 i 帧失败后跳过剩余成员一致（后续交付随连接/ channel 恢复重投，
+        /// at-least-once 由 unacked 状态兜底）。
+        /// </remarks>
+        public async ValueTask<bool> TryAcknowledgeBatchAsync(IMessageAck[] batch, CancellationToken ct)
+        {
+            if (!TryPrepareAggregate(batch, out var maxTag))
+                return false;
+
+            await broker.TryAckMultipleSafeAsync(channel, maxTag, queueName).ConfigureAwait(false);
+            return true;
+        }
+
+        /// <inheritdoc />
+        /// <remarks>
+        /// 聚合路径与 ack 同型（multiple:true + requeue 单帧）。Kafka 的逆序委派理由
+        /// （Seek 最后一次生效）对本实现不适用：单帧无顺序语义。
+        /// </remarks>
+        public async ValueTask<bool> TryRejectBatchAsync(IMessageAck[] batch, bool requeue, CancellationToken ct)
+        {
+            if (!TryPrepareAggregate(batch, out var maxTag))
+                return false;
+
+            await broker.TryNackMultipleSafeAsync(channel, maxTag, requeue, queueName).ConfigureAwait(false);
+            return true;
+        }
+
+        /// <summary>
+        /// 聚合前置校验与占位：授权在场、首成员即本确认器（<c>MessageBatchAck</c> 以首成员
+        /// 路由聚合器）、全员同 channel、deliveryTag 严格连续递增（洞 = broker 兜底已弃置的
+        /// 交付——不在服务端 unacked map，语义上安全，但保守回退逐条，把「正确性依赖服务端
+        /// map 状态」收窄到可静态判定的形态）。校验失败零占位零副作用，调用方逐条结算。
+        /// </summary>
+        private bool TryPrepareAggregate(IMessageAck[] batch, out ulong maxTag)
+        {
+            maxTag = 0;
+            if (!batchAggregateEnabled || batch.Length == 0)
+                return false;
+
+            var previous = deliveryTag;
+            for (var i = 0; i < batch.Length; i++)
+            {
+                if (batch[i] is not RabbitMqMessageAck rabbitAck
+                    || !ReferenceEquals(rabbitAck.Channel, channel))
+                    return false;
+
+                if (i == 0)
+                {
+                    // 首成员即本聚合器（路由协议）；防御非首成员路由的未来变化。
+                    if (!ReferenceEquals(rabbitAck, this))
+                        return false;
+                }
+                else if (rabbitAck.DeliveryTag != previous + 1)
+                {
+                    // 乱序（并发 dispatch 已被授权判定排除，防御保留）或洞 → 拒绝聚合。
+                    return false;
+                }
+
+                previous = rabbitAck.DeliveryTag;
+            }
+
+            // 校验全过才占位（失败路径零副作用）；已结算成员（防御，正常不可达）跳过——
+            // 其 tag 不在服务端 unacked map，multiple 帧不波及。
+            foreach (var candidate in batch)
+                if (candidate is RabbitMqMessageAck rabbitAck)
+                    _ = rabbitAck.TryClaim();
+
+            maxTag = previous;
+            return true;
         }
     }
 
@@ -942,6 +1152,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
     {
         private byte[] _buffer;
         private int _written;
+        private int _disposed;
 
         public PooledBodyWriter(int initialCapacity)
             => _buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(256, initialCapacity));
@@ -974,7 +1185,18 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             _buffer = next;
         }
 
-        public void Dispose() => System.Buffers.ArrayPool<byte>.Shared.Return(_buffer);
+        /// <summary>
+        /// 归还池缓冲。<b>幂等</b>：RabbitMQ.Client 7.3.0 起 <c>BasicPublishAsync(bodyOwner:)</c>
+        /// 由客户端在发送完成或发布失败后释放一次，发布路径的 <c>finally</c> 也会释放一次。
+        /// 双重释放会把同一数组重复 Return 给 <see cref="System.Buffers.ArrayPool{T}"/>，
+        /// 使同一缓冲被两个租用者同时持有。Interlocked 门保证只归还一次。
+        /// </summary>
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            System.Buffers.ArrayPool<byte>.Shared.Return(_buffer);
+        }
     }
 
     private sealed class AsyncSubscription(Func<Task> unsubscribe) : IAsyncDisposable

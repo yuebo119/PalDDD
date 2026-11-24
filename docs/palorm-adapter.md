@@ -119,6 +119,37 @@ services.AddPalOrmSqlite(connectionString);
 - 归还门禁：有未收口事务、在飞操作或未释放的并行读作用域时 `DisposeAsync` 抛出（上游契约），事务必须经 `IUnitOfWork` 收口。
 - 池化工厂只实现 `IAsyncDisposable`，根容器应使用 `DisposeAsync` 释放（与 `DataSession` 同款约束）。
 
+#### 4.1.2 PG LISTEN/NOTIFY Outbox 唤醒（可选，2026-11-23）
+
+`AddPalOrmPostgreSqlOutboxNotifier(services, connectionString, channelName = "outbox_channel")` 在
+PalORM 栈补齐 PG 跨进程唤醒（此前仅 Dapper 栈有）：NOTIFY 到达即触发
+`OutboxBatchProcessor.ProcessBatchAsync`（`AddPalOutbox()` 注册），消除轮询周期延迟；默认
+PeriodicTimer 轮询保留作兜底。监听载体是 PalORM 6.9.0 的 `PgNotificationListener`（30s 心跳
+保活 + 线性递增全量抖动重连），通道契约与 Dapper 版 `PostgreSqlOutboxNotifier` 完全一致
+（`outbox_channel` + 过渡表触发器，DDL 见其头注释）——同一库两栈共用同一触发器面。
+连接串必须与 `AddPalOrmPostgreSql` 一致（listener 持独立长连接，不走会话池）。
+
+**重连上限差异（2026-11-24 勘正）**：上游 `PgNotificationListener` 的断线重连有**次数上限
+（5 次）**，耗尽后或遇非瞬态故障时监听终止且不再自愈。终止原因经组件 OnError 接线记入
+Error 日志（此前三通道全空、静默死亡零输出），Outbox 退回轮询兜底（消息不丢但延迟回升至
+轮询节奏）。Dapper 版为无限重连（外层 while），同类长断线故障下自愈形态不同；恢复手段是
+重启进程。
+
+**启动与关停语义（2026-11-24，R16）**：`StartAsync` 首连失败不留半成品状态——失败路径退订并
+释放局部 listener/CTS 后原样重抛，对象回到「未启动」可重入态（对齐上游「`StopAsync` 之后
+可再次启动」契约；修前先赋值字段再 await，首连失败后重试会命中幂等守卫）。`StopAsync` 的
+顺序是「取消在飞批处理 → 退订并停监听 → 等待在飞 fire 任务 → 释放 CTS」——**会等待**
+在飞批处理真正收尾（修前只发取消信号即返回，宿主随后释放 gate，最后一批的终态标记可能
+未落库）。`DisposeAsync` 同样等待在飞任务，覆盖宿主未调 `StopAsync` 的路径。
+
+**批处理异常可观测（2026-11-24，R18）**：`FireBatchProcessAsync` 的三类出口与 Dapper 栈对齐——宿主关停期的协作取消记 Information、非关停 OCE（`ProcessBatchAsync` 内部超时转换等）记带异常对象的 Error、其它异常记 Error。修前仅两支且过滤器把 OCE 排除在通用 Error 之外，非关停 OCE 逃出 async Task 成未观察异常、零日志，关停期还会被上层当正常关停吞掉。
+
+```csharp
+services.AddPalOutbox();
+services.AddPalOrmPostgreSql(connectionString);
+services.AddPalOrmPostgreSqlOutboxNotifier(connectionString); // 默认通道 outbox_channel
+```
+
 ### 4.2 Saga 快照持久化注册（saga_data 列）— 必读
 
 三方言的一键注册中，`ISagaStateStore<>` 开放泛型（如 `PostgreSqlSagaStateStore<>`）无 `JsonTypeInfo` 传入通道——`jsonTypeInfo` 恒 null。

@@ -208,15 +208,20 @@ interface PalDDD.Core.IValueObject
 interface PalDDD.Core.Identity.IPalIdGenerator
   method ByteAether.Ulid.Ulid NewId()
   method ByteAether.Ulid.Ulid NewId(System.DateTimeOffset timestamp)
+interface PalDDD.Core.Logging.IPalLogger
+  method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
 interface PalDDD.Core.Logging.IPalLogger<T>
   method System.Void Debug(Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
+  method System.Void Debug(PalDDD.Core.Logging.PalDebugLogHandler& handler)
   method System.Void Debug(System.String message)
   method System.Void Error(System.Exception ex, Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
+  method System.Void Error(System.Exception ex, PalDDD.Core.Logging.PalErrorLogHandler& handler)
   method System.Void Error(System.Exception ex, System.String message)
   method System.Void Information(Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
+  method System.Void Information(PalDDD.Core.Logging.PalInformationLogHandler& handler)
   method System.Void Information(System.String message)
-  method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
   method System.Void Warning(Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
+  method System.Void Warning(PalDDD.Core.Logging.PalWarningLogHandler& handler)
   method System.Void Warning(System.String message)
 class PalDDD.Core.Logging.NullPalLogger<T>
   field static readonly PalDDD.Core.Logging.NullPalLogger<T> Instance
@@ -229,6 +234,39 @@ class PalDDD.Core.Logging.NullPalLogger<T>
   method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
   method System.Void Warning(Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
   method System.Void Warning(System.String message)
+struct PalDDD.Core.Logging.PalDebugLogHandler
+  ctor(System.Int32 literalLength, System.Int32 formattedCount, PalDDD.Core.Logging.IPalLogger logger, System.Boolean& enabled)
+  method System.Void AppendFormatted(System.ReadOnlySpan<System.Char> value)
+  method System.Void AppendFormatted(System.ReadOnlySpan<System.Char> value, System.Int32 alignment, System.String format)
+  method System.Void AppendFormatted(System.String value)
+  method System.Void AppendFormatted(T value)
+  method System.Void AppendFormatted(T value, System.Int32 alignment)
+  method System.Void AppendFormatted(T value, System.Int32 alignment, System.String format)
+  method System.Void AppendFormatted(T value, System.String format)
+  method System.Void AppendLiteral(System.String s)
+  method System.String ToStringAndClear()
+struct PalDDD.Core.Logging.PalErrorLogHandler
+  ctor(System.Int32 literalLength, System.Int32 formattedCount, PalDDD.Core.Logging.IPalLogger logger, System.Boolean& enabled)
+  method System.Void AppendFormatted(System.ReadOnlySpan<System.Char> value)
+  method System.Void AppendFormatted(System.ReadOnlySpan<System.Char> value, System.Int32 alignment, System.String format)
+  method System.Void AppendFormatted(System.String value)
+  method System.Void AppendFormatted(T value)
+  method System.Void AppendFormatted(T value, System.Int32 alignment)
+  method System.Void AppendFormatted(T value, System.Int32 alignment, System.String format)
+  method System.Void AppendFormatted(T value, System.String format)
+  method System.Void AppendLiteral(System.String s)
+  method System.String ToStringAndClear()
+struct PalDDD.Core.Logging.PalInformationLogHandler
+  ctor(System.Int32 literalLength, System.Int32 formattedCount, PalDDD.Core.Logging.IPalLogger logger, System.Boolean& enabled)
+  method System.Void AppendFormatted(System.ReadOnlySpan<System.Char> value)
+  method System.Void AppendFormatted(System.ReadOnlySpan<System.Char> value, System.Int32 alignment, System.String format)
+  method System.Void AppendFormatted(System.String value)
+  method System.Void AppendFormatted(T value)
+  method System.Void AppendFormatted(T value, System.Int32 alignment)
+  method System.Void AppendFormatted(T value, System.Int32 alignment, System.String format)
+  method System.Void AppendFormatted(T value, System.String format)
+  method System.Void AppendLiteral(System.String s)
+  method System.String ToStringAndClear()
 static class PalDDD.Core.Logging.PalLogEventIds
   field const System.Int32 InboxBatchProcessed = 1005
   field const System.Int32 InboxHandlerLeaseExceeded = 1006
@@ -248,6 +286,17 @@ static class PalDDD.Core.Logging.PalLogEventIds
   field const System.Int32 SagaLeaseReleaseFailed = 1204
   field const System.Int32 SagaTimedOut = 1201
   field const System.Int32 SagaTimeoutCheckFailed = 1205
+struct PalDDD.Core.Logging.PalWarningLogHandler
+  ctor(System.Int32 literalLength, System.Int32 formattedCount, PalDDD.Core.Logging.IPalLogger logger, System.Boolean& enabled)
+  method System.Void AppendFormatted(System.ReadOnlySpan<System.Char> value)
+  method System.Void AppendFormatted(System.ReadOnlySpan<System.Char> value, System.Int32 alignment, System.String format)
+  method System.Void AppendFormatted(System.String value)
+  method System.Void AppendFormatted(T value)
+  method System.Void AppendFormatted(T value, System.Int32 alignment)
+  method System.Void AppendFormatted(T value, System.Int32 alignment, System.String format)
+  method System.Void AppendFormatted(T value, System.String format)
+  method System.Void AppendLiteral(System.String s)
+  method System.String ToStringAndClear()
 struct PalDDD.Core.PalValidationError
   ctor(System.String PropertyName, System.String Message)
   property System.String Message [init]
@@ -561,6 +610,7 @@ static class PalDDD.Dapper.PostgreSql.PostgreSqlMultiHost
 class PalDDD.Dapper.PostgreSql.PostgreSqlOutboxNotifier
   ctor(Npgsql.NpgsqlDataSource dataSource, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, PalDDD.Core.Logging.IPalLogger<PalDDD.Dapper.PostgreSql.PostgreSqlOutboxNotifier> logger, System.TimeProvider timeProvider, System.String channelName)
   method System.Void Dispose()
+  method System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken cancellationToken)
 class PalDDD.Dapper.PostgreSql.PostgreSqlPipeline
   ctor(System.Data.Common.DbConnection connection)
   method System.Void Add(System.String sql, Npgsql.NpgsqlParameter[] parameters)
@@ -1251,6 +1301,11 @@ class PalDDD.PalORM.MySql.MySqlSagaStateStore<TState>
   ctor(PalORM.DataSession<PalORM.MySql.MySqlProvider> session, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo, System.TimeProvider clock)
 
 # PalDDD.PalORM.PostgreSql
+class PalDDD.PalORM.PostgreSql.PalOrmPostgreSqlOutboxNotifier
+  ctor(System.String connectionString, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, PalDDD.Core.Logging.IPalLogger<PalDDD.PalORM.PostgreSql.PalOrmPostgreSqlOutboxNotifier> logger, System.String channelName)
+  method System.Threading.Tasks.ValueTask DisposeAsync()
+  method System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken cancellationToken)
 class PalDDD.PalORM.PostgreSql.PostgreSqlEventLog
   ctor(PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider> session, System.TimeProvider clock)
 class PalDDD.PalORM.PostgreSql.PostgreSqlIdempotencyStore
@@ -1261,6 +1316,7 @@ class PalDDD.PalORM.PostgreSql.PostgreSqlOutboxStore
   ctor(PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider> session, System.TimeProvider clock, PalDDD.Transactions.IOutboxWakeUpSignal wakeUpSignal)
 static class PalDDD.PalORM.PostgreSql.PostgreSqlPalOrmExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmPostgreSql(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.String connectionString, PalORM.DbOptions options, System.TimeProvider clock, System.Action<PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider>> configureResilience, System.Int32 prewarmConnectionCount, System.Boolean useSessionPool)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmPostgreSqlOutboxNotifier(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.String connectionString, System.String channelName)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmPostgreSqlSagaSnapshot(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo)
 class PalDDD.PalORM.PostgreSql.PostgreSqlPalOrmUnitOfWork
   ctor(PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider> session)
@@ -1643,6 +1699,7 @@ class PalDDD.Serialization.MemoryPack.MemoryPackMessageSerializer
   method System.Object Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method TMessage Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method System.ReadOnlyMemory<System.Byte> Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.Void Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, System.Buffers.IBufferWriter<System.Byte> destination)
   method System.ReadOnlyMemory<System.Byte> Serialize(TMessage message, PalDDD.Serialization.MessageDescriptor descriptor)
   method System.Byte[] SerializeToArray(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
 static class PalDDD.Serialization.MemoryPack.ServiceCollectionExtensions
