@@ -83,7 +83,7 @@ public ref struct PalDebugLogHandler
     }
 
     /// <summary>由编译器调用。</summary>
-    public void AppendFormatted(ReadOnlySpan<char> value, int alignment = 0, string? format = null)
+    public void AppendFormatted(ReadOnlySpan<char> value, int alignment, string? format)
     {
         if (_enabled)
             _inner.AppendFormatted(value, alignment, format);
@@ -157,7 +157,7 @@ public ref struct PalInformationLogHandler
     }
 
     /// <summary>由编译器调用。</summary>
-    public void AppendFormatted(ReadOnlySpan<char> value, int alignment = 0, string? format = null)
+    public void AppendFormatted(ReadOnlySpan<char> value, int alignment, string? format)
     {
         if (_enabled)
             _inner.AppendFormatted(value, alignment, format);
@@ -231,7 +231,7 @@ public ref struct PalWarningLogHandler
     }
 
     /// <summary>由编译器调用。</summary>
-    public void AppendFormatted(ReadOnlySpan<char> value, int alignment = 0, string? format = null)
+    public void AppendFormatted(ReadOnlySpan<char> value, int alignment, string? format)
     {
         if (_enabled)
             _inner.AppendFormatted(value, alignment, format);
@@ -305,7 +305,7 @@ public ref struct PalErrorLogHandler
     }
 
     /// <summary>由编译器调用。</summary>
-    public void AppendFormatted(ReadOnlySpan<char> value, int alignment = 0, string? format = null)
+    public void AppendFormatted(ReadOnlySpan<char> value, int alignment, string? format)
     {
         if (_enabled)
             _inner.AppendFormatted(value, alignment, format);

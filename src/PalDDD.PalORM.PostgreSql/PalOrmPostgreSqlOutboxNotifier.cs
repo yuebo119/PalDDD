@@ -140,13 +140,16 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
         logger.Debug($"PostgreSQL NOTIFY received on channel '{e.Channel}'");
         // 非阻塞 try-enter：gate 被占用时本次 NOTIFY 被丢弃——at-least-once 由兜底保证
         //（PeriodicTimer 轮询 + 上游 listener 心跳保活的后续通知），对齐 Dapper 版语义。
+        // 刻意不传 token：传入时若调度前取消，任务不执行、已获取的 gate 永不释放。
+#pragma warning disable S8949 // Wait(0) 刻意不传 token——取消时放弃获取而非带取消等待
         if (_processGate.Wait(0))
+#pragma warning restore S8949
         {
             // 不传宿主 token：传入时若调度前取消，任务不执行、已获取的 gate 永不释放
             //（Dapper 版 P2 修复同款）；关停协作取消经 _shutdownCts（StopAsync 先取消），
             // gate 释放由 FireBatchProcessAsync 的 finally 兜底。
             // fire 任务引用存入 _fireTask（仅持引用语义，见字段勘正注释）。
-#pragma warning disable S8949 // 刻意不向 Task.Run 传 token（调度前取消会使 gate 永不释放）
+#pragma warning disable S8949 // Task.Run 刻意不传 token：调度前取消会让已获取的 gate 永不释放
             _fireTask = Task.Run(FireBatchProcessAsync);
 #pragma warning restore S8949
         }

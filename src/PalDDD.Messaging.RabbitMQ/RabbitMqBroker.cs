@@ -567,7 +567,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         Task OnConsumerShutdownAsync(object _, ShutdownEventArgs args)
         {
             if (args.Initiator != ShutdownInitiator.Application
-                && (linkedCts?.IsCancellationRequested ?? true) is false)
+                && !(linkedCts?.IsCancellationRequested ?? true))
             {
                 var reason = args.Exception?.Message ?? args.ReplyText;
                 MarkChannelFaultIfClosed(consumerChannel,
@@ -983,9 +983,6 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
 
         /// <summary>本确认器的 deliveryTag（聚合校验用；批量路径外不暴露）。</summary>
         public ulong DeliveryTag => deliveryTag;
-
-        /// <summary>聚合授权（订阅时判定：独立 channel + 串行 dispatch）。</summary>
-        public bool BatchAggregateEnabled => batchAggregateEnabled;
 
         /// <summary>本确认器所属 channel（同批成员归属校验用）。</summary>
         public IChannel Channel => channel;
