@@ -54,6 +54,16 @@
 - **RabbitMQ.Client 7.2.2 → 7.3.0**（2026-11-23，稳定版发布后升位）：`7.3.0-beta.0` 之后的稳定版已发布，先前「beta 不入线」的排除依据失效。破坏面逐条核查后对本仓零触及：唯一硬源码破坏是 `IChannel` 新增 4 个抽象成员（本仓不实现该接口，仅消费）；5 个新增 `[Obsolete]` 成员（`RabbitMQActivitySource.ContextInjector` / `ContextExtractor` / `UseRoutingKeyAsOperationName` / `TracingOptions`）本仓仅在注释中提及、无调用，不触发 warnings-as-errors；TLS 行为变更（amqps 校验主机名、TLS 工厂拒绝明文回退）本仓无 `Ssl` 配置；`ConsumerDispatchConcurrency=0` 本仓已在 `RabbitMqBroker` 构造期拒绝 0；`CreateChannelAsync` 不再写回传入 options 而本仓显式构造、不依赖写回；短字符串超长异常类型变化与字段表 32 层嵌套限制本仓无超限调用面。许可表达式两版一致（`Apache-2.0 OR MPL-2.0`，license-policy 白名单内含）。消费者可见变化仅依赖面上移，公共 API 与行为契约不变。
 - **PalORM ×5 6.8.0 → 6.9.0**（2026-11-23 全量核新，NuGet 双通道实测）：上游行为变更 4 处——MySQL 批量写入默认整段单批（与 PostgreSQL 对齐）、PG `DateTime` 列统一 `timestamptz`、`ToPageAsync` 遇 `Skip()` 与 SQLite 行锁 API 改调用期抛错，另新增迁移漂移检测（默认开启）与四项生命周期 API。本仓零代码适配：唯一批插消费点的批宽由调用方控制且事务内入事务（MySqlBulkCopyInserter 源码实证无隐式提交切断）、PalORM 模型全部 `DateTimeOffset`、后两组 API 本仓零调用、迁移与 `SaveAsync` 路径零调用。消费者可见变化为依赖面上移，公共 API 与行为契约不变。
 - **Meziantou.Analyzer 3.0.341 → 3.0.342**（补丁位）：分析器规则更新，Release 构建仍 0 警告。
+- **全量包核新（2026-11-24，NuGet 双通道实测）**：74 处中央钉扎中唯一实质可升项为
+  **NativeCompressions 1.3.3 → 1.3.4**（上游 2026-11-24 发布，变更仅原生库升级 Zstd
+  1.5.7→1.6.0、测试稳定性修复、上游仓库 facebook→meta 迁移，无公共 API 变更）。GitHub
+  Actions 同步升位三项（均钉 40 位 commit SHA）：`actions/setup-dotnet` v6.0.0 → v6.1.0、
+  `github/codeql-action` v4.39.1 → v4.39.4、`softprops/action-gh-release` v3.0.3 → v3.0.4。
+  其余维持：69 处已最新（含预发布口径），4 处既有裁决排除（MediatR 12.5.0 / Verify.TUnit
+  32.0.1 商业许可禁令、Confluent.Kafka 2.16.0 不入 4.4.0-alpha.1 跨两主版本 alpha、
+  System.Runtime.CompilerServices.Unsafe 6.1.2 不入 2022 废弃预览 7.0.0-preview.2.22152.2）；
+  dotnet tools（reportgenerator 5.6.1 / Stryker 5.1.0）与 SDK 11.0.100 均最新。消费者可见
+  变化仅依赖面与 CI 面上移，公共 API 与行为契约不变。
 
 ### Documentation
 
