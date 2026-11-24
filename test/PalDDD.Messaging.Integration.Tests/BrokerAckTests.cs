@@ -825,6 +825,17 @@ public sealed class RabbitAckTests
             cancellationToken: cancellationToken);
         await Assert.That(connection.IsOpen).IsFalse();
 
+        // R18 缺陷 1：修前本测试名带 Unhealthy 却无任何 IsFalse 断言（只验健康态与毒消息
+        // 不置位）。空闲断连无结算动作时，ShutdownAsync 事件必须把健康位转 false——
+        // 这里在结算尝试之前先断言，确保覆盖的正是「无结算动作」面，而非结算 catch 路径。
+        var healthyAfterIdleClose = new Func<bool>(() => broker.IsConsumingHealthy);
+        for (var i = 0; i < 50 && healthyAfterIdleClose(); i++)
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        await Assert.That(broker.IsConsumingHealthy).IsFalse()
+            .Because("空闲断连（无结算动作）必须由 ShutdownAsync 事件置健康故障位");
+        await Assert.That(broker.LastFaultReason).Contains("shutdown")
+            .Because("健康位转 false 时原因必须可读且指向 shutdown 事件");
+
         // 触发一次结算尝试（发布到已关闭的连接 → 失败路径走安全包装）
         try
         {

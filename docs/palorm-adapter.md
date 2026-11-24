@@ -142,6 +142,8 @@ Error 日志（此前三通道全空、静默死亡零输出），Outbox 退回�
 在飞批处理真正收尾（修前只发取消信号即返回，宿主随后释放 gate，最后一批的终态标记可能
 未落库）。`DisposeAsync` 同样等待在飞任务，覆盖宿主未调 `StopAsync` 的路径。
 
+**批处理异常可观测（2026-11-24，R18）**：`FireBatchProcessAsync` 的三类出口与 Dapper 栈对齐——宿主关停期的协作取消记 Information、非关停 OCE（`ProcessBatchAsync` 内部超时转换等）记带异常对象的 Error、其它异常记 Error。修前仅两支且过滤器把 OCE 排除在通用 Error 之外，非关停 OCE 逃出 async Task 成未观察异常、零日志，关停期还会被上层当正常关停吞掉。
+
 ```csharp
 services.AddPalOutbox();
 services.AddPalOrmPostgreSql(connectionString);

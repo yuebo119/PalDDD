@@ -52,7 +52,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
     private int _disposed;
     // v4 批 C（S1）：channel 级不可恢复故障原因（健康检查读取；普通 handler 失败不置位）。
     // Rabbit 无 Kafka 式「消费线程终止」观测点——per-delivery ReceivedAsync 回调模型下，
-    // 可观测的故障面只有 channel 关闭（BasicNack/BasicAck/BasicCancel 抛异常且 IsOpen=false）。
+    // 可观测的故障面是 channel 关闭。R18 缺陷 1 勘正：修前注释称「只有结算抛异常且
+    // IsOpen=false」才置位，漏了「channel 关闭但无结算动作」的空闲断连面；现由
+    // consumer.ShutdownAsync 主动通知补齐（Initiator=Application 的正常关停不置位）。
     private volatile string? _consumeFaultReason;
     private readonly IChannel _channel;
     private readonly IConnection _connection;
@@ -553,6 +555,29 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
             await DisposeConsumerChannelSafeAsync(consumerChannel, ownsConsumerChannel, queueName).ConfigureAwait(false);
             throw;
         }
+        // R18 审计缺陷 1：订阅 channel shutdown 事件，覆盖「空闲断连无结算动作」的故障面。
+        // 修前 _consumeFaultReason 只在五个结算/取消安全包装 catch 置位；服务端重启、
+        // 网络分区等导致 channel 关闭而消费空闲时，无任何包装被调用 → 故障位保持 null →
+        // IsConsumingHealthy 恒 true → /health 恒绿，实例停止消费却不被摘流量。
+        // 上游 AsyncEventingBasicConsumer.ShutdownAsync 会主动通知（client/server initiated），
+        // 本订阅补齐该观测点。Initiator.Application = 本仓正常关停（DisposeAsync/Cancel
+        // 先于 channel 释放），不置位；Library/Peer = 外部不可恢复断连，置位。
+        // linkedCts.IsCancellationRequested 双保险：正常关停句柄释放时先 Cancel 再关 channel，
+        // 即便 shutdown 事件标成非 Application 也不误红。
+        Task OnConsumerShutdownAsync(object _, ShutdownEventArgs args)
+        {
+            if (args.Initiator != ShutdownInitiator.Application
+                && (linkedCts?.IsCancellationRequested ?? true) is false)
+            {
+                var reason = args.Exception?.Message ?? args.ReplyText;
+                MarkChannelFaultIfClosed(consumerChannel,
+                    new InvalidOperationException($"consumer channel shutdown ({args.Initiator}): {reason}"),
+                    queueName);
+            }
+            return Task.CompletedTask;
+        }
+        consumer.ShutdownAsync += OnConsumerShutdownAsync;
+
         consumer.ReceivedAsync += async (_, ea) =>
         {
             // 批次 A（2026-11-04）：每次交付一个确认器——handler 显式结算时由它调 broker API，
@@ -723,6 +748,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         }
         catch
         {
+            // R18 缺陷 1：初始化失败同样要退订 shutdown 回调（订阅在 ReceivedAsync 前已建立），
+            // 否则委托随 channel 存活到连接关闭，关闭时误触健康位置位。
+            consumer.ShutdownAsync -= OnConsumerShutdownAsync;
             await tokenReg.DisposeAsync().ConfigureAwait(false);
             if (consumerTag is not null)
                 await CancelConsumeSafeAsync(consumerChannel, consumerTag, queueName).ConfigureAwait(false);
@@ -749,6 +777,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         var subscription = new AsyncSubscription(async () =>
         {
             _subscriptions.TryRemove(consumerTag, out _);
+            // R18 缺陷 1：先退订 shutdown 回调，再取消 linkedCts、释放 channel、Dispose CTS——
+            // 避免正常关停时回调被触发后访问已释放资源（成对 API + 顺序保证）。
+            consumer.ShutdownAsync -= OnConsumerShutdownAsync;
             await tokenReg.DisposeAsync().ConfigureAwait(false);
             await linkedCts.CancelAsync().ConfigureAwait(false);
             await CancelConsumeSafeAsync(consumerChannel, consumerTag, queueName).ConfigureAwait(false);
@@ -763,7 +794,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
     /// <remarks>
     /// v4 批 C（S1）：Rabbit 的健康态定义为「channel 级不可恢复故障」——per-delivery
     /// <c>ReceivedAsync</c> 回调模型没有 Kafka 式「消费线程终止」观测点，可观测的故障面是
-    /// channel 关闭（结算/取消的安全包装抛异常且 <c>IChannel.IsOpen == false</c>）。
+    /// channel 关闭。R18 缺陷 1 勘正：置位点有二，一是结算/取消安全包装抛异常且
+    /// <c>IChannel.IsOpen == false</c>，二是 <c>consumer.ShutdownAsync</c> 外部断连事件
+    /// （修前只有前者，空闲断连无结算动作时不置位，/health 恒绿）。
     /// 普通 handler 失败（毒消息弃置）<b>不置位</b>——那是 at-most-once 弃置，不是链路终止。
     /// </remarks>
     public bool IsConsumingHealthy => _consumeFaultReason is null;

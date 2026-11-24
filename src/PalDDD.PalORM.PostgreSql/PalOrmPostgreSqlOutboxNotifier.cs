@@ -171,6 +171,14 @@ public sealed class PalOrmPostgreSqlOutboxNotifier(
             // 宿主关停：批处理按协作语义收尾，记录后静默（对齐 Dapper 版 ITM-094 语义）
             logger.Information("PostgreSQL NOTIFY batch process canceled during shutdown (PalORM stack)");
         }
+        catch (OperationCanceledException oce)
+        {
+            // R18 审计缺陷 2（v18 B1 / PD24 孪生对称，对齐 Dapper 版 :303-308）：
+            // 非关停 OCE（ProcessBatchAsync 内部超时转换等）按 Error 记录。修前两分支形态
+            // 把 OCE 排除在通用 Exception 之外，异常逃出 async Task 成未观察、零 Error 日志，
+            // 关停期还会被上层 catch(OCE) 当正常关停吞掉，排障误定性。
+            logger.Error(oce, "PostgreSQL NOTIFY batch process cancelled without stop request (internal timeout/conversion) (PalORM stack)");
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.Error(ex, "PostgreSQL NOTIFY batch process failed (PalORM stack)");

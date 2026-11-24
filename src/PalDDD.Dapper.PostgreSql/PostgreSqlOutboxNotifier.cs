@@ -263,7 +263,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                 _reconnectAttempts++;
                 _logger.Warning($"PostgreSQL NOTIFY wait cancelled without stop request (internal timeout/conversion): {oce.Message}, reconnecting (attempt {_reconnectAttempts})...");
                 var oceDelay = (int)Math.Min(30_000, 1_000 * Math.Pow(2, Math.Min(_reconnectAttempts, 30)));
-                try { await Task.Delay(TimeSpan.FromMilliseconds(oceDelay), CancellationToken.None).ConfigureAwait(false); }
+                // R18 审计缺陷 3：修前用 CancellationToken.None 使外层 catch(OCE) 永不触发，
+                // 关停期要睡满退避（最长 30s）才退出。与下方普通 Exception 分支统一用
+                // stoppingToken，退避期间的取消由内层 catch 静默退出循环（对齐 8c9e3a6 提交说明）。
+                try { await Task.Delay(TimeSpan.FromMilliseconds(oceDelay), stoppingToken).ConfigureAwait(false); }
                 catch (OperationCanceledException) { break; }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

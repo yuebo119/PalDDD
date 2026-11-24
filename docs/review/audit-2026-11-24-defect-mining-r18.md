@@ -224,3 +224,18 @@
 - 实现进度：不适用（只读挖掘，本轮零代码改动）。
 - 验证完成度：基线 100%（build + 全量 test 实跑）；门禁 100%（gate-audit 矩阵 29 OK + 47 探针全过、doc-consistency/count-audit/gate.cs 实跑）；分片覆盖 16/16 + 6 对称轴 + 6 新面；20 视角全覆盖；候选证据验证 5/5（4 真缺陷 + 1 证伪），死角 16 条登记。
 - 未决：缺陷 1–4 本轮仅挖掘、未修复（按只读约束）；修复与真容器探针需单独授权。
+
+## 后续修复落地（2026-11-24，用户授权「完整修复」）
+
+缺陷 1–4 已全部修复，四条均走红→绿→变异红→恢复绿；公共 API 快照零 diff（均 private 实现 + 注释勘正）。
+
+| 缺陷 | 落点 | 修法 | 锁定测试（变异红） |
+|---|---|---|---|
+| 1（P2） | `RabbitMqBroker.cs` | 订阅 `consumer.ShutdownAsync`，`Initiator` + `linkedCts` 双保险区分正常关停；两处退订成对；三处声明注释勘正 | `SubscribeAsync_WiresShutdownEventWithInitiatorGuard` / `SubscriptionDispose_UnsubscribesShutdownEventBeforeCtsDispose`；集成测试补 `IsFalse()` 断言 |
+| 2（P3） | `PalOrmPostgreSqlOutboxNotifier.cs` | 补非关停 OCE 的 Error 分支（对齐 Dapper） | `BothStacks_FireBatchProcessAsync_HaveSameCatchBranches` |
+| 3（P3） | `PostgreSqlOutboxNotifier.cs` | OCE 退避 `None` → `stoppingToken` | `DapperExecuteAsync_OceBackoff_UsesStoppingToken` |
+| 4（P3） | `StreamRunRegistry.cs` | `FinishAsync` Failed 态补 `_logger.Error(failure, ...)` | `FinishAsync_FailedState_LogsExceptionObjectAtErrorLevel` |
+
+**方法学教训**：缺陷 1 的初版源码级测试用全文 `Contains`，把「注释掉的订阅」也算命中，变异态未转红（假绿）。改为逐行扫描并跳过 `//` 注释行后变异红成立。这是 v3 §6「验证验证者」纪律的又一次实证，缺陷 2/3/4 的锁定测试均沿用该形态（跳过注释行）。
+
+**未决**：真容器行为探针（Rabbit 空闲断连、Dapper 关停计时）仍未跑，本轮按 E3 源码级证据落地；如需 E1 运行复现另需真 broker 授权。1 E4 证伪与 16 死角维持原状。

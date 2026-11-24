@@ -393,6 +393,15 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
             await grace.CancelAsync().ConfigureAwait(false); // 终态：宽限计时不再有意义
             grace.Dispose();
         }
+        // R18 审计缺陷 4：生产者异常（HandleAsync 枚举中途抛非 OCE）此前只在 Debug 记
+        // 类型名，默认 Information 级别下根因完全不可见——StreamFailed 计数器与 span
+        // status 只给「失败 N 次/类型名」，异常对象（消息 + 堆栈）无任何出口。
+        // 与同文件 StreamToAsync 的 attach 失败、EndpointExtensions 的普通流式读对齐，
+        // Failed 态补一条带异常对象的 Error 日志（Debug 的类型名摘要保留，便于低级别排障）。
+        if (_logger is not null && state == StreamRunState.Failed && failure is not null)
+        {
+            _logger.Error(failure, $"Stream run {_runId}: Failed after {produced} item(s)");
+        }
         if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
         {
             _logger.Debug(failure is null
