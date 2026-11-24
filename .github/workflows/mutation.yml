@@ -16,6 +16,17 @@ name: Mutation
 #   不依赖本工作流的 schedule；
 # - 新增 Messaging/CQRS 测试工程的 stryker 配置 + 本文件 step 属**放弃范围**（新外部行为，
 #   超出修复方案 v4 边界）。
+#
+# 2026-11-24（R16 裁决：mutation 基数问题收口）：
+# - **mutation-replay 为唯一权威信号源**：`scripts/mutation-probe.cs` 从 TOOL 提升为
+#   workflow 门禁 step，退出码 1 即 fail。该探针证明「拒绝过吗」这一轴：注入语义存活体后
+#   目标测试必须转红（实测 2/2 探针转红，318 测试中 2 失败、49 测试中 41 失败），
+#   不依赖被 filter 吃掉后的个位数 Stryker 基数。
+# - **Stryker 降为趋势观察**：保留 schedule 与报告上传，但 continue-on-error: true。
+#   thresholds.break=95 建立在 152 created→12 tested、2310 created→35 tested
+#   （422 CompileError）的基数上，个位数上无区分度，不能作为通过/失败条件。
+# - 「覆盖了多少」这一半仍未解决：本工作流只证明给定坏变异时测试能拒绝，
+#   不计算 mutation score。扩大到 Messaging/CQRS/EFCore 时另立范围。
 on:
   workflow_dispatch:
   schedule:
@@ -41,11 +52,20 @@ jobs:
       - name: Restore local tools
         run: dotnet tool restore
 
+      # R16 裁决：权威门禁——注入语义存活体后目标测试必须转红。
+      # 该探针不修改工作树（隔离副本上改写→跑测试→finally 还原），退出码 1 即 fail。
+      - name: Mutation replay gate (authoritative)
+        run: dotnet run scripts/mutation-probe.cs
+
+      # 趋势观察：Stryker 分数建立在被 filter 吃掉后的个位数基数上，无区分度，
+      # 不再作为通过条件；保留报告供历史趋势与扩面参考。
       - name: Mutation baseline (Compression)
+        continue-on-error: true
         working-directory: test/PalDDD.Compression.Tests
         run: dotnet stryker --config-file stryker-config.json
 
       - name: Mutation baseline (Transactions lease policy)
+        continue-on-error: true
         working-directory: test/PalDDD.Transactions.Tests
         run: dotnet stryker --config-file stryker-config.json
 

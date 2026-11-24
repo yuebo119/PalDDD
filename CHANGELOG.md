@@ -42,6 +42,7 @@
 
 ### Documentation
 
+- **mutation 基数口径收口（R16 裁决，2026-11-24）**：`.github/workflows/mutation.yml` 改以 `scripts/mutation-probe.cs` 为唯一权威门禁 step（退出码 1 即 fail），Stryker 两条 baseline 降为趋势观察（`continue-on-error: true`）。依据：Stryker 分数建立在被 filter 吃掉后的个位数基数上（152 created→12 tested、2310 created→35 tested，422 CompileError），`thresholds.break=95` 在个位数上无区分度；而 mutation-replay 探针证明「拒绝过吗」这条轴，本轮实测 2/2 转红（MySqlLeasePolicy 反转后 318 测试中 2 失败、CompressionProvider 反转后 49 测试中 41 失败），工作树零残留。`gate-audit` 中 `mutation-probe` 由 TOOL 自动升级为 OK（接线 + selftest/探针自证）。**仍明示未解决**：「覆盖了多少」这一半不在本工作流范围，Messaging/CQRS/Transactions.EFCore 改动文件零覆盖，扩大需另立范围。
 - **版本声明四方同步（2026-11-23）**：README 中英「生产环境有谁在用」段从预览叙述改为 GA 状态（`5.0.0` 于 2026-11-22 由 `5.0.0-preview.1` 转正，发布时间点待 tag），依赖声明同步为 .NET 11 GA `11.0.0` + PalORM `6.9.0` + TUnit `1.87.12`；`docs/conventions.md` §10.6 与 `docs/testing.md` §2.1 的测试框架声明同步为 TUnit `1.87.12` + MTP `2.5.3`（实际解析值，由 `project.assets.json` 核对）。失实成因是升级轮只同步了 `Directory.Packages.props` 与 CHANGELOG，未回扫「当前版本」叙述面；`doc-consistency` 与 `count-audit` 两门禁均不管版本号与发布状态，属机械防线已知边界。
 - **README（中英）许可证说明按发布版本划分重写（2026-11-23）**：参照上游 PalORM 许可说明结构改为「划分总纲 + 版本区间列表 + 当前仓库授权」结构，区间边界经 NuGet.org 逐版本 nuspec 实证（下载 12 个已发布 nupkg 读 nuspec）：`v1.0.0` ~ `v4.0.0` 共 10 个已发布版本（2026-07-30 ~ 2026-10-11）为 AGPL-3.0-or-later，`v5.0.0-preview.1`（2026-10-27 起）为 Apache-2.0；`v1.0.0-preview.1`（2026-07-04）实证为 MIT，属预览版，按维护者裁决不列入公开说明。许可口径不变（v5.0 起 Apache-2.0、更早已发布版本不追溯），纯结构优化，消费方锁定旧版本时的合规评估路径更清晰。
 
