@@ -177,6 +177,40 @@ public sealed class PostgreSqlOutboxNotifierTests
         await Assert.That(hosted.OfType<PostgreSqlOutboxNotifier>().Count()).IsEqualTo(1);
     }
 
+    /// <summary>
+    /// R17 审计发现 D1 锁定：StopAsync 必须等待在飞 fire 任务收尾。
+    /// <para>
+    /// 修前本类继承 BackgroundService 但不 override StopAsync——base 只等 ExecuteAsync，
+    /// 不等 :197 的游离 Task.Run。宿主随后 Dispose 释放 _processGate，在飞批只能靠 finally
+    /// 的 ObjectDisposedException 兜底，最后一批终态可能未落库（租约悬挂至超时重投）。
+    /// 本测试注入一个未完成的 fire Task 并验证 StopAsync 不提前返回——纯行为断言，
+    /// 不依赖真库（未 StartAsync 时 base.StopAsync 同步完成）。
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task StopAsync_WaitsForInFlightFireTask()
+    {
+        var (logger, scopeFactory) = CreateDeps();
+        await using var dataSource = CreateDataSource();
+        var notifier = new PostgreSqlOutboxNotifier(dataSource, scopeFactory, logger);
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var field = typeof(PostgreSqlOutboxNotifier).GetField(
+            "_fireTask", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        await Assert.That(field).IsNotEqualTo(null)
+            .Because("必须保留 _fireTask 字段以跟踪在飞 fire 任务");
+        field!.SetValue(notifier, tcs.Task);
+
+        var stopTask = notifier.StopAsync(CancellationToken.None);
+        await Assert.That(stopTask.IsCompleted).IsFalse()
+            .Because("StopAsync 必须等待在飞 fire 任务收尾；修前无 override，base.StopAsync 立即完成");
+
+        tcs.SetResult();
+        await stopTask;
+        await Assert.That(stopTask.IsCompletedSuccessfully).IsTrue();
+        notifier.Dispose();
+    }
+
     [Test]
     public async Task Dispose_IsIdempotent_DoesNotThrow()
     {

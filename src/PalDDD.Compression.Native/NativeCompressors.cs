@@ -88,10 +88,12 @@ internal sealed class LZ4Compressor : ICompressor
         // 输出走增长缓冲；每轮 Advance 后即校验上限，超限立即中止——不再等全量分配完成。
         // ITM-219 修复保留：单轮缓冲增长仍可能触发 OOM，catch 转为可处理的受控异常而非进程崩溃。
         // v38 P3：补 ex 内层异常保根因堆栈（ITM-219 只声明行为权衡未覆盖可诊断性）。
+        // R17 D2：buffer/decoder 提到 try 外，finally 成对 Release——修前只 Rent 不 Release，
+        // 解压炸弹异常后 64MB 级槽留在 ThreadStatic（R12 C-17 漏格，长驻线程永久持有）。
+        using var decoder = new LZ4Decoder();
+        var buffer = DecompressBufferPool.Rent(); // C6（2026-10-09 优化轮）：线程槽复用，见 DecompressBufferPool 头注
         try
         {
-            using var decoder = new LZ4Decoder();
-            var buffer = DecompressBufferPool.Rent(); // C6（2026-10-09 优化轮）：线程槽复用，见 DecompressBufferPool 头注
             var source = compressed;
             long totalWritten = 0;
 
@@ -117,6 +119,11 @@ internal sealed class LZ4Compressor : ICompressor
         {
             throw new System.IO.InvalidDataException(
                 $"LZ4 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
+        }
+        finally
+        {
+            // R17 D2：成功/炸弹异常都立即归还大缓冲（超阈值弃槽），对齐 SystemCompressor Brotli 路径。
+            DecompressBufferPool.Release(buffer);
         }
     }
     // R1（C-F6）：MapLevel 已删——级别映射并入 NativeCompressionOptionsCache 三档静态缓存
@@ -169,10 +176,11 @@ internal sealed class ZStandardCompressor : ICompressor
         // v38 P3：补 ex 内层异常保根因堆栈（ITM-219 只声明行为权衡未覆盖可诊断性）。
         // C6（2026-10-09 优化轮）：增长缓冲改 DecompressBufferPool 线程槽复用（原每调用
         // new ArrayBufferWriter 及倍增序列为解压分配大头）；异常残留由下一次 Rent 的 Clear 清除
+        // R17 D2：buffer/decoder 提到 try 外，finally 成对 Release（同 LZ4 路径）。
+        using var decoder = new ZstandardDecoder();
+        var buffer = DecompressBufferPool.Rent();
         try
         {
-            using var decoder = new ZstandardDecoder();
-            var buffer = DecompressBufferPool.Rent();
             var source = compressed;
             long totalWritten = 0;
 
@@ -198,6 +206,11 @@ internal sealed class ZStandardCompressor : ICompressor
         {
             throw new System.IO.InvalidDataException(
                 $"ZStandard 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
+        }
+        finally
+        {
+            // R17 D2：成功/炸弹异常都立即归还大缓冲，对齐 LZ4 与 SystemCompressor 路径。
+            DecompressBufferPool.Release(buffer);
         }
     }
     // R1（C-F6）：MapLevel 已删——级别映射并入 NativeCompressionOptionsCache 三档静态缓存
@@ -258,10 +271,11 @@ internal sealed class OpenZLCompressor : ICompressor
         // 流式 span 直解（形态对齐同库 BrotliCompressor.Decompress）：每轮 Advance 后即校验上限，
         // 超限立即中止——不再等全量分配完成。ITM-219：OOM → 受控异常（同 LZ4 路径）。
         // v38 P3：补 ex 内层异常保根因堆栈（ITM-219 只声明行为权衡未覆盖可诊断性）。
+        // R17 D2：buffer/decoder 提到 try 外，finally 成对 Release（同 LZ4 路径）。
+        using var decoder = new ZstandardDecoder();
+        var buffer = DecompressBufferPool.Rent(); // C6（2026-10-09 优化轮）：线程槽复用，见 DecompressBufferPool 头注
         try
         {
-            using var decoder = new ZstandardDecoder();
-            var buffer = DecompressBufferPool.Rent(); // C6（2026-10-09 优化轮）：线程槽复用，见 DecompressBufferPool 头注
             var source = compressed;
             long totalWritten = 0;
 
@@ -289,6 +303,11 @@ internal sealed class OpenZLCompressor : ICompressor
             // 本类算法标识为 OpenZL（底层虽为 Zstd 实现，排障按算法标识检索），勘正为 OpenZL
             throw new System.IO.InvalidDataException(
                 $"OpenZL 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
+        }
+        finally
+        {
+            // R17 D2：成功/炸弹异常都立即归还大缓冲，对齐 LZ4/ZStandard 路径。
+            DecompressBufferPool.Release(buffer);
         }
     }
     // R1（C-F6）：MapLevel 已删——级别映射并入 NativeCompressionOptionsCache 三档静态缓存

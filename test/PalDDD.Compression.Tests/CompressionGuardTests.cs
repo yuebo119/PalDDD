@@ -48,6 +48,85 @@ public sealed class CompressionGuardTests
         await Assert.That(nextStream.Capacity).IsLessThan(300 * 1024);
     }
 
+    /// <summary>
+    /// R17 审计发现 D2 锁定：三个原生解压器在异常路径（解压炸弹）必须调用
+    /// <c>DecompressBufferPool.Release</c> 弃用超大线程槽。
+    /// <para>
+    /// 修前 LZ4/ZStandard/OpenZL 的 Decompress 只 Rent 不 Release——bomb 抛异常后
+    /// 64MB 级缓冲留在 ThreadStatic 槽，直到同线程下次 Rent 才弃用（长驻线程永久持有）。
+    /// 本测试在同一测试线程上：① 先建立干净小槽；② 跑 bomb 解压使其抛异常；
+    /// ③ 再 Rent 断言槽容量已回落。修前槽被污染 → 断言失败。
+    /// </para>
+    /// </summary>
+    [Test]
+    [Arguments(CompressionAlgorithm.LZ4)]
+    [Arguments(CompressionAlgorithm.ZStandard)]
+    [Arguments(CompressionAlgorithm.OpenZL)]
+    public async Task Decompress_OutputBomb_Native_DropsOversizedThreadSlot(CompressionAlgorithm algorithm)
+    {
+        // ① 建立干净基线：Rent 空 writer 后 Release（容量 0，不触发弃槽）；bomb 在同线程复用该槽
+        var baseline = DecompressBufferPool.Rent();
+        DecompressBufferPool.Release(baseline);
+
+        var compressor = GetCompressor(algorithm, native: true);
+        var bomb = new byte[DecompressionGuard.MaxOutputBytes + 1];
+        var compressed = compressor.Compress(bomb);
+
+        // ② bomb 解压必然抛输出上限异常（既有测试已锁此行为）
+        await Assert.That(() => compressor.Decompress(compressed.Span)).Throws<InvalidDataException>();
+
+        // ③ 同一线程再 Rent：修后异常路径 Release 弃用超大槽，新槽容量须远小于上限；
+        //    修前槽保留 bomb 增长的 64MB 级容量 → 断言失败。
+        var after = DecompressBufferPool.Rent();
+        await Assert.That(after.Capacity).IsLessThan(300 * 1024)
+            .Because($"{algorithm} 解压炸弹异常路径必须弃用超大线程槽（修前只 Rent 不 Release）");
+    }
+
+    /// <summary>
+    /// R17 审计发现 D2 锁定：三个原生解压器的 each Decompress 必须成对调用
+    /// <c>DecompressBufferPool.Rent</c> 与 <c>Release</c>。
+    /// <para>
+    /// 修前 LZ4/ZStandard/OpenZL 的 Decompress 只 Rent 不 Release——解压炸弹抛异常后
+    /// 64MB 级缓冲留在 ThreadStatic 槽（R12 C-17 修前形态），长驻线程永久持有。
+    /// 行为探针受 TLS 线程归属与 TUnit 调度影响不稳定，故用源码级不变式：
+    /// Rent 与 Release 调用数必须相等（SystemCompressor 的 Brotli 路径已成对，是参照）。
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task NativeDecompressors_PairRentWithRelease()
+    {
+        var path = Path.Combine(FindRepoRoot(), "src", "PalDDD.Compression.Native", "NativeCompressors.cs");
+        var text = await File.ReadAllTextAsync(path);
+
+        var rentCount = CountOccurrences(text, "DecompressBufferPool.Rent()");
+        var releaseCount = CountOccurrences(text, "DecompressBufferPool.Release(");
+
+        await Assert.That(rentCount).IsEqualTo(3)
+            .Because("三个原生解压器各 Rent 一次（LZ4/ZStandard/OpenZL）");
+        await Assert.That(releaseCount).IsEqualTo(rentCount)
+            .Because($"修前 Release=0/Rent=3：解压炸弹后 64MB 槽不弃用（实际 Rent={rentCount}/Release={releaseCount}）");
+    }
+
+    private static int CountOccurrences(string text, string token)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(token, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += token.Length;
+        }
+        return count;
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null && !File.Exists(Path.Combine(dir, "PalDDD.slnx")))
+            dir = Path.GetDirectoryName(dir);
+        return dir ?? throw new InvalidOperationException("未定位仓库根（PalDDD.slnx）");
+    }
+
     private static ICompressor GetCompressor(CompressionAlgorithm algorithm, bool native)
     {
         var services = new ServiceCollection();

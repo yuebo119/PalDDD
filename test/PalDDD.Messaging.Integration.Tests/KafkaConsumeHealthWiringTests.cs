@@ -92,6 +92,33 @@ public sealed class KafkaConsumeHealthWiringTests
             .Because($"以下终止 catch 未置 _consumeFaultReason（worker 死而 /health 恒绿）：{string.Join("; ", missing.Select(c => $"KafkaBroker.cs:{c.Line} {c.Header}"))}");
     }
 
+    /// <summary>
+    /// R17 审计发现 D8 锁定：消费线程故障终止后重新 SubscribeAsync 恢复消费时，
+    /// 必须清除粘滞的 <c>_consumeFaultReason</c>——否则消费已恢复而 /health 永久 Unhealthy，
+    /// 实例被摘流量直到 broker 重启（Rabbit FIX-020 同族已修恢复清位，Kafka 未同步）。
+    /// <para>
+    /// 行为探针需真 broker 注入「消费线程异常终止 → 重订阅」，同既有测试的取舍用源码级
+    /// 不变式：SubscribeAsync 体内必须有清零，且位于 SetConsumeTask（消费线程启动成功）
+    /// 之后——清理点过早会在启动失败时误报健康。
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task SubscribeAsync_ClearsFaultReasonAfterConsumeTaskStarted()
+    {
+        var path = Path.Combine(FindRepoRoot(), "src", "PalDDD.Messaging.Kafka", "KafkaBroker.cs");
+        var text = await File.ReadAllTextAsync(path);
+
+        var subscribeStart = text.IndexOf("public override ValueTask<IAsyncDisposable> SubscribeAsync", StringComparison.Ordinal);
+        await Assert.That(subscribeStart).IsGreaterThan(-1).Because("未定位 SubscribeAsync");
+
+        var setTask = text.IndexOf("subscription.SetConsumeTask(consumeTask)", subscribeStart, StringComparison.Ordinal);
+        await Assert.That(setTask).IsGreaterThan(subscribeStart).Because("未定位消费线程启动点");
+
+        var clear = text.IndexOf("_consumeFaultReason = null", subscribeStart, StringComparison.Ordinal);
+        await Assert.That(clear).IsGreaterThan(setTask)
+            .Because($"SubscribeAsync 必须在消费线程启动成功后清除粘滞故障位（修前全文零清除，/health 永久 Unhealthy）；实际 clear={clear}/setTask={setTask}");
+    }
+
     private static string FindRepoRoot()
     {
         var dir = AppContext.BaseDirectory;

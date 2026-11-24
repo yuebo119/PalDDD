@@ -610,6 +610,7 @@ static class PalDDD.Dapper.PostgreSql.PostgreSqlMultiHost
 class PalDDD.Dapper.PostgreSql.PostgreSqlOutboxNotifier
   ctor(Npgsql.NpgsqlDataSource dataSource, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, PalDDD.Core.Logging.IPalLogger<PalDDD.Dapper.PostgreSql.PostgreSqlOutboxNotifier> logger, System.TimeProvider timeProvider, System.String channelName)
   method System.Void Dispose()
+  method System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken cancellationToken)
 class PalDDD.Dapper.PostgreSql.PostgreSqlPipeline
   ctor(System.Data.Common.DbConnection connection)
   method System.Void Add(System.String sql, Npgsql.NpgsqlParameter[] parameters)

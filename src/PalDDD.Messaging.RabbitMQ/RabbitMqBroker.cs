@@ -317,9 +317,14 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
 
         var exchange = descriptor.Name;
-        var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
+        // R17 D9：raw 路径补 publish span（对齐对象路径 :229）——修前整条路径无 span，
+        // 链路追踪缺发布跳。FIX-016 的教训：span 必须在 try 外建，catch 分支才能 SetStatus(Error)。
+        using var publishActivity = PalActivitySource.StartBrokerPublish(descriptor.Name, descriptor.Name);
         try
         {
+            // R17 D9：exchange 声明移入 try（对齐对象路径 FIX-011）——修前位于 try 外，
+            // broker 不可达时声明失败逃逸出 BrokerPublishFailed 计数与 span Error。
+            var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
             await _channel.BasicPublishAsync(
                 exchange: cachedExchange,
                 routingKey: CachedString.Empty,
@@ -334,12 +339,14 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable, IMessa
                 $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
                 $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
             // v4 批 D（S3）：raw 发布路径同计
+            publishActivity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // F2（2026-11-08）：raw 路径非 NO_ROUTE 的发布失败同计（对象路径同形勘正）。
+            publishActivity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             PalMetrics.BrokerPublishFailed.Add(1);
             throw;
         }

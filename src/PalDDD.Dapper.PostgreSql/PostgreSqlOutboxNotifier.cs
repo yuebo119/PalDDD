@@ -88,11 +88,58 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
     private DateTimeOffset _lastSelfNotify = DateTimeOffset.MinValue;
     private readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(30);
 
-    /// <summary>释放 SemaphoreSlim</summary>
+    // R17 审计发现 D1（2026-11-24）：在飞 fire 任务引用。修前 `_ = Task.Run(...)` 是脱离
+    // ExecuteAsync 的游离任务，BackgroundService.StopAsync 只等 ExecuteAsync 不等它——
+    // 宿主随后 Dispose 释放 _processGate，在飞批的 finally 只能靠 ObjectDisposedException
+    // 兜底，最后一批终态标记可能未落库（租约悬挂至超时重投），且 ODE 被吞无信号。
+    // 现持有引用并由 StopAsync 等待收尾（对齐 PalOrm 版 PalOrmPostgreSqlOutboxNotifier
+    // R16 F2 的修法）；finally 清引用，未赋值时表示无在飞批。
+    private Task? _fireTask;
+
+    /// <summary>释放 SemaphoreSlim。</summary>
+    /// <remarks>
+    /// 正常关停路径由宿主先调 <see cref="StopAsync"/> 等待在飞 fire 任务收尾后再 Dispose，
+    /// 故此处不再同步等待（Dispose 为同步 void，等待需有界放弃语义）。若宿主异常路径跳过
+    /// StopAsync，在飞批的 gate Release 仍由 <see cref="FireBatchProcessAsync"/> 的
+    /// ObjectDisposedException 兜底（无信号但进程已在退出）——与修前行为一致。
+    /// </remarks>
     public override void Dispose()
     {
         _processGate.Dispose();
         base.Dispose();
+    }
+
+    /// <summary>
+    /// 停止监听并等待在飞批处理收尾（R17 D1）。
+    /// <para>
+    /// 顺序：① base.StopAsync 取消 stoppingToken 并等 ExecuteAsync 退出（不再产生新 fire 任务）
+    /// → ② 等待在飞 fire 任务协作收尾。等待不用宿主传入的 token：关停已在推进，宿主 token
+    /// 常用于限制收尾时长，沿用它会在限时取消时退回「不等」的旧语义；批处理内部已收到
+    /// stoppingToken 取消信号，其收尾时长受 ProcessBatchAsync 自身协作语义约束。
+    /// </para>
+    /// </summary>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken).ConfigureAwait(false);
+
+        var inFlight = _fireTask;
+        if (inFlight is not null)
+        {
+            try
+            {
+                await inFlight.ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // FireBatchProcessAsync 已自行 catch-log 全部异常，此处仅防御：
+                // 关停路径不得因批处理异常中断后续释放。
+                _logger.Warning($"PostgreSQL NOTIFY in-flight batch faulted during shutdown: {ex.Message}");
+            }
+            catch (OperationCanceledException)
+            {
+                // 批处理按协作语义取消收尾，属预期路径。
+            }
+        }
     }
 
     /// <summary>初始化 PostgreSQL Outbox 通知器。</summary>
@@ -194,7 +241,8 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                         // 任务不执行、已获取的 gate 永不释放。去掉 token 后任务必然运行，
                         // 由 FireBatchProcessAsync 内部协作取消 + finally 兜底释放。
 #pragma warning disable S8949 // 刻意不向 Task.Run 传 token（调度前取消会使 gate 永不释放，见上方注释）
-                        _ = Task.Run(() => FireBatchProcessAsync(stoppingToken));
+                        // R17 D1：持有引用供 StopAsync 等待收尾（对齐 PalOrm 版）。
+                        _fireTask = Task.Run(() => FireBatchProcessAsync(stoppingToken));
 #pragma warning restore S8949
                     }
                 }
@@ -264,6 +312,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
         }
         finally
         {
+            // R17 D1：清在飞引用（StopAsync 取走引用后由它等待本 Task；本 Task 的 finally
+            // 先清引用再释放 gate，与 PalOrm 版同序）。
+            _fireTask = null;
+
             // v38 P3：自通知节流检查与 _lastSelfNotify 读改写移到 gate Release 之前——
             // gate（SemaphoreSlim）内串行化读改写，消除原"Release 后节流"窗口：两个 fire
             // 任务（前批 finally 与下批 Task.Run 后的 finally）在 gate 外并发读到同一旧

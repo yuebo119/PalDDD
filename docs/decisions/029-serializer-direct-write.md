@@ -27,9 +27,11 @@
    `BasicPublishAsync(body:)`（入口 Clear 兼作异常复位；前提：RabbitMQ.Client 7 在
    发布完成前已消费 body——AMQP 帧组装即拷贝，confirm 追踪只存序号）；
 4. **Kafka 不改**（Confluent API body 为 <c>byte[]</c>，ToArray 不可避免——其发布处
-   已有勘正注释在案）；**MemoryPack 暂不覆写**（1.21.4 的 IBufferWriter 重载仅泛型形态，
-   无 (writer, Type, object) 对应重载，本地编译实证；T=object 泛型动态语义未验证——
-   P0 #4 纪律不臆测，走 DIM 回退，原生直写待验证后跟进）。
+   已有勘正注释在案）；**MemoryPack 已覆写为真零拷贝**（2026-11-23 延后段兑现，commit
+   a2b6434）：原「1.21.4 仅有泛型形态、无 (writer, Type, object) 对应重载」经反射枚举
+   证伪——1.22.0 存在 <c>Serialize&lt;TBufferWriter&gt;(Type, in writer, object, options)</c>
+   非泛型直写重载。实测复用 ArrayBufferWriter 直写 0.0 B/op（内存重载 72.0 B/op），
+   产出逐字节一致；AOT 语义不变（仍依赖源生成器静态注册的 Formatter，未注册时安全失败）。
 
 **重要调用形态约束（红证明实证）**：DIM 成员经**具体类型**不可见（CS1501），消费方
 须持接口类型引用（RabbitMqBroker 字段即 <c>IMessageSerializer</c> ✓）；Json 覆写为
