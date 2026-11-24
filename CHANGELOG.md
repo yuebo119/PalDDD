@@ -5,76 +5,17 @@
 **消费者可见变更在上**（Added/Changed/Deprecated/Removed/Fixed/Security + 本项目扩展 Dependencies/Documentation/Tests），**工程过程叙事入附录**；数字必须可验证；`[Unreleased]` 与发布段**同次提交转正、先于 tag**。
 
 > **当前版本**：`VersionPrefix=5.0.0` / `VersionSuffix=`（已清空，2026-11-22 GA 轮转正；见 `Directory.Build.props`；5.0.0 升位依据：公共 API 快照 +468/−64 的签名破坏面——`AddPalFullStack` 扩展与 `MySqlLeasePolicy` 类移除、ADR-035 `ExecutedStepKeys` `Collection<string>`→`List<string>`、`AddPalOrm*` 三扩展与多处 ctor/方法签名变更——加批模式回放 fail-fast 等行为破坏，按 release.md 判据「破坏性 API 变更」定为 Major，与源码既有 `[Obsolete("... will be removed in v5.0.0")]` 预告一致；4.0.0 升位依据：ADR-026 契约窗口——③④ `IPalOutboxStore` 四同步方法删除改异步签名（含 `AddMessagesAsync` 补 ct 尾参）与既有 `Dispatcher.Register(Type,Type,Type,RequestExecutor)` 重载加 `needsScope` 尾参属**签名破坏**，② Outbox 终态写 fencing 契约跨栈统一属**行为破坏**，按 release.md 判据「破坏性 API 变更」定为 Major；公共 API 快照 +48/−27（排除程序集版本引用行，含 `VersionProbeRow` 属性 v/v2→V/V2 命名合规改名）；3.3.0 升位依据：零公共 API 变化（快照唯一差异为程序集版本引用行 3.2.0.0 → 3.3.0.0）、无破坏性行为变更，变更面为依赖消费者可见上移（PalORM 五包跨上游主版本线 5.6.0→6.3.1 / Confluent.Kafka 2.16.0 / NativeCompressions 跨 1.0 稳定线 1.0.1）与 Kafka broker 后台可观测增强，按 release.md 判据「向后兼容的功能增强」定为 Minor；3.2.0 升位依据：新增 3 项公共 API 均向后兼容（预热参数带默认值 / 新增重载 / 可选标注），公开 API 快照 653 行新增、1 行删除（唯一删除为程序集版本引用 3.1.0.0 → 3.2.0.0），唯一争点（压缩损坏帧异常类型统一为 `InvalidDataException`）经裁决按破坏面量级定为 Minor，非 Major；3.1.0 的升位依据是两处三栈行为对齐属**放宽/对齐**而非转严，故为 Minor；3.0.0 的升位依据是 M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务的"静默错误转 fail-fast"，性质不同）
-> **发布状态**：5.0.0 已转正待发布（2026-11-22 GA 轮清空 VersionSuffix；内容 = preview.1 + 预览期修订族，见 `[5.0.0]` 段转正说明）；5.0.0-preview.1 已发布（2026-10-27，workflow_dispatch 预览通道）；4.0.0 已发布（2026-10-11，tag `v4.0.0`，SemVer Major——ADR-026 契约窗口（③④ 接口异步化签名破坏 + ② fencing 行为统一 + ① Dispatcher 实例注册路径）+ ADR-025 MySQL SKIP LOCKED 租约 + EPSL 性能修复族 + PalORM 6.4.1 依赖上移）；3.3.0 已发布（2026-10-08，tag `v3.3.0` → 本提交，SemVer Minor——零公共 API 变更（快照唯一差异为版本引用行 3.2.0.0 → 3.3.0.0），变更面为依赖消费者可见上移与 Kafka 后台可观测增强，无破坏性变更）；3.2.0 已发布（2026-09-25，tag `v3.2.0` → 本提交，SemVer Minor——新增公共 API 向后兼容 + 压缩错误路径异常类型统一，快照 653+/1−（唯一删除为版本引用行）无签名破坏）；3.1.0 已发布（2026-09-23，tag `v3.1.0`，SemVer Minor——三栈行为对齐 + 版本承诺守卫类变更，无破坏性 API 变更）；3.0.0 已发布（2026-09-20 tag `v3.0.0`，SemVer Major——M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务 fail-fast 两处行为破坏性变更）；2.2.0 已于 2026-09-15 发布（tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag `v4.0.0` 之后的变更见 `[Unreleased]`。
+> **发布状态**：5.0.0 已转正并完成发行前准备（2026-11-24 用户裁决全部并入 `[5.0.0]` 段——含 11-23/11-24 的 91 提交，见段首说明；本地 changelog-check / build / test / pack / AOT 全绿；tag 与 NuGet 发布待用户显式授权，尚未执行）；5.0.0-preview.1 已发布（2026-10-27，workflow_dispatch 预览通道）；4.0.0 已发布（2026-10-11，tag `v4.0.0`，SemVer Major——ADR-026 契约窗口（③④ 接口异步化签名破坏 + ② fencing 行为统一 + ① Dispatcher 实例注册路径）+ ADR-025 MySQL SKIP LOCKED 租约 + EPSL 性能修复族 + PalORM 6.4.1 依赖上移）；3.3.0 已发布（2026-10-08，tag `v3.3.0` → 本提交，SemVer Minor——零公共 API 变更（快照唯一差异为版本引用行 3.2.0.0 → 3.3.0.0），变更面为依赖消费者可见上移与 Kafka 后台可观测增强，无破坏性变更）；3.2.0 已发布（2026-09-25，tag `v3.2.0` → 本提交，SemVer Minor——新增公共 API 向后兼容 + 压缩错误路径异常类型统一，快照 653+/1−（唯一删除为版本引用行）无签名破坏）；3.1.0 已发布（2026-09-23，tag `v3.1.0`，SemVer Minor——三栈行为对齐 + 版本承诺守卫类变更，无破坏性 API 变更）；3.0.0 已发布（2026-09-20 tag `v3.0.0`，SemVer Major——M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务 fail-fast 两处行为破坏性变更）；2.2.0 已于 2026-09-15 发布（tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag `v4.0.0` 之后的变更已全部并入 `[5.0.0]` 段（2026-11-24 发行前收口）。
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---
 
 ## [Unreleased]
 
-### Added
+## [5.0.0] — 2026-11-24
 
-- **PalORM PG 栈 LISTEN/NOTIFY Outbox 唤醒（2026-11-23）**：新增 `PalOrmPostgreSqlOutboxNotifier`（IHostedService）与注册入口 `AddPalOrmPostgreSqlOutboxNotifier(services, connectionString, channelName)`——PG 跨进程唤醒此前仅在 Dapper 栈，PalORM 栈的 Outbox 端到端延迟受 PeriodicTimer 轮询周期钳制。监听载体是 PalORM 6.9.0 的 `PgNotificationListener`（30s 心跳保活 + 线性递增全量抖动重连），NOTIFY 到达即触发 `OutboxBatchProcessor`，通道契约与 Dapper 版完全一致（`outbox_channel` + 过渡表触发器，同一库两栈共用触发器面）。公共 API 快照 +6。真库通路（wslc pg186 实测 NOTIFY 送达）与非真库面（通道白名单/DI 注册/幂等释放，22 用例）均验证。
-- **IPalLogger 插值重载与零分配关闭路径（2026-11-23）**：新增非泛型基接口 `IPalLogger`（承载 `IsEnabled`，供插值 handler 构造使用）与四个级别 handler（`PalDebugLogHandler` / `PalInformationLogHandler` / `PalWarningLogHandler` / `PalErrorLogHandler`）。`IPalLogger<T>` 每个级别新增一个插值重载，调用形态为 `_logger.Debug($"id={id} name={name}")`。**关闭态零分配**：级别未启用时编译器跳过整个插值表达式（实测 N=2000：MEL 参数化重载 96.0 B/op → 0.0 B/op）；启用态 336.0 → 约 196.0 B/op。纯加法，旧实现者走 DIM 默认实现零迁移成本。公共 API 快照 +51/−1（唯一删除为 `IPalLogger<T>` 的 `IsEnabled` 上移到基接口）。
-
-### Performance
-
-- **Rabbit 批量结算单帧聚合（multiple:true，2026-11-23）**：批量订阅（`SubscribeBatchAsync`）的批次级确认在安全前提下压成单帧——默认形态（每订阅独立 consumer channel + 串行 dispatch，`ConsumerDispatchConcurrency` 默认 1）下 deliveryTag 严格单调入批，`BasicAckAsync(maxTag, multiple: true)` 一帧等价逐条 N 帧（64 条批 64 帧 → 1 帧）。实现为程序集内部的 `IBatchAckAggregator` 扩展点（`MessageBatchAck` 首成员探测路由，Kafka/NoOp 形态行为零变化）；聚合开关判据提为纯函数 `CanAggregateBatchAck`（白盒判定表锁定：共享 channel 或并发 dispatch >1 恒回退逐条）。共享 channel 模式（`UseSharedConsumerChannel=true`）与 `ConsumerDispatchConcurrency > 1` 下自动回退逐条，语义恒正确。帧级回归依赖三层锁定：聚合路由单测（变异验证红/绿）、判定表单测、真库语义探针（64 条批 channel 存活 + 零重投 + 零 Warning，11/11 绿）。
-- **RabbitMQ 发布接入 7.3.0 bodyOwner（免整载荷拷贝，2026-11-23）**：`BasicPublishAsync(..., bodyOwner:)` 把 `PooledBodyWriter` 的所有权移交客户端，由客户端在发送完成或发布失败后释放一次。7.2.x 无 owner 时客户端必须在确认与流控两次可挂起 await 之后把 body 复制进内部缓冲，本形态省掉该拷贝。配套加固：`PooledBodyWriter.Dispose` 加 Interlocked 幂等门（客户端与发布路径 `finally` 各释放一次，重复 Return 同一数组会让两个租用者共享同一缓冲）；发布路径改为 `finally` 兜底，覆盖序列化或 exchange 声明阶段抛出、所有权未转移的路径。
-- **MemoryPack 直写重载兑现（ADR-029 延后段，2026-11-23）**：`MemoryPackMessageSerializer` 覆写 `Serialize(object, descriptor, IBufferWriter<byte>)`，改走 `MemoryPackSerializer.Serialize<TBufferWriter>(Type, in writer, object, options)` 非泛型直写。实测（N=10000，47 B 载荷）：复用缓冲 **0.0 B/op**，原 DIM 回退 72.0 B/op，两者产出逐字节一致。原注释「MemoryPack 1.21.4 无 (writer, Type, object) 重载」经反射枚举证伪并勘正（1.22.0 存在该重载）。
-
-### Fixed
-
-- **R17 刁钻缺陷挖掘九条全量收口（2026-11-24）**：基于 `docs/review/audit-2026-11-24-defect-mining.md`（9 真缺陷 / 3 证伪 / 10 死角），本轮修复八条（D7 历史提交违规另需维护者裁决，不自主改写历史）：
-  - **D1（P2）Dapper-PG 通知器关停不等在飞批处理**：`PostgreSqlOutboxNotifier` 原为 `BackgroundService` 但 `:197` 的 `_ = Task.Run(FireBatchProcessAsync)` 是游离任务——`StopAsync` 只等 `ExecuteAsync`，宿主随后 Dispose 释放 `_processGate`，在飞批只能靠 `ObjectDisposedException` 兜底，末批终态可能未落库（租约悬挂至超时重投）。现新增 `_fireTask` 字段并在 `Task.Run` 处赋值、finally 清引用；override `StopAsync` 在 `base.StopAsync` 后 await 在飞任务（不用宿主 token），对齐 PalORM 版 R16 F2 修法。**公共 API 快照 +1 行**（`PostgreSqlOutboxNotifier.StopAsync(CancellationToken)`，同提交同步）。锁定测试 `StopAsync_WaitsForInFlightFireTask`（行为级，反射注入未完成 Task 验证 StopAsync 不提前返回；变异红）。
-  - **D2（P2）三个原生解压器漏调 `DecompressBufferPool.Release`**：`NativeCompressors` 的 LZ4/ZStandard/OpenZL `Decompress` 只 Rent 不 Release——解压炸弹抛异常后 64MB 级缓冲留在 ThreadStatic 槽（R12 C-17 只接 SystemCompressor 的同族漏格），长驻线程永久持有。现把 buffer/decoder 提到 try 外并加 finally Release（对齐 Brotli 路径）。锁定测试 `NativeDecompressors_PairRentWithRelease`（源码级不变式 Rent=3/Release=3，变异红）。
-  - **D3（P3）Saga 超时告警双发**：`SagaProcessor.CheckTimeoutsAsync` 按 timedOutSteps 逐条记 SagaTimedOut 后又把同一列表传入 `CompensateTimedOutSagaAsync`——后者 ITM-709 抽取时复制了同一循环未删调用方，N 个超时步发 2N 条告警。现删调用方循环，单一发射点保留在补偿方法内。锁定测试 `SingleTimedOutStep_EmitsExactlyOneWarning`（行为级，记录 logger 断言恰好 1 条）。
-  - **D4（P3）MemoryPack 直写落地后文档未同步**：`a2b6434` 已落地真实零拷贝覆写并勘正类注释与 CHANGELOG，但接口 XML doc、ADR-029、performance.md 三处仍称「不覆写/待验证/1.21.4 无重载」。现三处同步为「1.22.0 非泛型直写重载已落地、实测 0 B/op」（三方一致红线）。
-  - **D5（P3）两条流式端点 bindQuery 解析异常未映射 400**：ITM-696 只修了 `MapQuery`，`MapStreamQuery` 与 `MapDetachedStreamQuery` 的同语义 `Guid.Parse`/`int.Parse` 失败仍以 500 逃逸。现两处各加 `FormatException/ArgumentException/OverflowException` 白名单 catch → 400。锁定测试两例（`MapStreamQuery_BindQueryThrowsFormatException_Returns400Not500` / `MapDetachedStreamQuery_...`，行为级）。
-  - **D6（P3）/health「details in logs」无日志落点**：FIX-019 把 Unhealthy 详情换成固定文案并承诺「只进日志」，但 `WriteHealthResponseAsync` 全文件零日志调用，Exception 被丢弃无出口。现从请求作用域解析日志门面，对 Unhealthy 组件逐条记 Error（带异常对象）；无 HTTP 作用域时安全跳过。锁定测试 `WriteHealthResponse_UnhealthyEntry_LogsFailureDetail`（行为级）。
-  - **D8（P3）Kafka 健康位恢复后不清零**：消费线程/worker 非关停异常终止置 `_consumeFaultReason` 后，调用方重订阅恢复消费但故障位粘滞，`/health` 永久 Unhealthy（Rabbit FIX-020 同族已修清位）。现 `SubscribeAsync` 在 `SetConsumeTask` 之后清零并声明多订阅局限（同 Rabbit 口径）。锁定测试 `SubscribeAsync_ClearsFaultReasonAfterConsumeTaskStarted`（源码级不变式）。
-  - **D9（P3）Rabbit raw 发布缺 span 与声明在 try 外**：`PublishRawAsync` 的 `EnsureExchangeAsync` 在 try 外（broker 不可达时失败逃逸出 `BrokerPublishFailed` 计数），且整条路径无 publish span（对象路径 FIX-011/016 已接线）。现 span 提升到 try 外并在两 catch 内 `SetStatus(Error)`、声明移入 try。锁定测试 `PublishRawAsync_HasPublishSpanAndDeclarationInsideTry`（源码级不变式）。
-- **Kafka 消费 worker 终止不进健康位（R16 审计发现 1，2026-11-24）**：`KafkaBroker` 的 worker 循环两条不可恢复终止 catch 只记 Error，不置 `_consumeFaultReason`——worker 死后其 `finally` 取消 `cts`，消费专用线程走「token 已取消」分支静默退出（不置位），订阅句柄仍有效、`IsConsumingHealthy` 恒 `true`，`/health` 保持 Healthy 而本实例已停止消费。R14 修复只覆盖了消费线程一条（`KafkaBroker.cs:637`），worker 侧是同一族的漏格。现两条 catch 均以 `??=` 置位（保留首因，不覆盖消费线程已写入的根因）。锁定测试 `EveryConsumeLoopTerminationCatch_SetsFaultReason`（源码级不变式，变异验证：摘除 worker 侧赋值即红并精确点名行号）。
-- **PalORM 通知器 StopAsync 不等待在飞批处理（R16 审计发现 2，2026-11-24）**：`PalOrmPostgreSqlOutboxNotifier.StopAsync` 只 `CancelAsync` 不等待——返回即被宿主视为已收尾，随后容器释放 `_processGate`，在飞批处理只能靠 `finally` 的 `ObjectDisposedException` 兜底，最后一批的终态标记可能未落库（租约悬挂至超时后重投）；注释所称的「协作收尾」不成立。现顺序为「取消 → 退订并停监听 → 等待在飞 fire 任务 → 释放 CTS」，等待点放在停监听之后以覆盖「已进入回调、正在赋值 `_fireTask`」的在途路径。`DisposeAsync` 同样补等待（宿主未调 StopAsync 的路径）。锁定测试 `StopAsync_AwaitsInFlightFireTask`。
-- **PalORM 通知器 StartAsync 半途失败留下「声称已启动」态（R16 审计发现 3，2026-11-24）**：修前 `_listener`/`_shutdownCts` 在 `await` 之前赋值——首连失败后对象停在 `_listener != null` 但从未启动，重试命中幂等守卫（`already been started`），且已创建的 CTS 无人释放。现改为「首连成功才落字段」，失败路径退订 + 释放局部对象后重抛，对象回到可重入态（对齐上游「`StopAsync` 之后可再次启动」契约）。原 `StartAsync_SecondCall_ThrowsIdempotencyGuard` 与 `Listener_OnError_IsWiredToComponentErrorLog` 依赖旧缺陷形态构造「已启动」状态，已改写为源码级不变式 + 回调行为断言。
-- **SQLite `:memory:` 单连接与框架后台服务共存无防线（R16 审计发现 6，2026-11-24）**：内存数据源必须 Singleton 单连接（连接关闭数据即销毁），`SqliteConnection` 非线程安全，契约写「调用方必须串行访问」——但 `AddPalOutbox()`/`AddPalSaga`/Retention 注册的后台服务会在独立线程上访问同一连接，第二个写入者由框架自己注册。探针实证（4 线程 × 500 次并发 SELECT 同一 `:memory:` 连接）：2000 次中 18 次抛 `ArgumentOutOfRangeException`/`IndexOutOfRangeException`（驱动内部状态被踩坏的越界异常，不是 `database is locked`，排障会走向错误方向）。新增启动期守卫 `PalSqliteMemorySingleConnectionGuard`：内存分支自动注册，宿主启动时若检测到本框架的后台服务即 fail-fast，错误信息列出检测到的服务名并给出两条出路（改文件模式 / 内存库只用于无后台服务的测试）。文件模式不注册守卫（Scoped 连接无共享单连接问题）。锁定测试 3 例（有后台服务红、无后台服务绿、文件模式绿）。
-- **MySQL 会话优化池扩容缺口闭环（ITM-211，2026-11-23）**：`AddPalMySqlDataSource` 的 InnoDB 性能优化改经 `MySqlDataSourceBuilder.UseConnectionOpenedCallback` 对**每个新开物理连接**（含并发高峰池扩容按需新建的连接）重放 `SET SESSION`——此前仅首连接被优化，池扩容出的新连接使用服务端默认（REPEATABLE-READ），同池内 RC/RR 隔离级别混跑（间隙锁/死锁行为不一致）。原注释「MySqlDataSource 无 on-open 回调，应用内无法闭环」失实（MySqlConnector 2.6.2/3.0.0 均提供该 API，XML 实证）。真库探针（wslc mysql84）：6 条连接（首连接 + 归池复用 + 4 并发池扩容）全部 READ-COMMITTED；变异验证（移除 Optimize）转 REPEATABLE-READ 红。init_connect 服务端方案从「推荐」降为「可选兜底」。
-- **PalLogger 结构化重载补 IsEnabled 门控（2026-11-23）**：MEL 的 `LogDebug/LogInformation/LogWarning/LogError(EventId, string, params object?[])` 重载**不做**级别检查，直接构造 `FormattedLogValues` 交给 provider 过滤，关闭态下 params 数组、装箱与 state 全部照常分配（实测 96.0 B/op）。四个结构化重载与四个插值重载均补门控，关闭态实现零分配且不调用 provider。
-- **PalORM PG 通知器监听终止可观测（R15 审计发现 1，2026-11-24）**：`PalOrmPostgreSqlOutboxNotifier` 此前未接线上游 `PgNotificationListener` 的任何终止信号（`Logger` 属性未赋值、`OnError` 零订阅、`LastError` 零读取），断线重连 5 次耗尽或遇非瞬态故障后组件静默死亡：NOTIFY 通路中断无日志、无健康信号，Outbox 仅在退回 500ms 轮询时体现为延迟回升。现补 `OnError` 订阅，终止原因与通道名转入本组件 Error 日志；StopAsync 同步退订。与 Dapper 版「无限重连」的差异在类 remarks 与 `docs/palorm-adapter.md` 显式声明（上游上限 5 次，恢复手段为重启进程）。锁定测试 `Listener_OnError_IsWiredToComponentErrorLog` 变异验证红/绿（摘除订阅即红）。
-- **通知器 fire 任务缓存注释勘正（R15 审计发现 2，2026-11-24）**：654f4da 声称的「Task.Run 每通知一分配 → 每批处理一分配」收益不存在：`_fireTask` 字段零读方，`Task.Run` 调用次数与修前 `_ = Task.Run(...)` 逐位一致（in-flight 时 NOTIFY 被 `Wait(0)` 拒掉的串行性质在修前同样成立）。三处注释勘正为「仅持引用」真实语义，行为零变化。
-- **R18 刁钻缺陷挖掘四条全量收口（2026-11-24）**：基于 `docs/review/audit-2026-11-24-defect-mining-r18.md`（4 真缺陷全 E3 / 1 E4 候选经探针证伪 / 16 死角），四条全部红→绿→变异红：
-  - **缺陷 1（P2）Rabbit 健康位漏接 channel shutdown 事件**：`_consumeFaultReason` 原只在五个结算/取消安全包装 catch 置位；服务端重启、网络分区等导致 channel 关闭而消费空闲（无在飞交付、无结算动作）时不触发任何包装，故障位保持 null，`IsConsumingHealthy` 恒 true、`/health` 恒绿，实例停止消费却不被摘流量。现订阅 `consumer.ShutdownAsync`，按 `ShutdownInitiator.Application`（本仓正常关停，不置位）区分外部断连（Library/Peer，置位），并以 `linkedCts.IsCancellationRequested` 双保险；初始化失败 catch 与订阅句柄释放闭包均退订成对。三处声明注释勘正（字段 / `IsConsumingHealthy` remarks / `IMessageBrokerHealth` 接口 remarks）。锁定测试 `SubscribeAsync_WiresShutdownEventWithInitiatorGuard` 与 `SubscriptionDispose_UnsubscribesShutdownEventBeforeCtsDispose`（源码级不变式，逐行扫描跳过注释防假绿，变异红）；集成测试 `Health_HealthyOnLiveBroker_UnhealthyAfterChannelFault` 补上此前缺失的 `IsFalse()` 断言，在结算尝试之前验证「空闲断连」面。
-  - **缺陷 2（P3）PalORM PG 通知器缺非关停 OCE 分类**：Dapper 栈 v18 B1（`6e105ed`）已补 `catch (OperationCanceledException oce)` 记 Error，PalORM 栈复制时漏抄；非关停 OCE（内部超时转换等）被过滤器排除后逃出 async Task，成未观察异常且零 Error 日志，关停期还会被上层当正常关停吞掉。现补齐第三 catch 分支，对齐 Dapper 版文案。锁定测试 `BothStacks_FireBatchProcessAsync_HaveSameCatchBranches`（源码级不变式，变异红）。
-  - **缺陷 3（P3）Dapper PG 通知器 OCE 退避用 None token**：OCE 分支 `Task.Delay(oceDelay, CancellationToken.None)` 不响应宿主关停，与 `8c9e3a6` 提交说明「关停取消可从退避等待中退出」矛盾；普通 Exception 分支用 `stoppingToken`。现统一为 `stoppingToken`，退避期取消由内层 catch 静默退出循环。锁定测试 `DapperExecuteAsync_OceBackoff_UsesStoppingToken`（源码级不变式，变异红）。
-  - **缺陷 4（P3）断线续跑 run 生产者异常无 Error 出口**：`StreamRun.FinishAsync` 只在 `IsEnabled(Debug)` 下记 `failure.GetType().Name`，异常对象（消息 + 堆栈）默认 Information 级别零输出；同文件 `StreamToAsync` 与 `EndpointExtensions` 的流式读都记 `Error(ex)`。现 Failed 态补 `_logger.Error(failure, ...)`，与两者对齐。锁定测试 `FinishAsync_FailedState_LogsExceptionObjectAtErrorLevel`（源码级不变式，变异红）。
-  - 公共 API 快照零 diff（4 条均为 private 实现 + 注释勘正，无公共签名变化）；本轮未改历史。
-
-### Dependencies
-
-- **RabbitMQ.Client 7.2.2 → 7.3.0**（2026-11-23，稳定版发布后升位）：`7.3.0-beta.0` 之后的稳定版已发布，先前「beta 不入线」的排除依据失效。破坏面逐条核查后对本仓零触及：唯一硬源码破坏是 `IChannel` 新增 4 个抽象成员（本仓不实现该接口，仅消费）；5 个新增 `[Obsolete]` 成员（`RabbitMQActivitySource.ContextInjector` / `ContextExtractor` / `UseRoutingKeyAsOperationName` / `TracingOptions`）本仓仅在注释中提及、无调用，不触发 warnings-as-errors；TLS 行为变更（amqps 校验主机名、TLS 工厂拒绝明文回退）本仓无 `Ssl` 配置；`ConsumerDispatchConcurrency=0` 本仓已在 `RabbitMqBroker` 构造期拒绝 0；`CreateChannelAsync` 不再写回传入 options 而本仓显式构造、不依赖写回；短字符串超长异常类型变化与字段表 32 层嵌套限制本仓无超限调用面。许可表达式两版一致（`Apache-2.0 OR MPL-2.0`，license-policy 白名单内含）。消费者可见变化仅依赖面上移，公共 API 与行为契约不变。
-- **PalORM ×5 6.8.0 → 6.9.0**（2026-11-23 全量核新，NuGet 双通道实测）：上游行为变更 4 处——MySQL 批量写入默认整段单批（与 PostgreSQL 对齐）、PG `DateTime` 列统一 `timestamptz`、`ToPageAsync` 遇 `Skip()` 与 SQLite 行锁 API 改调用期抛错，另新增迁移漂移检测（默认开启）与四项生命周期 API。本仓零代码适配：唯一批插消费点的批宽由调用方控制且事务内入事务（MySqlBulkCopyInserter 源码实证无隐式提交切断）、PalORM 模型全部 `DateTimeOffset`、后两组 API 本仓零调用、迁移与 `SaveAsync` 路径零调用。消费者可见变化为依赖面上移，公共 API 与行为契约不变。
-- **Meziantou.Analyzer 3.0.341 → 3.0.342**（补丁位）：分析器规则更新，Release 构建仍 0 警告。
-- **全量包核新（2026-11-24，NuGet 双通道实测）**：74 处中央钉扎中唯一实质可升项为
-  **NativeCompressions 1.3.3 → 1.3.4**（上游 2026-11-24 发布，变更仅原生库升级 Zstd
-  1.5.7→1.6.0、测试稳定性修复、上游仓库 facebook→meta 迁移，无公共 API 变更）。GitHub
-  Actions 同步升位三项（均钉 40 位 commit SHA）：`actions/setup-dotnet` v6.0.0 → v6.1.0、
-  `github/codeql-action` v4.39.1 → v4.39.4、`softprops/action-gh-release` v3.0.3 → v3.0.4。
-  其余维持：69 处已最新（含预发布口径），4 处既有裁决排除（MediatR 12.5.0 / Verify.TUnit
-  32.0.1 商业许可禁令、Confluent.Kafka 2.16.0 不入 4.4.0-alpha.1 跨两主版本 alpha、
-  System.Runtime.CompilerServices.Unsafe 6.1.2 不入 2022 废弃预览 7.0.0-preview.2.22152.2）；
-  dotnet tools（reportgenerator 5.6.1 / Stryker 5.1.0）与 SDK 11.0.100 均最新。消费者可见
-  变化仅依赖面与 CI 面上移，公共 API 与行为契约不变。
-
-### Documentation
-
-- **mutation 基数口径收口（R16 裁决，2026-11-24）**：`.github/workflows/mutation.yml` 改以 `scripts/mutation-probe.cs` 为唯一权威门禁 step（退出码 1 即 fail），Stryker 两条 baseline 降为趋势观察（`continue-on-error: true`）。依据：Stryker 分数建立在被 filter 吃掉后的个位数基数上（152 created→12 tested、2310 created→35 tested，422 CompileError），`thresholds.break=95` 在个位数上无区分度；而 mutation-replay 探针证明「拒绝过吗」这条轴，本轮实测 2/2 转红（MySqlLeasePolicy 反转后 318 测试中 2 失败、CompressionProvider 反转后 49 测试中 41 失败），工作树零残留。`gate-audit` 中 `mutation-probe` 由 TOOL 自动升级为 OK（接线 + selftest/探针自证）。**仍明示未解决**：「覆盖了多少」这一半不在本工作流范围，Messaging/CQRS/Transactions.EFCore 改动文件零覆盖，扩大需另立范围。
-- **版本声明四方同步（2026-11-23）**：README 中英「生产环境有谁在用」段从预览叙述改为 GA 状态（`5.0.0` 于 2026-11-22 由 `5.0.0-preview.1` 转正，发布时间点待 tag），依赖声明同步为 .NET 11 GA `11.0.0` + PalORM `6.9.0` + TUnit `1.87.12`；`docs/conventions.md` §10.6 与 `docs/testing.md` §2.1 的测试框架声明同步为 TUnit `1.87.12` + MTP `2.5.3`（实际解析值，由 `project.assets.json` 核对）。失实成因是升级轮只同步了 `Directory.Packages.props` 与 CHANGELOG，未回扫「当前版本」叙述面；`doc-consistency` 与 `count-audit` 两门禁均不管版本号与发布状态，属机械防线已知边界。
-- **README（中英）许可证说明按发布版本划分重写（2026-11-23）**：参照上游 PalORM 许可说明结构改为「划分总纲 + 版本区间列表 + 当前仓库授权」结构，区间边界经 NuGet.org 逐版本 nuspec 实证（下载 12 个已发布 nupkg 读 nuspec）：`v1.0.0` ~ `v4.0.0` 共 10 个已发布版本（2026-07-30 ~ 2026-10-11）为 AGPL-3.0-or-later，`v5.0.0-preview.1`（2026-10-27 起）为 Apache-2.0；`v1.0.0-preview.1`（2026-07-04）实证为 MIT，属预览版，按维护者裁决不列入公开说明。许可口径不变（v5.0 起 Apache-2.0、更早已发布版本不追溯），纯结构优化，消费方锁定旧版本时的合规评估路径更清晰。
-
-## [5.0.0] — 2026-11-22
-
-> **GA 转正说明（2026-11-22）**：`[5.0.0-preview.1]` 预发布段按 2026-10-27 裁决转正为本段。转正内容 = preview.1 发布窗口内容 + **预览期修订族**（下方全部条目：2026-10-27 清零轮 → 2026-11-22 依赖核新）——`[5.0.0-preview.1]` 段预发布说明「`[Unreleased]` 随 GA 后的下一版本发布」的预判随内容演化失效（预览期积累了 FIX-001~020 修复族与五项 API 增补，压到下一版本将推迟 P1 修复到达），按预发布说明自身的「预览期收集的消费者反馈并入 GA 轮修订」口径并入本段。SemVer **Major** 不变（破坏窗口已由 preview.1 锚定：快照 +468/−64 与 fail-fast 行为破坏，见 `[5.0.0-preview.1]` 段「兼容性」），预览后新增面全部为纯加法（A1–A5/C/B/A 批）或行为修正，无新签名破坏。
-> **范围**：`v5.0.0-preview.1`（2026-10-27，tag 提交）→ `5.0.0`（本提交），70 个提交（`git rev-list --count v5.0.0-preview.1..HEAD`）。
+> **GA 转正说明（2026-11-24 发行前重定）**：`[5.0.0-preview.1]` 预发布段按 2026-10-27 裁决转正为本段。2026-11-22 GA 轮曾按「转正内容 = preview.1 发布窗口 + 预览期修订族（截至 11-22 依赖核新）」清空后缀，但 `[Unreleased]` 此后继续累积 11-23/11-24 的消费者可见变更（PalORM PG Outbox 唤醒、`IPalLogger` 零分配插值重载、Rabbit 7.3.0 与批量结算单帧聚合、MemoryPack 直写、R15–R18 缺陷修复族、PalORM 6.9.0 / NativeCompressions 1.3.4 依赖与 Actions 升位）。2026-11-24 发行前用户裁决「全部并入 5.0.0」——这些变更本就是 5.0.0 要发的内容，故 `[Unreleased]` 全部条目并入本段，`[5.0.0-preview.1]` 段预发布说明「`[Unreleased]` 随 GA 后的下一版本发布」的预判失效（若压到下一版将推迟 P1/P2 修复到达），按「预览期收集的消费者反馈并入 GA 轮修订」口径收口。SemVer **Major** 不变（破坏窗口已由 preview.1 锚定：快照 +468/−64 与 fail-fast 行为破坏，见 `[5.0.0-preview.1]` 段「兼容性」）；并入内容均为纯加法、行为修正与缺陷修复，无新签名破坏。
+> **范围**：`v5.0.0-preview.1`（2026-10-27，tag 提交）→ `5.0.0`（本提交），91 个提交（`git rev-list --count v5.0.0-preview.1..HEAD`）。
 
 ### Added
 
@@ -214,6 +155,10 @@
   ⑤配套：`coverage-baseline.json` 增设 `PalDDD.PalORM.Tests` 键（本地无 Docker 保守初值 0.3311，
   降幅门禁覆盖 16 模块；CI 全量待重录上调）。
 
+
+- **PalORM PG 栈 LISTEN/NOTIFY Outbox 唤醒（2026-11-23）**：新增 `PalOrmPostgreSqlOutboxNotifier`（IHostedService）与注册入口 `AddPalOrmPostgreSqlOutboxNotifier(services, connectionString, channelName)`——PG 跨进程唤醒此前仅在 Dapper 栈，PalORM 栈的 Outbox 端到端延迟受 PeriodicTimer 轮询周期钳制。监听载体是 PalORM 6.9.0 的 `PgNotificationListener`（30s 心跳保活 + 线性递增全量抖动重连），NOTIFY 到达即触发 `OutboxBatchProcessor`，通道契约与 Dapper 版完全一致（`outbox_channel` + 过渡表触发器，同一库两栈共用触发器面）。公共 API 快照 +6。真库通路（wslc pg186 实测 NOTIFY 送达）与非真库面（通道白名单/DI 注册/幂等释放，22 用例）均验证。
+- **IPalLogger 插值重载与零分配关闭路径（2026-11-23）**：新增非泛型基接口 `IPalLogger`（承载 `IsEnabled`，供插值 handler 构造使用）与四个级别 handler（`PalDebugLogHandler` / `PalInformationLogHandler` / `PalWarningLogHandler` / `PalErrorLogHandler`）。`IPalLogger<T>` 每个级别新增一个插值重载，调用形态为 `_logger.Debug($"id={id} name={name}")`。**关闭态零分配**：级别未启用时编译器跳过整个插值表达式（实测 N=2000：MEL 参数化重载 96.0 B/op → 0.0 B/op）；启用态 336.0 → 约 196.0 B/op。纯加法，旧实现者走 DIM 默认实现零迁移成本。公共 API 快照 +51/−1（唯一删除为 `IPalLogger<T>` 的 `IsEnabled` 上移到基接口）。
+
 ### Changed
 
 - **可观测补强 + 计数声明对齐（2026-11-06 全量审计 S3/S4/S5/G2/G3/G5/G6/G7/S2，P2）**：
@@ -275,6 +220,12 @@
   Kafka 侧还须关闭 `EnableAutoOffsetStore`。同步改写 `docs/features.md` 的「边界与刻意取舍」两条
   （Broker 语义、`SagaStatus` 数值契约）。
 
+### Performance
+
+- **Rabbit 批量结算单帧聚合（multiple:true，2026-11-23）**：批量订阅（`SubscribeBatchAsync`）的批次级确认在安全前提下压成单帧——默认形态（每订阅独立 consumer channel + 串行 dispatch，`ConsumerDispatchConcurrency` 默认 1）下 deliveryTag 严格单调入批，`BasicAckAsync(maxTag, multiple: true)` 一帧等价逐条 N 帧（64 条批 64 帧 → 1 帧）。实现为程序集内部的 `IBatchAckAggregator` 扩展点（`MessageBatchAck` 首成员探测路由，Kafka/NoOp 形态行为零变化）；聚合开关判据提为纯函数 `CanAggregateBatchAck`（白盒判定表锁定：共享 channel 或并发 dispatch >1 恒回退逐条）。共享 channel 模式（`UseSharedConsumerChannel=true`）与 `ConsumerDispatchConcurrency > 1` 下自动回退逐条，语义恒正确。帧级回归依赖三层锁定：聚合路由单测（变异验证红/绿）、判定表单测、真库语义探针（64 条批 channel 存活 + 零重投 + 零 Warning，11/11 绿）。
+- **RabbitMQ 发布接入 7.3.0 bodyOwner（免整载荷拷贝，2026-11-23）**：`BasicPublishAsync(..., bodyOwner:)` 把 `PooledBodyWriter` 的所有权移交客户端，由客户端在发送完成或发布失败后释放一次。7.2.x 无 owner 时客户端必须在确认与流控两次可挂起 await 之后把 body 复制进内部缓冲，本形态省掉该拷贝。配套加固：`PooledBodyWriter.Dispose` 加 Interlocked 幂等门（客户端与发布路径 `finally` 各释放一次，重复 Return 同一数组会让两个租用者共享同一缓冲）；发布路径改为 `finally` 兜底，覆盖序列化或 exchange 声明阶段抛出、所有权未转移的路径。
+- **MemoryPack 直写重载兑现（ADR-029 延后段，2026-11-23）**：`MemoryPackMessageSerializer` 覆写 `Serialize(object, descriptor, IBufferWriter<byte>)`，改走 `MemoryPackSerializer.Serialize<TBufferWriter>(Type, in writer, object, options)` 非泛型直写。实测（N=10000，47 B 载荷）：复用缓冲 **0.0 B/op**，原 DIM 回退 72.0 B/op，两者产出逐字节一致。原注释「MemoryPack 1.21.4 无 (writer, Type, object) 重载」经反射枚举证伪并勘正（1.22.0 存在该重载）。
+
 ### Removed
 
 - **2026-11-04 公共 API 缺口 B 批：删除两处假 API / 死枚举（破坏性，5.0.0 窗口内）**：
@@ -296,7 +247,7 @@
   `GetByStatusAsync` / `GetByIdAsync` / 两条 `Lease*`）加复核。未定义值抛 `InvalidOperationException`，
   文案含 sagaId、原始值与上述升级 SQL（此前强转会把 4 读成「不是任何已知状态」的实例，终态判定与 switch 全部落空且不报错）。
 
-### Fixed 修复
+### Fixed
 
 - **Kafka 批量订阅关停永久挂起（2026-11-08 审计 F1，P1，本轮 B2/悬空收口引入的回归）**：
   `BatchSubscription.DisposeAsync` 先 `inner.DisposeAsync()`（Kafka 消费线程在 finally 一次性
@@ -423,6 +374,60 @@
   健康消息确认 → 同 GroupId 重启两条均不重投，修复前水印冻结两条都重投转红）；
   公共 API 无变化。
 
+
+- **R17 刁钻缺陷挖掘九条全量收口（2026-11-24）**：基于 `docs/review/audit-2026-11-24-defect-mining.md`（9 真缺陷 / 3 证伪 / 10 死角），本轮修复八条（D7 历史提交违规另需维护者裁决，不自主改写历史）：
+  - **D1（P2）Dapper-PG 通知器关停不等在飞批处理**：`PostgreSqlOutboxNotifier` 原为 `BackgroundService` 但 `:197` 的 `_ = Task.Run(FireBatchProcessAsync)` 是游离任务——`StopAsync` 只等 `ExecuteAsync`，宿主随后 Dispose 释放 `_processGate`，在飞批只能靠 `ObjectDisposedException` 兜底，末批终态可能未落库（租约悬挂至超时重投）。现新增 `_fireTask` 字段并在 `Task.Run` 处赋值、finally 清引用；override `StopAsync` 在 `base.StopAsync` 后 await 在飞任务（不用宿主 token），对齐 PalORM 版 R16 F2 修法。**公共 API 快照 +1 行**（`PostgreSqlOutboxNotifier.StopAsync(CancellationToken)`，同提交同步）。锁定测试 `StopAsync_WaitsForInFlightFireTask`（行为级，反射注入未完成 Task 验证 StopAsync 不提前返回；变异红）。
+  - **D2（P2）三个原生解压器漏调 `DecompressBufferPool.Release`**：`NativeCompressors` 的 LZ4/ZStandard/OpenZL `Decompress` 只 Rent 不 Release——解压炸弹抛异常后 64MB 级缓冲留在 ThreadStatic 槽（R12 C-17 只接 SystemCompressor 的同族漏格），长驻线程永久持有。现把 buffer/decoder 提到 try 外并加 finally Release（对齐 Brotli 路径）。锁定测试 `NativeDecompressors_PairRentWithRelease`（源码级不变式 Rent=3/Release=3，变异红）。
+  - **D3（P3）Saga 超时告警双发**：`SagaProcessor.CheckTimeoutsAsync` 按 timedOutSteps 逐条记 SagaTimedOut 后又把同一列表传入 `CompensateTimedOutSagaAsync`——后者 ITM-709 抽取时复制了同一循环未删调用方，N 个超时步发 2N 条告警。现删调用方循环，单一发射点保留在补偿方法内。锁定测试 `SingleTimedOutStep_EmitsExactlyOneWarning`（行为级，记录 logger 断言恰好 1 条）。
+  - **D4（P3）MemoryPack 直写落地后文档未同步**：`a2b6434` 已落地真实零拷贝覆写并勘正类注释与 CHANGELOG，但接口 XML doc、ADR-029、performance.md 三处仍称「不覆写/待验证/1.21.4 无重载」。现三处同步为「1.22.0 非泛型直写重载已落地、实测 0 B/op」（三方一致红线）。
+  - **D5（P3）两条流式端点 bindQuery 解析异常未映射 400**：ITM-696 只修了 `MapQuery`，`MapStreamQuery` 与 `MapDetachedStreamQuery` 的同语义 `Guid.Parse`/`int.Parse` 失败仍以 500 逃逸。现两处各加 `FormatException/ArgumentException/OverflowException` 白名单 catch → 400。锁定测试两例（`MapStreamQuery_BindQueryThrowsFormatException_Returns400Not500` / `MapDetachedStreamQuery_...`，行为级）。
+  - **D6（P3）/health「details in logs」无日志落点**：FIX-019 把 Unhealthy 详情换成固定文案并承诺「只进日志」，但 `WriteHealthResponseAsync` 全文件零日志调用，Exception 被丢弃无出口。现从请求作用域解析日志门面，对 Unhealthy 组件逐条记 Error（带异常对象）；无 HTTP 作用域时安全跳过。锁定测试 `WriteHealthResponse_UnhealthyEntry_LogsFailureDetail`（行为级）。
+  - **D8（P3）Kafka 健康位恢复后不清零**：消费线程/worker 非关停异常终止置 `_consumeFaultReason` 后，调用方重订阅恢复消费但故障位粘滞，`/health` 永久 Unhealthy（Rabbit FIX-020 同族已修清位）。现 `SubscribeAsync` 在 `SetConsumeTask` 之后清零并声明多订阅局限（同 Rabbit 口径）。锁定测试 `SubscribeAsync_ClearsFaultReasonAfterConsumeTaskStarted`（源码级不变式）。
+  - **D9（P3）Rabbit raw 发布缺 span 与声明在 try 外**：`PublishRawAsync` 的 `EnsureExchangeAsync` 在 try 外（broker 不可达时失败逃逸出 `BrokerPublishFailed` 计数），且整条路径无 publish span（对象路径 FIX-011/016 已接线）。现 span 提升到 try 外并在两 catch 内 `SetStatus(Error)`、声明移入 try。锁定测试 `PublishRawAsync_HasPublishSpanAndDeclarationInsideTry`（源码级不变式）。
+- **Kafka 消费 worker 终止不进健康位（R16 审计发现 1，2026-11-24）**：`KafkaBroker` 的 worker 循环两条不可恢复终止 catch 只记 Error，不置 `_consumeFaultReason`——worker 死后其 `finally` 取消 `cts`，消费专用线程走「token 已取消」分支静默退出（不置位），订阅句柄仍有效、`IsConsumingHealthy` 恒 `true`，`/health` 保持 Healthy 而本实例已停止消费。R14 修复只覆盖了消费线程一条（`KafkaBroker.cs:637`），worker 侧是同一族的漏格。现两条 catch 均以 `??=` 置位（保留首因，不覆盖消费线程已写入的根因）。锁定测试 `EveryConsumeLoopTerminationCatch_SetsFaultReason`（源码级不变式，变异验证：摘除 worker 侧赋值即红并精确点名行号）。
+- **PalORM 通知器 StopAsync 不等待在飞批处理（R16 审计发现 2，2026-11-24）**：`PalOrmPostgreSqlOutboxNotifier.StopAsync` 只 `CancelAsync` 不等待——返回即被宿主视为已收尾，随后容器释放 `_processGate`，在飞批处理只能靠 `finally` 的 `ObjectDisposedException` 兜底，最后一批的终态标记可能未落库（租约悬挂至超时后重投）；注释所称的「协作收尾」不成立。现顺序为「取消 → 退订并停监听 → 等待在飞 fire 任务 → 释放 CTS」，等待点放在停监听之后以覆盖「已进入回调、正在赋值 `_fireTask`」的在途路径。`DisposeAsync` 同样补等待（宿主未调 StopAsync 的路径）。锁定测试 `StopAsync_AwaitsInFlightFireTask`。
+- **PalORM 通知器 StartAsync 半途失败留下「声称已启动」态（R16 审计发现 3，2026-11-24）**：修前 `_listener`/`_shutdownCts` 在 `await` 之前赋值——首连失败后对象停在 `_listener != null` 但从未启动，重试命中幂等守卫（`already been started`），且已创建的 CTS 无人释放。现改为「首连成功才落字段」，失败路径退订 + 释放局部对象后重抛，对象回到可重入态（对齐上游「`StopAsync` 之后可再次启动」契约）。原 `StartAsync_SecondCall_ThrowsIdempotencyGuard` 与 `Listener_OnError_IsWiredToComponentErrorLog` 依赖旧缺陷形态构造「已启动」状态，已改写为源码级不变式 + 回调行为断言。
+- **SQLite `:memory:` 单连接与框架后台服务共存无防线（R16 审计发现 6，2026-11-24）**：内存数据源必须 Singleton 单连接（连接关闭数据即销毁），`SqliteConnection` 非线程安全，契约写「调用方必须串行访问」——但 `AddPalOutbox()`/`AddPalSaga`/Retention 注册的后台服务会在独立线程上访问同一连接，第二个写入者由框架自己注册。探针实证（4 线程 × 500 次并发 SELECT 同一 `:memory:` 连接）：2000 次中 18 次抛 `ArgumentOutOfRangeException`/`IndexOutOfRangeException`（驱动内部状态被踩坏的越界异常，不是 `database is locked`，排障会走向错误方向）。新增启动期守卫 `PalSqliteMemorySingleConnectionGuard`：内存分支自动注册，宿主启动时若检测到本框架的后台服务即 fail-fast，错误信息列出检测到的服务名并给出两条出路（改文件模式 / 内存库只用于无后台服务的测试）。文件模式不注册守卫（Scoped 连接无共享单连接问题）。锁定测试 3 例（有后台服务红、无后台服务绿、文件模式绿）。
+- **MySQL 会话优化池扩容缺口闭环（ITM-211，2026-11-23）**：`AddPalMySqlDataSource` 的 InnoDB 性能优化改经 `MySqlDataSourceBuilder.UseConnectionOpenedCallback` 对**每个新开物理连接**（含并发高峰池扩容按需新建的连接）重放 `SET SESSION`——此前仅首连接被优化，池扩容出的新连接使用服务端默认（REPEATABLE-READ），同池内 RC/RR 隔离级别混跑（间隙锁/死锁行为不一致）。原注释「MySqlDataSource 无 on-open 回调，应用内无法闭环」失实（MySqlConnector 2.6.2/3.0.0 均提供该 API，XML 实证）。真库探针（wslc mysql84）：6 条连接（首连接 + 归池复用 + 4 并发池扩容）全部 READ-COMMITTED；变异验证（移除 Optimize）转 REPEATABLE-READ 红。init_connect 服务端方案从「推荐」降为「可选兜底」。
+- **PalLogger 结构化重载补 IsEnabled 门控（2026-11-23）**：MEL 的 `LogDebug/LogInformation/LogWarning/LogError(EventId, string, params object?[])` 重载**不做**级别检查，直接构造 `FormattedLogValues` 交给 provider 过滤，关闭态下 params 数组、装箱与 state 全部照常分配（实测 96.0 B/op）。四个结构化重载与四个插值重载均补门控，关闭态实现零分配且不调用 provider。
+- **PalORM PG 通知器监听终止可观测（R15 审计发现 1，2026-11-24）**：`PalOrmPostgreSqlOutboxNotifier` 此前未接线上游 `PgNotificationListener` 的任何终止信号（`Logger` 属性未赋值、`OnError` 零订阅、`LastError` 零读取），断线重连 5 次耗尽或遇非瞬态故障后组件静默死亡：NOTIFY 通路中断无日志、无健康信号，Outbox 仅在退回 500ms 轮询时体现为延迟回升。现补 `OnError` 订阅，终止原因与通道名转入本组件 Error 日志；StopAsync 同步退订。与 Dapper 版「无限重连」的差异在类 remarks 与 `docs/palorm-adapter.md` 显式声明（上游上限 5 次，恢复手段为重启进程）。锁定测试 `Listener_OnError_IsWiredToComponentErrorLog` 变异验证红/绿（摘除订阅即红）。
+- **通知器 fire 任务缓存注释勘正（R15 审计发现 2，2026-11-24）**：654f4da 声称的「Task.Run 每通知一分配 → 每批处理一分配」收益不存在：`_fireTask` 字段零读方，`Task.Run` 调用次数与修前 `_ = Task.Run(...)` 逐位一致（in-flight 时 NOTIFY 被 `Wait(0)` 拒掉的串行性质在修前同样成立）。三处注释勘正为「仅持引用」真实语义，行为零变化。
+- **R18 刁钻缺陷挖掘四条全量收口（2026-11-24）**：基于 `docs/review/audit-2026-11-24-defect-mining-r18.md`（4 真缺陷全 E3 / 1 E4 候选经探针证伪 / 16 死角），四条全部红→绿→变异红：
+  - **缺陷 1（P2）Rabbit 健康位漏接 channel shutdown 事件**：`_consumeFaultReason` 原只在五个结算/取消安全包装 catch 置位；服务端重启、网络分区等导致 channel 关闭而消费空闲（无在飞交付、无结算动作）时不触发任何包装，故障位保持 null，`IsConsumingHealthy` 恒 true、`/health` 恒绿，实例停止消费却不被摘流量。现订阅 `consumer.ShutdownAsync`，按 `ShutdownInitiator.Application`（本仓正常关停，不置位）区分外部断连（Library/Peer，置位），并以 `linkedCts.IsCancellationRequested` 双保险；初始化失败 catch 与订阅句柄释放闭包均退订成对。三处声明注释勘正（字段 / `IsConsumingHealthy` remarks / `IMessageBrokerHealth` 接口 remarks）。锁定测试 `SubscribeAsync_WiresShutdownEventWithInitiatorGuard` 与 `SubscriptionDispose_UnsubscribesShutdownEventBeforeCtsDispose`（源码级不变式，逐行扫描跳过注释防假绿，变异红）；集成测试 `Health_HealthyOnLiveBroker_UnhealthyAfterChannelFault` 补上此前缺失的 `IsFalse()` 断言，在结算尝试之前验证「空闲断连」面。
+  - **缺陷 2（P3）PalORM PG 通知器缺非关停 OCE 分类**：Dapper 栈 v18 B1（`6e105ed`）已补 `catch (OperationCanceledException oce)` 记 Error，PalORM 栈复制时漏抄；非关停 OCE（内部超时转换等）被过滤器排除后逃出 async Task，成未观察异常且零 Error 日志，关停期还会被上层当正常关停吞掉。现补齐第三 catch 分支，对齐 Dapper 版文案。锁定测试 `BothStacks_FireBatchProcessAsync_HaveSameCatchBranches`（源码级不变式，变异红）。
+  - **缺陷 3（P3）Dapper PG 通知器 OCE 退避用 None token**：OCE 分支 `Task.Delay(oceDelay, CancellationToken.None)` 不响应宿主关停，与 `8c9e3a6` 提交说明「关停取消可从退避等待中退出」矛盾；普通 Exception 分支用 `stoppingToken`。现统一为 `stoppingToken`，退避期取消由内层 catch 静默退出循环。锁定测试 `DapperExecuteAsync_OceBackoff_UsesStoppingToken`（源码级不变式，变异红）。
+  - **缺陷 4（P3）断线续跑 run 生产者异常无 Error 出口**：`StreamRun.FinishAsync` 只在 `IsEnabled(Debug)` 下记 `failure.GetType().Name`，异常对象（消息 + 堆栈）默认 Information 级别零输出；同文件 `StreamToAsync` 与 `EndpointExtensions` 的流式读都记 `Error(ex)`。现 Failed 态补 `_logger.Error(failure, ...)`，与两者对齐。锁定测试 `FinishAsync_FailedState_LogsExceptionObjectAtErrorLevel`（源码级不变式，变异红）。
+  - 公共 API 快照零 diff（4 条均为 private 实现 + 注释勘正，无公共签名变化）；本轮未改历史。
+
+### Dependencies
+
+- **.NET 11 GA 全批稳定版 + 双驱动主版本上移（2026-11-22 GA 迁移，ITM-806 第 1/4 步）**：
+  微软 11 线 31 处由 `11.0.0-rc.3` 转 GA 稳定版 `11.0.0`（EF Core ×4 / Extensions ×8 /
+  Microsoft.Data.Sqlite ×2 / System.* 传递钉扎 ×17）——net11.0 宿主 restore 不再涉及预览包；
+  **Npgsql 10.0.3 → 11.0.0** 与 **MySqlConnector 2.6.2 → 3.0.0**（主版本：MySqlConnector 移除
+  net6/net9 TFM、新增 net11 资产（runtime async/zstd）、VARBINARY(16) 不再经 `GetValue` 读为
+  Guid——本仓公共 API 不暴露该面，框架内部驱动适配）；ZLogger 2.6.2 / MemoryPack 1.22.0 /
+  Dapper 2.1.100 / NativeCompressions 1.3.3 / Roslyn 5.12.0（分析器面）/ TUnit 1.87.12 与
+  Testcontainers 4.17.0（测试面）。
+  验证：60 项目 Release 0W0E；面板 16 项目 1977 过/0 败/110 环境跳过；真库车道 Messaging
+  真容器 52/52 + Dapper 探针 PG 33/33 + MySQL 33/33；AOT 双样本 publish+run；
+  pack 36 包零预览依赖（NU5104 清偿）。
+
+
+- **RabbitMQ.Client 7.2.2 → 7.3.0**（2026-11-23，稳定版发布后升位）：`7.3.0-beta.0` 之后的稳定版已发布，先前「beta 不入线」的排除依据失效。破坏面逐条核查后对本仓零触及：唯一硬源码破坏是 `IChannel` 新增 4 个抽象成员（本仓不实现该接口，仅消费）；5 个新增 `[Obsolete]` 成员（`RabbitMQActivitySource.ContextInjector` / `ContextExtractor` / `UseRoutingKeyAsOperationName` / `TracingOptions`）本仓仅在注释中提及、无调用，不触发 warnings-as-errors；TLS 行为变更（amqps 校验主机名、TLS 工厂拒绝明文回退）本仓无 `Ssl` 配置；`ConsumerDispatchConcurrency=0` 本仓已在 `RabbitMqBroker` 构造期拒绝 0；`CreateChannelAsync` 不再写回传入 options 而本仓显式构造、不依赖写回；短字符串超长异常类型变化与字段表 32 层嵌套限制本仓无超限调用面。许可表达式两版一致（`Apache-2.0 OR MPL-2.0`，license-policy 白名单内含）。消费者可见变化仅依赖面上移，公共 API 与行为契约不变。
+- **PalORM ×5 6.8.0 → 6.9.0**（2026-11-23 全量核新，NuGet 双通道实测）：上游行为变更 4 处——MySQL 批量写入默认整段单批（与 PostgreSQL 对齐）、PG `DateTime` 列统一 `timestamptz`、`ToPageAsync` 遇 `Skip()` 与 SQLite 行锁 API 改调用期抛错，另新增迁移漂移检测（默认开启）与四项生命周期 API。本仓零代码适配：唯一批插消费点的批宽由调用方控制且事务内入事务（MySqlBulkCopyInserter 源码实证无隐式提交切断）、PalORM 模型全部 `DateTimeOffset`、后两组 API 本仓零调用、迁移与 `SaveAsync` 路径零调用。消费者可见变化为依赖面上移，公共 API 与行为契约不变。
+- **Meziantou.Analyzer 3.0.341 → 3.0.342**（补丁位）：分析器规则更新，Release 构建仍 0 警告。
+- **全量包核新（2026-11-24，NuGet 双通道实测）**：74 处中央钉扎中唯一实质可升项为
+  **NativeCompressions 1.3.3 → 1.3.4**（上游 2026-11-24 发布，变更仅原生库升级 Zstd
+  1.5.7→1.6.0、测试稳定性修复、上游仓库 facebook→meta 迁移，无公共 API 变更）。GitHub
+  Actions 同步升位三项（均钉 40 位 commit SHA）：`actions/setup-dotnet` v6.0.0 → v6.1.0、
+  `github/codeql-action` v4.39.1 → v4.39.4、`softprops/action-gh-release` v3.0.3 → v3.0.4。
+  其余维持：69 处已最新（含预发布口径），4 处既有裁决排除（MediatR 12.5.0 / Verify.TUnit
+  32.0.1 商业许可禁令、Confluent.Kafka 2.16.0 不入 4.4.0-alpha.1 跨两主版本 alpha、
+  System.Runtime.CompilerServices.Unsafe 6.1.2 不入 2022 废弃预览 7.0.0-preview.2.22152.2）；
+  dotnet tools（reportgenerator 5.6.1 / Stryker 5.1.0）与 SDK 11.0.100 均最新。消费者可见
+  变化仅依赖面与 CI 面上移，公共 API 与行为契约不变。
+
 ### Documentation
 
 - **2026-11-04 ADR-037：事件日志只追加不删除**（`docs/decisions/037-event-log-append-only.md`，37 份 ADR）：
@@ -440,6 +445,11 @@
   反编译 PalORM.Core 6.8.0 实证。规避：值洞不包引号（即参数化为 `@pN`），或走
   `GetRawConnection()` + 手动 `DbCommand`；同族陷阱：整句 SQL 写进单个洞会整句退化为参数值
   （DDL 静默不执行）。`MultiDialectFixture.ApplySchemaAsync` 注释同步勘正。
+
+
+- **mutation 基数口径收口（R16 裁决，2026-11-24）**：`.github/workflows/mutation.yml` 改以 `scripts/mutation-probe.cs` 为唯一权威门禁 step（退出码 1 即 fail），Stryker 两条 baseline 降为趋势观察（`continue-on-error: true`）。依据：Stryker 分数建立在被 filter 吃掉后的个位数基数上（152 created→12 tested、2310 created→35 tested，422 CompileError），`thresholds.break=95` 在个位数上无区分度；而 mutation-replay 探针证明「拒绝过吗」这条轴，本轮实测 2/2 转红（MySqlLeasePolicy 反转后 318 测试中 2 失败、CompressionProvider 反转后 49 测试中 41 失败），工作树零残留。`gate-audit` 中 `mutation-probe` 由 TOOL 自动升级为 OK（接线 + selftest/探针自证）。**仍明示未解决**：「覆盖了多少」这一半不在本工作流范围，Messaging/CQRS/Transactions.EFCore 改动文件零覆盖，扩大需另立范围。
+- **版本声明四方同步（2026-11-23）**：README 中英「生产环境有谁在用」段从预览叙述改为 GA 状态（`5.0.0` 于 2026-11-22 由 `5.0.0-preview.1` 转正，发布时间点待 tag），依赖声明同步为 .NET 11 GA `11.0.0` + PalORM `6.9.0` + TUnit `1.87.12`；`docs/conventions.md` §10.6 与 `docs/testing.md` §2.1 的测试框架声明同步为 TUnit `1.87.12` + MTP `2.5.3`（实际解析值，由 `project.assets.json` 核对）。失实成因是升级轮只同步了 `Directory.Packages.props` 与 CHANGELOG，未回扫「当前版本」叙述面；`doc-consistency` 与 `count-audit` 两门禁均不管版本号与发布状态，属机械防线已知边界。
+- **README（中英）许可证说明按发布版本划分重写（2026-11-23）**：参照上游 PalORM 许可说明结构改为「划分总纲 + 版本区间列表 + 当前仓库授权」结构，区间边界经 NuGet.org 逐版本 nuspec 实证（下载 12 个已发布 nupkg 读 nuspec）：`v1.0.0` ~ `v4.0.0` 共 10 个已发布版本（2026-07-30 ~ 2026-10-11）为 AGPL-3.0-or-later，`v5.0.0-preview.1`（2026-10-27 起）为 Apache-2.0；`v1.0.0-preview.1`（2026-07-04）实证为 MIT，属预览版，按维护者裁决不列入公开说明。许可口径不变（v5.0 起 Apache-2.0、更早已发布版本不追溯），纯结构优化，消费方锁定旧版本时的合规评估路径更清晰。
 
 ### Tests
 
@@ -491,20 +501,6 @@
 - **2026-11-05 测试基建勘正**：批次 C 的 saga 水合测试曾用
   `session.ExecuteAsync($"... saga_id = '{id}'")` 改写存量行，语句无报错但 0 行生效——根因见下方
   Documentation 的 PALORM-RT6，测试改用 store 自身写入并留注释防复发。
-
-### Dependencies
-
-- **.NET 11 GA 全批稳定版 + 双驱动主版本上移（2026-11-22 GA 迁移，ITM-806 第 1/4 步）**：
-  微软 11 线 31 处由 `11.0.0-rc.3` 转 GA 稳定版 `11.0.0`（EF Core ×4 / Extensions ×8 /
-  Microsoft.Data.Sqlite ×2 / System.* 传递钉扎 ×17）——net11.0 宿主 restore 不再涉及预览包；
-  **Npgsql 10.0.3 → 11.0.0** 与 **MySqlConnector 2.6.2 → 3.0.0**（主版本：MySqlConnector 移除
-  net6/net9 TFM、新增 net11 资产（runtime async/zstd）、VARBINARY(16) 不再经 `GetValue` 读为
-  Guid——本仓公共 API 不暴露该面，框架内部驱动适配）；ZLogger 2.6.2 / MemoryPack 1.22.0 /
-  Dapper 2.1.100 / NativeCompressions 1.3.3 / Roslyn 5.12.0（分析器面）/ TUnit 1.87.12 与
-  Testcontainers 4.17.0（测试面）。
-  验证：60 项目 Release 0W0E；面板 16 项目 1977 过/0 败/110 环境跳过；真库车道 Messaging
-  真容器 52/52 + Dapper 探针 PG 33/33 + MySQL 33/33；AOT 双样本 publish+run；
-  pack 36 包零预览依赖（NU5104 清偿）。
 
 ## [5.0.0-preview.1] — 2026-10-27
 
