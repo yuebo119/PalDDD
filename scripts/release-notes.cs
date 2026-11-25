@@ -17,7 +17,7 @@
 //     --check                形态校验：头条存在且 ≤80 字、每条带短标题、body 体量 ≤ 上限
 //     --packages-dir <dir>   从实际 nupkg 推导包清单（默认 release-packages）
 //     --tag <name>           覆盖对比链接的 tag 名（默认 v<version>）
-//     --max-chars <n>        body 字符上限（默认 1400，仅 --check 生效）
+//     --max-chars <n>        body 字符上限（默认 4000，仅 --check 生效）
 //     --selftest             纯函数判定自测（不读仓库）
 // 退出码：0 = 成功/校验通过；1 = FAIL；2 = 用法错
 //
@@ -63,7 +63,7 @@ var writePath = "";
 var checkMode = false;
 var packagesDir = "release-packages";
 var tagName = version == "unreleased" ? "" : $"v{version}";
-var maxChars = 1400;
+var maxChars = 4000;
 
 for (var i = 1; i < args.Length; i++)
 {
@@ -224,7 +224,9 @@ if (changesOut.Count > 0)
     sb.Append("## 本版变更\n\n");
     foreach (var b in changesOut)
     {
-        sb.Append($"- **{b.Title}**\n");
+        // 每条带一句摘要（detail 首句），只写标题不足以让读者判断影响
+        var detail = FirstSentence(b.Detail);
+        sb.Append(detail.Length > 0 ? $"- **{b.Title}**：{detail}\n" : $"- **{b.Title}**\n");
     }
     sb.Append('\n');
 }

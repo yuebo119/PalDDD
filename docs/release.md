@@ -605,7 +605,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 |----|------|--------------|
 | 头条 | 版本标题下第一段，≤80 字，本版主体变化，不分行 | 是（首行） |
 | `### 破坏性/行为变更` | 仅在有签名破坏或行为变更时出现，位置在头条之下、变更要点之前 | 是（取短标题 + 首句） |
-| `### 变更要点` | 其余全部条目（新增/修复/性能/依赖/文档/验证） | 是（仅取短标题） |
+| `### 变更要点` | 其余全部条目（新增/修复/性能/依赖/文档/验证） | 是（短标题 + 首句摘要） |
 
 条目必须带短标题：`- **短标题**：细节`，短标题 2~32 字符。短标题进 Release 页，冒号后的细节只留在 CHANGELOG。
 
@@ -634,7 +634,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 | 顶部段结构（三段式：破坏性/行为变更 唯一且在变更要点之前，无非法段标题） | `changelog-check.cs` C3 | exit 1 |
 | 预估措辞（变更要点内测试数字） | `changelog-check.cs` C4 | WARN |
 | 短标题含内部术语且未标〔内部〕 | `changelog-check.cs` C5 | WARN |
-| 头条存在且 ≤80 字 / 每条带短标题 / body ≤1400 字符 | `release-notes.cs --check`（本地 + release.yml pack 前） | exit 1 |
+| 头条存在且 ≤80 字 / 每条带短标题 / body ≤4000 字符 | `release-notes.cs --check`（本地 + release.yml pack 前） | exit 1 |
 
 ### 11.8 Release Body 生成（唯一路径）
 
@@ -646,7 +646,7 @@ dotnet run scripts/release-notes.cs -- <版本号|unreleased>                  #
 dotnet run scripts/release-notes.cs -- <版本号> --write body.md --packages-dir release-packages  # 落盘（CI 用）
 ```
 
-派生形态：头条 + ⚠️ 升级须知（破坏性/行为变更 短标题 + 首句）+ 本版变更（仅短标题）+ 包清单一行 + 页脚。`〔内部〕` 与 `### 附录` 条目不上页。禁止在 Release 页面手工编辑变更条目。
+派生形态：头条 + ⚠️ 升级须知（破坏性/行为变更 短标题 + 首句）+ 本版变更（短标题 + 首句摘要）+ 包清单一行 + 页脚。`〔内部〕` 与 `### 附录` 条目不上页。禁止在 Release 页面手工编辑变更条目。
 
 ### 11.9 反面案例（勿再犯）
 
@@ -716,7 +716,7 @@ dotnet run scripts/changelog-check.cs    # FAIL=阻断（回 Phase 3）；WARN=�
 
 ### 12.7 Phase 6/7——发布与事后同步
 
-- **P6**：按 §5.1 打 tag 推送 → release.yml 在 pack 前过 `changelog-check`（C1–C10），并以 `scripts/release-notes.cs` 从转正后的 CHANGELOG 版本段**派生** GitHub Release body（头条 + 升级须知 + 本版变更短标题 + 包清单，体量 ≤1400 字符，零二次编辑，2026-11-25 起）。
+- **P6**：按 §5.1 打 tag 推送 → release.yml 在 pack 前过 `changelog-check`（C1–C10），并以 `scripts/release-notes.cs` 从转正后的 CHANGELOG 版本段**派生** GitHub Release body（头条 + 升级须知 + 本版变更（短标题 + 首句摘要）+ 包清单，体量 ≤4000 字符，零二次编辑，2026-11-25 起）。
 - **P7**：发布后再改 CHANGELOG（勘误/重构），GitHub Release 页 body **不会**自动更新——需手动同步页面并注明"事后勘误"（v2.1.0 实录：发布当晚重构 [2.1.0] 段，Release 页保留旧版 body，靠仓库 CHANGELOG 为正本）。
 
 ### 12.8 流程失效回溯（每次发版后自检）

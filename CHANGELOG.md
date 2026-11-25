@@ -38,7 +38,7 @@
 
 ### 变更要点
 
-- **五项 API 增补**：
+- **五项 API 增补**：补齐五处消费者可见能力缺口（事件流版本查询、Inbox Failed 行保留清理、发布自定义头、Saga 步骤表枚举、broker 发布/消费两跳 span），均为纯加法。
   **A1** 新增**能力子接口** `IEventLogVersionReader.GetStreamVersionAsync(streamName, ct)`
   → `ValueTask<long>`（空流 -1，与 `ExpectedStreamVersion.NoStream` 对齐），四栈均实现
   （InMemory/EF Core/Dapper/PalORM）。`IEventLog` **不变**——刻意不用 DIM 返回 -1（那会给出
@@ -69,7 +69,7 @@
   + `ExtraHeaders_Null_KeepsEmptyContextZeroAllocationPath`；A4 `SagaStepDescriptorTests` 2/2；
   count-audit 16 项 84 处声明全一致（Activity 12→14、ADR 40 份、源文件 265）。
 
-- **Outbox/Inbox 读侧查询**：
+- **Outbox/Inbox 读侧查询**：新增 `GetByStatusAsync`，四栈可按状态分页查询框架自己写入的 Outbox/Inbox 行，此前只能连库写裸 SQL（Dapper/PalORM 栈无任何入口）。
   `IPalOutboxStore.GetByStatusAsync(OutboxStatus, int, CancellationToken)` 与
   `IInboxStore.GetByStatusAsync(InboxStatus, int, CancellationToken)`，四栈实现
   （InMemory / EFCore / Dapper / PalORM）语义统一为 `WHERE status = @status ORDER BY id LIMIT @maxCount`
@@ -91,7 +91,7 @@
   Dapper `InboxSelectByStatus` 去掉 `WHERE status` → Dapper Inbox 矩阵转红。
   公共 API 快照 +12 行（两接口 × 5 处方法 + 两个 SQL 常量）。
 
-- **Saga 读侧按状态查询**：
+- **Saga 读侧按状态查询**：`ISagaStateStore.GetByStatusAsync` 支持按 `SagaStatus` 列举任意状态，人工决策待办有了正式查询入口（此前只有「活跃 + 等待人工决策」两态可从抽象层列举）。
   `ISagaStateStore<TState>` 增 `GetByStatusAsync(SagaStatus status, int maxCount, CancellationToken ct = default)`，
   四栈实现（InMemory / EFCore `SagaStateDbContext` / Dapper / PalORM）语义统一为
   `WHERE status = @status ORDER BY saga_id LIMIT @maxCount`（ULID 字典序=创建序，跨栈结果可比），走既有 `(status)` 索引。
@@ -100,7 +100,7 @@
   未定义为默认接口实现（DIM）：DIM 返回空列表会让未更新的自定义存储静默给出「查无此状态」，正是本轮要消灭的假 API 形态。
   过滤值本身也校验——传已移除的 `(SagaStatus)4` 抛可行动异常，而非返回空列表让调用方误判「该状态没有数据」。
 
-- **消费确认契约 IMessageAck**：
+- **消费确认契约 IMessageAck**：订阅契约新增「消费确认」维度——`AcknowledgeAsync` / `RejectAsync(bool requeue)`，Kafka 手动提交与 RabbitMQ 确认器同时接入，批次级确认器一次结算整批；不覆写的自定义 broker 仍是 at-most-once（语义不静默升级）。
   ①**`IMessageAck`**（Messaging）：`AcknowledgeAsync` / `RejectAsync(bool requeue)` 把「消费确认」补成订阅契约的一个维度。
   配套 `NoOpMessageAck` 与两条新重载——`SubscribeAsync<T>(Func<TMessage, MessageConsumeContext?, IMessageAck, CancellationToken, ValueTask>)`
   与 `SubscribeBatchAsync<T>(Func<IReadOnlyList<ConsumedMessage<TMessage>>, IMessageAck, CancellationToken, ValueTask>)`（批次级确认器）
@@ -126,7 +126,7 @@
   → 同一二进制两次运行结果不同；现限定 `BrokerAddressFamily.V4`，三次连跑 32/32）。
   公共 API 快照 +14 行（纯新增）；`docs/conventions.md` 源文件数 260→261。
 
-- **请求级超时与管道分层**：
+- **请求级超时与管道分层**：新增 `TimeoutBehavior`（超时转 `TimeoutException` 并由 `ExceptionMiddleware` 映射 504）与 `ExecuteInTransactionAsync<T>` 泛型重载；同时定案八类横切能力的归层（验证/日志/超时在管道、异常在中间件、限流在宿主）。
   ①**请求级超时**（CQRS / DependencyInjection）：`TimeoutBehavior<TRequest,TResponse>` 与 `AddPalTimeoutBehavior` 两个重载
   （开放泛型 / 闭合泛型，后者 Native AOT 安全）。超时转 `TimeoutException`，调用方取消仍按 `OperationCanceledException`
   传播；`ExceptionMiddleware` 增 `TimeoutException` → 504 映射（此前落入通用 500）。只放弃等待、不中断 handler——
@@ -139,7 +139,7 @@
   文档同步：usage 增「横切能力的归属」表与两处用法示例，pitfalls 增 D8，features 增超时行为行，conventions 源文件数 259→260。
   验证：CQRS 面板 7/7（快路径零等待、超时与取消分流、非泛型桥接）、Core 5/5（回滚聚合、嵌套 fail-fast 不误回滚）、
   DependencyInjection 33/33（三种注册顺序）、Hosting 15/15（504 映射与响应已开始不改写）。
-- **run 所有权与重试执行器**：
+- **run 所有权与重试执行器**：`DetachedStreamOptions.RunOwnerSelector` 按 HTTP 主体隔离断线续跑 run（跨主体附着与取消答 404，不暴露 runId 是否存在）；`RetryExecutor` 复用退避策略重试任意异步委托。
   ①**run 所有权**（Hosting.AspNetCore）：`DetachedStreamOptions.RunOwnerSelector`（`Func<HttpContext, string?>`，默认 null 不启用）
   在 run 创建时固化 owner，附着与取消按 owner 双重匹配，不等答 404（不区分 403，避免用状态码枚举 runId）；
   未配置时行为与旧版逐字一致。ADR-031 增实施附记，多附着复活条件 2026-11-01 复核仍未满足。
@@ -175,8 +175,8 @@
   降幅门禁覆盖 16 模块；CI 全量待重录上调）。
 
 
-- **PalORM PG Outbox 唤醒**：新增 `PalOrmPostgreSqlOutboxNotifier`（IHostedService）与注册入口 `AddPalOrmPostgreSqlOutboxNotifier(services, connectionString, channelName)`——PG 跨进程唤醒此前仅在 Dapper 栈，PalORM 栈的 Outbox 端到端延迟受 PeriodicTimer 轮询周期钳制。监听载体是 PalORM 6.9.0 的 `PgNotificationListener`（30s 心跳保活 + 线性递增全量抖动重连），NOTIFY 到达即触发 `OutboxBatchProcessor`，通道契约与 Dapper 版完全一致（`outbox_channel` + 过渡表触发器，同一库两栈共用触发器面）。公共 API 快照 +6。真库通路（wslc pg186 实测 NOTIFY 送达）与非真库面（通道白名单/DI 注册/幂等释放，22 用例）均验证。
-- **IPalLogger 零分配插值**：新增非泛型基接口 `IPalLogger`（承载 `IsEnabled`，供插值 handler 构造使用）与四个级别 handler（`PalDebugLogHandler` / `PalInformationLogHandler` / `PalWarningLogHandler` / `PalErrorLogHandler`）。`IPalLogger<T>` 每个级别新增一个插值重载，调用形态为 `_logger.Debug($"id={id} name={name}")`。**关闭态零分配**：级别未启用时编译器跳过整个插值表达式（实测 N=2000：MEL 参数化重载 96.0 B/op → 0.0 B/op）；启用态 336.0 → 约 196.0 B/op。纯加法，旧实现者走 DIM 默认实现零迁移成本。公共 API 快照 +51/−1（唯一删除为 `IPalLogger<T>` 的 `IsEnabled` 上移到基接口）。
+- **PalORM PG Outbox 唤醒**：新增 `PalOrmPostgreSqlOutboxNotifier` 与注册入口，PalORM 栈获得与 Dapper 栈一致的 LISTEN/NOTIFY 实时唤醒，Outbox 端到端延迟不再受轮询周期钳制。新增 `PalOrmPostgreSqlOutboxNotifier`（IHostedService）与注册入口 `AddPalOrmPostgreSqlOutboxNotifier(services, connectionString, channelName)`——PG 跨进程唤醒此前仅在 Dapper 栈，PalORM 栈的 Outbox 端到端延迟受 PeriodicTimer 轮询周期钳制。监听载体是 PalORM 6.9.0 的 `PgNotificationListener`（30s 心跳保活 + 线性递增全量抖动重连），NOTIFY 到达即触发 `OutboxBatchProcessor`，通道契约与 Dapper 版完全一致（`outbox_channel` + 过渡表触发器，同一库两栈共用触发器面）。公共 API 快照 +6。真库通路（wslc pg186 实测 NOTIFY 送达）与非真库面（通道白名单/DI 注册/幂等释放，22 用例）均验证。
+- **IPalLogger 零分配插值**：新增插值日志重载，调用形态 `_logger.Debug($"id={id} name={name}")`；级别未启用时编译器跳过整个插值表达式，实测 96.0 B/op 降至 0.0 B/op。新增非泛型基接口 `IPalLogger`（承载 `IsEnabled`，供插值 handler 构造使用）与四个级别 handler（`PalDebugLogHandler` / `PalInformationLogHandler` / `PalWarningLogHandler` / `PalErrorLogHandler`）。`IPalLogger<T>` 每个级别新增一个插值重载，调用形态为 `_logger.Debug($"id={id} name={name}")`。**关闭态零分配**：级别未启用时编译器跳过整个插值表达式（实测 N=2000：MEL 参数化重载 96.0 B/op → 0.0 B/op）；启用态 336.0 → 约 196.0 B/op。纯加法，旧实现者走 DIM 默认实现零迁移成本。公共 API 快照 +51/−1（唯一删除为 `IPalLogger<T>` 的 `IsEnabled` 上移到基接口）。
 
 - **可观测补强与计数对齐**〔内部〕：
   **S3**：新增 2 个 broker 计数器 `paldd.broker.consume_failed` / `paldd.broker.publish_failed`
@@ -196,7 +196,7 @@
   `ConsumeFailedCounter_IncrementsOnPoisonMessage`（毒消息 → 计数 ≥1）；RabbitAckTests 7/7；
   count-audit 16 项 84 处声明全一致（新增 3 处由扩展正则覆盖）。
 
-- **RabbitMQ 健康态接入**：
+- **RabbitMQ 健康态接入**：`RabbitMqBroker` 实现 `IMessageBrokerHealth`，channel 关闭即置故障态供 `/health` 摘流量；同时 EF 栈终态写被 DB 拒绝时回退内存字段，消除「假终态」。
   **S1**：`RabbitMqBroker` 追加 `IMessageBrokerHealth`（公共 API 快照 +2 行），以
   `IChannel.IsOpen == false` 判据在 `TryAckSafeAsync`/`TryNackSafeAsync`/`CancelConsumeSafeAsync`
   的 catch 里置故障态——per-delivery 回调模型没有 Kafka 式「消费线程终止」观测点，可观测面只有
@@ -215,7 +215,7 @@
   并发冲突回退用例 + 既有 SQLite 用例扩断言入参回退）；`IdempotencyEfCoreTests` 10/10
   （既有并发冲突用例补断言败者返回值语义）；变异红→绿（删回退 → InMemory 用例转红）。
 
-- **超时放弃 handler 风险披露**：
+- **超时放弃 handler 风险披露**：超时后 abandoned handler 可能在请求 scope 释放后继续运行并抛 `ObjectDisposedException`，叠加请求面无幂等键则 504 重试可能双写；本版只登记风险与可观测事件，不修根因。
   `TimeoutBehavior` 超时后 abandoned handler 在请求 scope 释放后继续运行，触碰 scoped 依赖抛
   `ObjectDisposedException` 且被 `ObserveFault` 静默吞掉；叠加「CQRS 请求面无幂等键」→ 504 重试
   可能双写。**本轮不含根因修复**（阶段 1 只做登记与披露，见
@@ -237,9 +237,9 @@
   Kafka 侧还须关闭 `EnableAutoOffsetStore`。同步改写 `docs/features.md` 的「边界与刻意取舍」两条
   （Broker 语义、`SagaStatus` 数值契约）。
 
-- **Rabbit 批量单帧聚合**：批量订阅（`SubscribeBatchAsync`）的批次级确认在安全前提下压成单帧——默认形态（每订阅独立 consumer channel + 串行 dispatch，`ConsumerDispatchConcurrency` 默认 1）下 deliveryTag 严格单调入批，`BasicAckAsync(maxTag, multiple: true)` 一帧等价逐条 N 帧（64 条批 64 帧 → 1 帧）。实现为程序集内部的 `IBatchAckAggregator` 扩展点（`MessageBatchAck` 首成员探测路由，Kafka/NoOp 形态行为零变化）；聚合开关判据提为纯函数 `CanAggregateBatchAck`（白盒判定表锁定：共享 channel 或并发 dispatch >1 恒回退逐条）。共享 channel 模式（`UseSharedConsumerChannel=true`）与 `ConsumerDispatchConcurrency > 1` 下自动回退逐条，语义恒正确。帧级回归依赖三层锁定：聚合路由单测（变异验证红/绿）、判定表单测、真库语义探针（64 条批 channel 存活 + 零重投 + 零 Warning，11/11 绿）。
+- **Rabbit 批量单帧聚合**：批量订阅的批次确认在安全前提下压成单帧（`multiple:true`），64 条批由 64 帧降为 1 帧；共享 channel 或并发 dispatch 时自动回退逐条，语义恒正确。批量订阅（`SubscribeBatchAsync`）的批次级确认在安全前提下压成单帧——默认形态（每订阅独立 consumer channel + 串行 dispatch，`ConsumerDispatchConcurrency` 默认 1）下 deliveryTag 严格单调入批，`BasicAckAsync(maxTag, multiple: true)` 一帧等价逐条 N 帧（64 条批 64 帧 → 1 帧）。实现为程序集内部的 `IBatchAckAggregator` 扩展点（`MessageBatchAck` 首成员探测路由，Kafka/NoOp 形态行为零变化）；聚合开关判据提为纯函数 `CanAggregateBatchAck`（白盒判定表锁定：共享 channel 或并发 dispatch >1 恒回退逐条）。共享 channel 模式（`UseSharedConsumerChannel=true`）与 `ConsumerDispatchConcurrency > 1` 下自动回退逐条，语义恒正确。帧级回归依赖三层锁定：聚合路由单测（变异验证红/绿）、判定表单测、真库语义探针（64 条批 channel 存活 + 零重投 + 零 Warning，11/11 绿）。
 - **Rabbit 发布免载荷拷贝**：`BasicPublishAsync(..., bodyOwner:)` 把 `PooledBodyWriter` 的所有权移交客户端，由客户端在发送完成或发布失败后释放一次。7.2.x 无 owner 时客户端必须在确认与流控两次可挂起 await 之后把 body 复制进内部缓冲，本形态省掉该拷贝。配套加固：`PooledBodyWriter.Dispose` 加 Interlocked 幂等门（客户端与发布路径 `finally` 各释放一次，重复 Return 同一数组会让两个租用者共享同一缓冲）；发布路径改为 `finally` 兜底，覆盖序列化或 exchange 声明阶段抛出、所有权未转移的路径。
-- **MemoryPack 直写零分配**：`MemoryPackMessageSerializer` 覆写 `Serialize(object, descriptor, IBufferWriter<byte>)`，改走 `MemoryPackSerializer.Serialize<TBufferWriter>(Type, in writer, object, options)` 非泛型直写。实测（N=10000，47 B 载荷）：复用缓冲 **0.0 B/op**，原 DIM 回退 72.0 B/op，两者产出逐字节一致。原注释「MemoryPack 1.21.4 无 (writer, Type, object) 重载」经反射枚举证伪并勘正（1.22.0 存在该重载）。
+- **MemoryPack 直写零分配**：覆写 `Serialize` 到 `IBufferWriter<byte>` 的非泛型直写重载，复用缓冲 0 B/op（原 72 B/op），产出逐字节一致。`MemoryPackMessageSerializer` 覆写 `Serialize(object, descriptor, IBufferWriter<byte>)`，改走 `MemoryPackSerializer.Serialize<TBufferWriter>(Type, in writer, object, options)` 非泛型直写。实测（N=10000，47 B 载荷）：复用缓冲 **0.0 B/op**，原 DIM 回退 72.0 B/op，两者产出逐字节一致。原注释「MemoryPack 1.21.4 无 (writer, Type, object) 重载」经反射枚举证伪并勘正（1.22.0 存在该重载）。
 
 - **Kafka 批量订阅关停挂起**〔内部〕：
   `BatchSubscription.DisposeAsync` 先 `inner.DisposeAsync()`（Kafka 消费线程在 finally 一次性
@@ -311,7 +311,7 @@
   实际方法名按仓库 `Method_Scenario` 命名规范加下划线）；变异删判据 →
   `UncommittedOffset_DoesNotAdvance` 转红（committed=1）；公共 API 快照零变化。
 
-- **Failed 行保留清理修复**：
+- **Failed 行保留清理修复**：四栈 `MarkFailedAsync` 补写 `ProcessedAt`，使 `includeFailed` 保留策略真正生效——此前 Failed 行 `processed_at` 恒 NULL，永不命中删除条件。
   ADR-039 的 A2 落地后仍清不掉 Failed 行——三栈 `MarkFailedAsync` 只写 `Status`/`LastError`，
   不写 `ProcessedAt`（Failed 行 `processed_at` 恒 NULL），而 `RetentionSql.InboxDeleteAllSubquery`
   与 `EfCoreRetentionStore.BuildInboxDelete` 的 `includeFailed` 谓词是
@@ -391,7 +391,7 @@
   - **缺陷 4（P3）断线续跑 run 生产者异常无 Error 出口**：`StreamRun.FinishAsync` 只在 `IsEnabled(Debug)` 下记 `failure.GetType().Name`，异常对象（消息 + 堆栈）默认 Information 级别零输出；同文件 `StreamToAsync` 与 `EndpointExtensions` 的流式读都记 `Error(ex)`。现 Failed 态补 `_logger.Error(failure, ...)`，与两者对齐。锁定测试 `FinishAsync_FailedState_LogsExceptionObjectAtErrorLevel`（源码级不变式，变异红）。
   - 公共 API 快照零 diff（4 条均为 private 实现 + 注释勘正，无公共签名变化）；本轮未改历史。
 
-- **.NET 11 GA 与双驱动升级**：
+- **.NET 11 GA 与双驱动升级**：微软 11 线 31 处转 GA 稳定版，Npgsql 11.0 与 MySqlConnector 3.0 主版本上移，restore 不再涉及预览包。
   微软 11 线 31 处由 `11.0.0-rc.3` 转 GA 稳定版 `11.0.0`（EF Core ×4 / Extensions ×8 /
   Microsoft.Data.Sqlite ×2 / System.* 传递钉扎 ×17）——net11.0 宿主 restore 不再涉及预览包；
   **Npgsql 10.0.3 → 11.0.0** 与 **MySqlConnector 2.6.2 → 3.0.0**（主版本：MySqlConnector 移除
