@@ -12,6 +12,10 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **发布凭证迁移至 NuGet Trusted Publishing（2026-11-24，OIDC 免轮换 key）**：NuGet 自 2026-08-17 起新 API key 最长 30 天、所有长有效期 key 于 2026-11-01 统一过期，v5.0.0 发行轮三次 Release 均在 Push 第一步 403（key expired）失败、零包流出。`.github/workflows/release.yml` 改用 OIDC 短期令牌：job 加 `id-token: write`、新增 `NuGet/login@v1`（钉 commit SHA）用 `NUGET_USER` 换取约 1 小时令牌、`dotnet nuget push --api-key` 改读该令牌；判定信号 `HAS_NUGET_KEY` → `HAS_NUGET_USER`。`docs/release.md` §6.2/§6.4 同步（新策略四参数 + environment secret 配置）。旧 `NUGET_API_KEY` secret 暂留，验证发布成功后清理。须 nuget.org 建可信发布策略 + production environment 加 `NUGET_USER` 后方能实际推送。
+
 ## [5.0.0] — 2026-11-24
 
 > **GA 转正说明（2026-11-24 发行前重定）**：`[5.0.0-preview.1]` 预发布段按 2026-10-27 裁决转正为本段。2026-11-22 GA 轮曾按「转正内容 = preview.1 发布窗口 + 预览期修订族（截至 11-22 依赖核新）」清空后缀，但 `[Unreleased]` 此后继续累积 11-23/11-24 的消费者可见变更（PalORM PG Outbox 唤醒、`IPalLogger` 零分配插值重载、Rabbit 7.3.0 与批量结算单帧聚合、MemoryPack 直写、R15–R18 缺陷修复族、PalORM 6.9.0 / NativeCompressions 1.3.4 依赖与 Actions 升位）。2026-11-24 发行前用户裁决「全部并入 5.0.0」——这些变更本就是 5.0.0 要发的内容，故 `[Unreleased]` 全部条目并入本段，`[5.0.0-preview.1]` 段预发布说明「`[Unreleased]` 随 GA 后的下一版本发布」的预判失效（若压到下一版将推迟 P1/P2 修复到达），按「预览期收集的消费者反馈并入 GA 轮修订」口径收口。SemVer **Major** 不变（破坏窗口已由 preview.1 锚定：快照 +468/−64 与 fail-fast 行为破坏，见 `[5.0.0-preview.1]` 段「兼容性」）；并入内容均为纯加法、行为修正与缺陷修复，无新签名破坏。
