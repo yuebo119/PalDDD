@@ -115,18 +115,15 @@ else
     }
 }
 
-// ── C3 最新发布段分类顺序（§11.2 固定顺序）────────────────────
+// ── C3 顶部段结构（三段式：头条 + 💔 按需 + 变更要点；旧 9 分类顺序兼容）────
 string[] order = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security", "Dependencies", "Documentation", "Tests"];
 var headingLines = lines
     .Select((l, i) => (Line: l, No: i + 1))
     .Where(x => x.Line.StartsWith("## [", StringComparison.Ordinal))
     .ToList();
-// bash：grep -nE '^## \[' | grep -v 'Unreleased' | head -1——行内容含 Unreleased 即排除
-(string Line, int No)? latest = null;
-foreach (var h in headingLines)
-{
-    if (!h.Line.Contains("Unreleased")) { latest = h; break; }
-}
+// 校验对象 = 顶部版本段（含 [Unreleased]）：发布前是累积段，发布后是新版本段。
+// 历史已发布段冻结不回改（Pal.ORM 发布规范），故不再跳过 Unreleased 去找旧段。
+(string Line, int No)? latest = headingLines.Count > 0 ? headingLines[0] : null;
 int? latestLine = null, endLine = null, appendixLine = null;
 if (latest is null)
 {
@@ -158,95 +155,98 @@ else
     // END_LINE = 附录行（若在本段内）?? 硬边界（三重兜底对齐）
     if (appendixLine is not null) endLine = appendixLine;
 
-    // 提取区间 [latestLine, endLine] 内的 ^### [A-Za-z]+ 分类名（grep -oE + sed 去前缀）
-    var sections = lines
+    // 段内所有 ### 标题（去前缀）。三段式 = 头条 + ### 💔 破坏性/行为变更（按需）+ ### 变更要点。
+    var subHeadings = lines
         .Skip(latestLine.Value - 1)
         .Take(endLine.Value - latestLine.Value + 1)
-        .Select(l => Regex.Match(l, "^### ([A-Za-z]+)"))
-        .Where(m => m.Success)
-        .Select(m => m.Groups[1].Value)
+        .Select(l => l.Trim())
+        .Where(l => l.StartsWith("### ", StringComparison.Ordinal))
+        .Select(l => l[4..].Trim())
         .ToList();
-    var sequenced = true;
-    var prevIdx = 0;
-    foreach (var s in sections)
+    // 兼容旧 9 分类段（历史遗留或误用）：出现旧分类则按 §11.2 顺序校验并提示迁移
+    var legacySections = subHeadings.Where(s => Array.IndexOf(order, s) >= 0).ToList();
+    if (legacySections.Count > 0)
     {
-        var idx = Array.IndexOf(order, s);
-        if (idx < 0) continue;   // 非标准分类（如中文主题段）跳过
-        if (idx < prevIdx) { sequenced = false; break; }
-        prevIdx = idx;
+        var sequenced = true;
+        var prevIdx = 0;
+        foreach (var s in legacySections)
+        {
+            var idx = Array.IndexOf(order, s);
+            if (idx < prevIdx) { sequenced = false; break; }
+            prevIdx = idx;
+        }
+        if (sequenced) Pass(3, "顶部段使用旧 9 分类且顺序合规（建议迁移到三段式：头条 + 💔 + 变更要点）");
+        else Fail(3, "顶部段旧 9 分类顺序违反 §11.2: " + string.Join(" ", legacySections));
     }
-    if (sequenced)
+    else if (subHeadings.Count == 0)
     {
-        Pass(3, "最新发布段分类顺序符合 §11.2");
+        Warn(3, "顶部段无 ### 段标题（三段式要求 ### 💔 与/或 ### 变更要点）");
     }
     else
     {
-        Fail(3, "最新发布段分类顺序违反 §11.2 固定顺序（Added→Changed→Deprecated→Removed→Fixed→Security→Dependencies→Documentation→Tests），实际: " + string.Join(" ", sections));
+        var breakingCount = subHeadings.Count(s => s.StartsWith("💔", StringComparison.Ordinal));
+        var breakingIdx = subHeadings.FindIndex(s => s.StartsWith("💔", StringComparison.Ordinal));
+        var changeIdx = subHeadings.FindIndex(s => s == "变更要点");
+        var unknown = subHeadings.Where(s => !s.StartsWith("💔", StringComparison.Ordinal) && s != "变更要点").ToList();
+        if (unknown.Count > 0)
+            Fail(3, "顶部段出现非标准 ### 段标题（只允许 💔 破坏性/行为变更 与 变更要点）: " + string.Join(" / ", unknown));
+        else if (breakingCount > 1)
+            Fail(3, "顶部段出现多个 💔 段（破坏性变更段必须唯一）");
+        else if (breakingIdx >= 0 && changeIdx >= 0 && breakingIdx > changeIdx)
+            Fail(3, "顶部段 💔 段必须在 变更要点 段之前");
+        else
+            Pass(3, "顶部段结构合规（三段式：头条 + 💔 按需 + 变更要点）");
     }
 }
 
-// ── C4 Tests 段预估口径（WARN——数字真伪仍需人工对照实测，机械只能拦措辞）──
+// ── C4 预估口径（WARN——数字真伪仍需人工对照实测，机械只能拦措辞）──
 if (latestLine is not null)
 {
-    // sed -n '/^### Tests/,/^### \|^## [^[]/p'：从 ### Tests 行（含）到下一个
-    // ### 或 "## 非[" 行（含）——sed 范围终点从起点下一行起扫，起点行不会自终止
     var block = lines.Skip(latestLine.Value - 1).Take(endLine!.Value - latestLine.Value + 1).ToList();
-    var testsLines = new List<string>();
-    var inTests = false;
-    foreach (var l in block)
-    {
-        if (!inTests)
-        {
-            if (l.StartsWith("### Tests", StringComparison.Ordinal))
-            {
-                inTests = true;
-                testsLines.Add(l);
-            }
-        }
-        else
-        {
-            testsLines.Add(l);
-            if (l.StartsWith("### ", StringComparison.Ordinal)
-                || (l.StartsWith("## ", StringComparison.Ordinal) && l.Length > 3 && l[3] != '['))
-            {
-                break;
-            }
-        }
-    }
     // 先剔除"基线约 N"合法形态（历史基线允许约数），再匹配剩余预估措辞
     var baselineRx = new Regex("基线约 ?[0-9]+");
     var vagueRx = new Regex("约 ?[0-9]+|[~～][0-9]+|预计");
-    var vague = testsLines
+    var vague = block
+        .Where(l => l.StartsWith("- ", StringComparison.Ordinal))
         .Select(l => baselineRx.Replace(l, ""))
-        .Where(l => vagueRx.IsMatch(l))
+        .Where(l => (l.Contains("测试", StringComparison.Ordinal) || l.Contains("用例", StringComparison.Ordinal)
+                     || l.Contains("断言", StringComparison.Ordinal) || l.Contains("面板", StringComparison.Ordinal))
+                    && vagueRx.IsMatch(l))
         .ToList();
     if (vague.Count > 0)
     {
-        Warn(4, "Tests 段含疑似预估口径（§11.3 规则 1 要求实测/精确推导值，请校准）: " + string.Join("\n", vague.Take(2)));
+        Warn(4, "顶部段含疑似预估口径（§11.3 规则 1 要求实测/精确推导值，请校准）: " + string.Join("\n", vague.Take(2)));
     }
     else
     {
-        Pass(4, "Tests 段无预估口径措辞");
+        Pass(4, "顶部段无预估口径措辞");
     }
 }
 
-// ── C5 分类层内部术语泄漏（WARN——分类层 = 最新发布段至附录之间）──
-// 注意：PDDD0xx/PALxxx 是公开分析器诊断 ID（消费者在构建警告中可见），属合法消费者术语，不拦
-if (latestLine is not null && appendixLine is not null)
+// ── C5 短标题内部术语泄漏（WARN——短标题会进 Release 页）──
+// PDDD0xx/PALxxx 是公开分析器诊断 ID（消费者在构建警告中可见），属合法消费者术语，不拦；
+// 〔内部〕条目不进 Release 页，跳过
+if (latestLine is not null)
 {
+    var scanEnd = appendixLine ?? endLine!.Value;   // 有 ### 附录 则扫到附录前（附录是内部层）
     var leakRx = new Regex("ITM-[0-9]+|(v[0-9]{2} 轮)|评审片|探针双红");
     var leak = new List<string>();
-    for (var i = latestLine.Value - 1; i <= appendixLine.Value - 1 && leak.Count < 3; i++)
+    for (var i = latestLine.Value - 1; i <= scanEnd - 1 && leak.Count < 3; i++)
     {
-        if (leakRx.IsMatch(lines[i])) leak.Add($"{i - latestLine.Value + 1}:{lines[i]}");   // grep -n：区间内相对行号
+        var l = lines[i];
+        if (!l.StartsWith("- ", StringComparison.Ordinal)) continue;
+        if (l.Contains("〔内部〕", StringComparison.Ordinal)) continue;
+        var m = Regex.Match(l, @"^- \*\*(?<title>[^*]{1,64})\*\*");
+        var titleText = m.Success ? m.Groups["title"].Value : l;
+        if (leakRx.IsMatch(titleText)) leak.Add($"{i - latestLine.Value + 1}:{l}");   // grep -n：区间内相对行号
     }
     if (leak.Count > 0)
     {
-        Warn(5, "分类层疑似内部术语泄漏（应外置到附录层）: " + string.Join("\n", leak.Take(2)));
+        Warn(5, "顶部段短标题含内部术语（会进 Release 页，应改外行话或标 〔内部〕）: " + string.Join("\n", leak.Take(2)));
     }
     else
     {
-        Pass(5, "分类层无内部术语泄漏");
+        Pass(5, "顶部段短标题无内部术语泄漏");
     }
 }
 

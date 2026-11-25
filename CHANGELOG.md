@@ -12,21 +12,19 @@
 
 ## [Unreleased]
 
-### Changed
+停发 OutboxHealth 包、NuGet 凭证迁至 Trusted Publishing，新增两道门禁并勘正 ADR-036 时点。
 
-- **SQL 字面量内的行尾注释移出（消费者可见的 const 值变化，执行语义不变，2026-11-25）**：`PostgreSqlAuditor.CreateAuditTable` 的 DDL 里两处行尾注释（`operation TEXT NOT NULL,  -- INSERT | UPDATE | DELETE`、`changed_by  TEXT,  -- 操作者标识`）移入 XML doc，`DapperProjectionCheckpointStore.MarkCompleted` 的 v69 勘正说明移入 C# 注释（private const，不进公共面）。理由：SQL 字符串内的 `--` 到行尾全部被数据库当注释，后续在同一行追加谓词会被静默吞掉；v72 曾因此把 `AND locked_until` 双条件守卫退化为单条件（P3 回归 P1）。公共 API 快照同步更新（唯一差异即该常量值）。
+### 变更要点
 
-### Deprecated
+- **停发 OutboxHealth 包**：`PalDDD.Hosting.AspNetCore.OutboxHealth` 改 `<IsPackable>false</IsPackable>` 停止发新包（源码与 `AddPalOutboxHealthCheck()` 入口保留）。其"避免 Hosting 传递引用 Transactions"的目标未兑现（主包仍因内置同款检查引用 Transactions），拆依赖判为不做，独立发布面无收益。可打包包数 36→35，README、`docs/features.md`、`docs/release.md`、`release.yml` 的 `EXPECTED` 已同步。
 
-- **`PalDDD.Hosting.AspNetCore.OutboxHealth` 停止发新包（2026-11-25 裁决）**：该可选 outbox 健康检查包加入 `<IsPackable>false</IsPackable>`，不再打包发布到 NuGet；源码、测试与 `AddPalOutboxHealthCheck()` 入口保留（公共 API 快照与文档仍引用）。理由：其立项目的"避免 Hosting 传递引用 Transactions"未兑现——Hosting 主包仍因内置同款检查引用 Transactions（`PalDDD.Hosting.AspNetCore.csproj:26`），装不装该包依赖链相同；拆依赖（A-F11）判为不做，独立发布面因此没有收益。已随 v5.0.0 发布到 NuGet 的 5.0.0 版本不可追溯，保持原状（Unlist 属外发操作，需显式授权）。可打包包数 36→35，同步 README（中英）、`docs/features.md`、`docs/release.md` 包清单与包数断言、`.github/workflows/release.yml` 的 `EXPECTED`。
+- **NuGet 凭证迁至 Trusted Publishing**：`release.yml` 改用 OIDC 短期令牌（`id-token: write` + `NuGet/login@v1` + `NUGET_USER`），替代 2026-11-01 起统一过期的长有效期 API key（此前三次 Release 均因 key 过期在 Push 首步 403、零包流出）。旧 `NUGET_API_KEY` secret 已删除。〔内部〕
 
-### Documentation
+- **新增两道 pre-commit 门禁**：`declaration-guard`（src 决策声明注释净删除且暂存集无决策文档即拦截；实证 M3-3 删 `SagaState.CloneForLease` 的 P3 勘正声明致失败模式静默翻转）与 `sql-comment-guard`（扫 SQL 字面量内嵌 `--` 注释，防其吞掉后续谓词致 fencing 丢失）。各带 `--selftest` 与隔离探针，AGENTS.md §3 两条待办转正。〔内部〕
 
-- **发布凭证迁移至 NuGet Trusted Publishing（2026-11-24，OIDC 免轮换 key）**：NuGet 自 2026-08-17 起新 API key 最长 30 天、所有长有效期 key 于 2026-11-01 统一过期，v5.0.0 发行轮三次 Release 均在 Push 第一步 403（key expired）失败、零包流出。`.github/workflows/release.yml` 改用 OIDC 短期令牌：job 加 `id-token: write`、新增 `NuGet/login@v1`（钉 commit SHA）用 `NUGET_USER` 换取约 1 小时令牌、`dotnet nuget push --api-key` 改读该令牌；判定信号 `HAS_NUGET_KEY` → `HAS_NUGET_USER`。`docs/release.md` §6.2/§6.4 同步（新策略四参数 + environment secret 配置）。旧 `NUGET_API_KEY` secret 已于发布成功后删除（2026-11-25），仓库现仅保留 production environment 的 `NUGET_USER`。须 nuget.org 建可信发布策略 + production environment 加 `NUGET_USER` 后方能实际推送。
+- **SQL 字面量行尾注释移出**：`PostgreSqlAuditor.CreateAuditTable` 的 DDL 两处列注释移入 XML doc，`DapperProjectionCheckpointStore.MarkCompleted` 的 v69 勘正说明移入 C# 注释。消费者可见的 const 值变化，SQL 执行语义不变，公共 API 快照已同步。〔内部〕
 
-- **两道 pre-commit 门禁上线，AGENTS.md §3 两条待办转正（2026-11-25）**：`declaration-guard` 拦截 src 决策声明注释的净删除（暂存集无 `docs/decisions` 或 `docs/review/decision-*` 即阻断，豁免 `ALLOW_DECLARATION_REMOVAL=1`；实证 M3-3 删除 `SagaState.CloneForLease` 的 P3 勘正声明致失败模式静默翻转）与 `sql-comment-guard` 扫描 SQL 字面量内嵌 `--` 注释（扫全树 267 文件，`a--b` 形态记 WARN 不阻断）。两者各带 `--selftest`（15/19 断言，翻转判定均转红）与隔离探针，`gate-audit` 51 项全过、47 脚本全归类。
-
-- **ADR-036 背景段许可时点勘正（2026-11-25）**：原文「2026-09-19 改为 AGPL-3.0-or-later」与 NuGet 实证冲突。实际换证在 2026-07-04~07-30 之间（v1.0.0-preview.1 发布日 07-04 为 MIT，v1.0.0 发布日 07-30 起为 AGPL），09-19 是审计裁决日。勘正注记附 12 个 nupkg 的 nuspec 实证表与方法注记（registration API 的 license 字段为空、catalog 死链、tag 日期早于发布日不可作判据）。决策与结论不受影响。
+- **ADR-036 许可时点勘正**：原文"2026-09-19 改为 AGPL"与 NuGet 实证冲突，实际换证在 2026-07-04~07-30 之间（preview.1 = MIT，1.0.0 起 = AGPL），09-19 是审计裁决日。勘正注记附 12 个 nupkg 的 nuspec 实证表。〔内部〕
 
 ## [5.0.0] — 2026-11-25
 
