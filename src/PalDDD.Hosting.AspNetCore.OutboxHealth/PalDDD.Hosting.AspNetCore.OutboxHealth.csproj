@@ -3,6 +3,9 @@
   <PropertyGroup>
     <RootNamespace>PalDDD.Hosting.AspNetCore.OutboxHealth</RootNamespace>
     <Description>Pal.DDD 可选 Outbox 健康检查包：不需要健康检查的 Hosting 消费方不必再传递引用 Transactions。</Description>
+    <!-- 2026-11-25 停发裁决：源码与测试保留（API 快照/文档仍引用），但不再打包发布到 NuGet。
+         NuGet 上已发布的 5.0.0 版本不可追溯，保持原状。 -->
+    <IsPackable>false</IsPackable>
     <!-- 与 Hosting 同口径：引用链上的 Transactions 为 IsAotCompatible=false，本项目传递该状态。 -->
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>

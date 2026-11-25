@@ -179,6 +179,7 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 | `PalDDD.EntityFrameworkCore` | 1.1.0（已 Unlist） | 源码未入库（OBS-068），被 PalORM 替代 | 永不打包，NuGet 旧包保持 Unlist |
 | `PalDDD.Prompts` | 1.1.0 | AI 代码生成模板，非运行时库 | `<IsPackable>false</IsPackable>`，NuGet 包 Unlist |
 | `PalDDD.Testing` | 1.1.0（已 Unlist） | 测试基础设施，仅项目内部用 | `<IsPackable>false</IsPackable>`，NuGet 包保持 Unlist |
+| `PalDDD.Hosting.AspNetCore.OutboxHealth` | 5.0.0（随 v5.0.0 发布，**现停发**） | 可选 outbox 健康检查包；2026-11-25 裁决不再发新包，源码/测试保留（API 快照与文档仍引用），`AddPalOutboxHealthCheck()` 入口仅作源码内可选装配 | `<IsPackable>false</IsPackable>`，NuGet 上已发布的 5.0.0 包不可追溯、保持原状 |
 | `PalORM.Testing` | 5.0.0（已 Unlist） | PalORM 测试基础设施 | NuGet 包保持 Unlist |
 | `PalDDD.AotSample` | 未发布 | 手动 AOT 验证示例（CI aot-verify job 的 publish + 实跑覆盖 PalOrmSample 与 AotSample，见 `.github/workflows/ci.yml`） | `<IsPackable>false</IsPackable>` |
 | `PalDDD.ECommerce` | 未发布 | 电商场景示例代码 | `<IsPackable>false</IsPackable>` |
@@ -284,7 +285,7 @@ rm -rf /tmp/release-preview && mkdir -p /tmp/release-preview
 for csproj in src/*/*.csproj; do
     dotnet pack "$csproj" -c Release --no-build -o /tmp/release-preview --nologo
 done
-ls /tmp/release-preview/*.nupkg | wc -l   # 应等于 36（可打包项目数；PalDDD.Prompts 显式 IsPackable=false）
+ls /tmp/release-preview/*.nupkg | wc -l   # 应等于 35（可打包项目数；PalDDD.Prompts 与 PalDDD.Hosting.AspNetCore.OutboxHealth 显式 IsPackable=false）
 ```
 
 ### 4.2 nuspec 元数据检查
@@ -502,7 +503,7 @@ git push origin v1.1.0
 | 1 | 发布时未建 CHANGELOG 段（事后回填） | 1.1.0（2026-07-31） | **CHANGELOG 先行，tag 后打**（§5.1 打 tag 前核对 `[版本号]` 段已转正） |
 | 2 | 发布时 `[Unreleased]` 未转正 `[2.0.0]` 段（同款教训第二次）——tag 打完 CHANGELOG 头部仍指向上版 | 2.0.0（2026-08-23） | §5.1 步骤 2 增加核对项：`grep "^## " CHANGELOG.md` 首段必须是 `[Unreleased]` + 新 `[版本号]` 段；升版本同次提交内完成转正（见 2.1.0 发布提交形态） |
 | 3 | release.yml pack 阶段 TreatWarningsAsErrors 阻塞（NU5104 preview 依赖/NU5128 元包无 lib 均为预期） | 2.0.0 发布流水线（main a115c22/ae0c912/64c4d3d 三连修） | 构建阶段 `-warnaserror` 与 pack 阶段分离；NoWarn 命令行属性保底（Directory.Build.props 的 NoWarn 在 CI pack 阶段偶不生效） |
-| 4 | Dapper 四包 + EFCore 五包 + DependencyInjection 共 10 项目曾因 NU5104 未 pack（包数断言抓出） | 同上 | §6.2 step 7 包数量断言 36（防漏发的机械防线；source of truth 为 count-audit 的 packable 推导） |
+| 4 | Dapper 四包 + EFCore 五包 + DependencyInjection 共 10 项目曾因 NU5104 未 pack（包数断言抓出） | 同上 | §6.2 step 7 包数量断言 35（防漏发的机械防线；source of truth 为 count-audit 的 packable 推导） |
 | 5 | §4.1 #6 pack 循环 `for proj in $(ls src/)` 在输出带 `/` 后缀的 shell 环境（Git Bash `ls -F` 类行为）下拼错路径**静默空转 0 包**（无报错、无失败计数） | 2.2.0（2026-09-15） | 命令改 glob 直接枚举 `src/*/*.csproj`（不依赖 `ls` 行为）；**教训 4 的包数断言正是本次空转的探测器**（当时 0 ≠ 35 暴露） |
 | 6 | PR 检查绿在 head SHA，但 tag 打在**合并提交**（新 SHA）上，该 SHA 的 build-and-test 尚未跑完 → release.yml「Verify CI passed」步查 0 条已完成检查而拒绝发布（M2-3 防线按设计生效，零包推送、无半成品；API 重跑该 run 即过） | 3.2.0（2026-09-25 首发被拒，同日重跑成功） | §5.1 步骤 1.5：打 tag 前确认 **tag 将指向的 SHA**（合并后的 main HEAD）已有 `completed/success` 的 build-and-test——PR 全绿 ≠ 该 SHA 绿；等 CI 收敛再打 tag，或首发被拒后重跑 run（无需动 tag） |
 

@@ -190,10 +190,10 @@ jobs:
       - name: Verify package count
         run: |
           COUNT=$(ls release-packages/*.nupkg | wc -l)
-          # R11 F14 纠正：37 个 src 项目中 PalDDD.Prompts 显式 IsPackable=false，
-          # 实际产出 36 个 nupkg（count-audit 的 packable 推导同为 36）。原值 35
-          # 会让每次发布在此步必然失败。
-          EXPECTED=36
+          # R11 F14 纠正：37 个 src 项目中 PalDDD.Prompts 与 PalDDD.Hosting.AspNetCore.OutboxHealth
+          # 均显式 IsPackable=false，实际产出 35 个 nupkg（count-audit 的 packable
+          # 推导同为 35）。2026-11-25 停发 Optional OutboxHealth 后由 36 降为 35。
+          EXPECTED=35
           if [ "$COUNT" -ne "$EXPECTED" ]; then
             echo "ERROR: Package count mismatch — expected $EXPECTED, got $COUNT"
             ls release-packages/
@@ -247,7 +247,7 @@ jobs:
           # 发布意图，缺凭证应 fail 而非静默跳过。逃生门：手动触发时显式勾选
           # skip-nuget（只建 Release 附包、不推 NuGet 的模式成为显式选择）。
           # 2026-11-24 Trusted Publishing：缺 NUGET_USER 即视为凭证未配置。
-          echo "::error::NUGET_USER (nuget.org username) is not configured in production environment - 36 packages were NOT pushed to NuGet.org. Re-run with skip-nuget=true for a Release-only run."
+          echo "::error::NUGET_USER (nuget.org username) is not configured in production environment - 35 packages were NOT pushed to NuGet.org. Re-run with skip-nuget=true for a Release-only run."
           exit 1
 
       - name: NuGet push intentionally skipped (explicit opt-out)

@@ -12,6 +12,10 @@
 
 ## [Unreleased]
 
+### Deprecated
+
+- **`PalDDD.Hosting.AspNetCore.OutboxHealth` 停止发新包（2026-11-25 裁决）**：该可选 outbox 健康检查包加入 `<IsPackable>false</IsPackable>`，不再打包发布到 NuGet；源码、测试与 `AddPalOutboxHealthCheck()` 入口保留（公共 API 快照与文档仍引用）。理由：其立项目的"避免 Hosting 传递引用 Transactions"未兑现——Hosting 主包仍因内置同款检查引用 Transactions（`PalDDD.Hosting.AspNetCore.csproj:26`），装不装该包依赖链相同；拆依赖（A-F11）判为不做，独立发布面因此没有收益。已随 v5.0.0 发布到 NuGet 的 5.0.0 版本不可追溯，保持原状（Unlist 属外发操作，需显式授权）。可打包包数 36→35，同步 README（中英）、`docs/features.md`、`docs/release.md` 包清单与包数断言、`.github/workflows/release.yml` 的 `EXPECTED`。
+
 ### Documentation
 
 - **发布凭证迁移至 NuGet Trusted Publishing（2026-11-24，OIDC 免轮换 key）**：NuGet 自 2026-08-17 起新 API key 最长 30 天、所有长有效期 key 于 2026-11-01 统一过期，v5.0.0 发行轮三次 Release 均在 Push 第一步 403（key expired）失败、零包流出。`.github/workflows/release.yml` 改用 OIDC 短期令牌：job 加 `id-token: write`、新增 `NuGet/login@v1`（钉 commit SHA）用 `NUGET_USER` 换取约 1 小时令牌、`dotnet nuget push --api-key` 改读该令牌；判定信号 `HAS_NUGET_KEY` → `HAS_NUGET_USER`。`docs/release.md` §6.2/§6.4 同步（新策略四参数 + environment secret 配置）。旧 `NUGET_API_KEY` secret 已于发布成功后删除（2026-11-25），仓库现仅保留 production environment 的 `NUGET_USER`。须 nuget.org 建可信发布策略 + production environment 加 `NUGET_USER` 后方能实际推送。

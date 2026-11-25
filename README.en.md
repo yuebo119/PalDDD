@@ -15,11 +15,11 @@
 
 ---
 
-Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 36 independent NuGet packages (plus 5 third-party PalORM engine packages; see the [Package List](#package-list)). It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning: business code stays pure C#, and the framework only delivers infrastructure.
+Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 35 independent NuGet packages (plus 5 third-party PalORM engine packages; see the [Package List](#package-list)). It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning: business code stays pure C#, and the framework only delivers infrastructure.
 
 | NuGet packages | Compile-time diagnostics | Persistence stacks | Measured tests |
 |:---:|:---:|:---:|:---:|
-| **36** | **38** | **3** | **1707**¹ |
+| **35** | **38** | **3** | **1707**¹ |
 
 ¹ 16 test projects, full-suite local measurement on 2026-10-19: 1631 passed + 76 skipped — Docker-dependent items (PalORM multi-dialect + Integration) are executed by CI Testcontainers; PalORM.Tests and Messaging.Integration.Tests require Docker.
 
@@ -453,7 +453,7 @@ For full data, the MediumRun formal baselines, and the historical archive, see [
 
 ## Package List
 
-PalDDD ships 36 packages of its own plus 5 third-party PalORM engine packages (`PalORM.Core` · `PalORM.SourceGen` · `PalORM.PostgreSql` · `PalORM.MySql` · `PalORM.Sqlite`, independent version line). The per-package release list and versions are in the [release package scope](docs/release.md); the current version is authoritative on the [NuGet](https://www.nuget.org/packages/PalDDD.Base) badge and in the [CHANGELOG](CHANGELOG.md).
+PalDDD ships 35 packages of its own plus 5 third-party PalORM engine packages (`PalORM.Core` · `PalORM.SourceGen` · `PalORM.PostgreSql` · `PalORM.MySql` · `PalORM.Sqlite`, independent version line). The per-package release list and versions are in the [release package scope](docs/release.md); the current version is authoritative on the [NuGet](https://www.nuget.org/packages/PalDDD.Base) badge and in the [CHANGELOG](CHANGELOG.md).
 
 | Layer | Packages |
 |----|----|
