@@ -115,7 +115,7 @@ else
     }
 }
 
-// ── C3 顶部段结构（三段式：头条 + 💔 按需 + 变更要点；旧 9 分类顺序兼容）────
+// ── C3 顶部段结构（三段式：头条 + 破坏性/行为变更 按需 + 变更要点；旧 9 分类顺序兼容）────
 string[] order = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security", "Dependencies", "Documentation", "Tests"];
 var headingLines = lines
     .Select((l, i) => (Line: l, No: i + 1))
@@ -155,7 +155,7 @@ else
     // END_LINE = 附录行（若在本段内）?? 硬边界（三重兜底对齐）
     if (appendixLine is not null) endLine = appendixLine;
 
-    // 段内所有 ### 标题（去前缀）。三段式 = 头条 + ### 💔 破坏性/行为变更（按需）+ ### 变更要点。
+    // 段内所有 ### 标题（去前缀）。三段式 = 头条 + ### 破坏性/行为变更（按需）+ ### 变更要点。
     var subHeadings = lines
         .Skip(latestLine.Value - 1)
         .Take(endLine.Value - latestLine.Value + 1)
@@ -175,27 +175,27 @@ else
             if (idx < prevIdx) { sequenced = false; break; }
             prevIdx = idx;
         }
-        if (sequenced) Pass(3, "顶部段使用旧 9 分类且顺序合规（建议迁移到三段式：头条 + 💔 + 变更要点）");
+        if (sequenced) Pass(3, "顶部段使用旧 9 分类且顺序合规（建议迁移到三段式：头条 + 破坏性/行为变更 + 变更要点）");
         else Fail(3, "顶部段旧 9 分类顺序违反 §11.2: " + string.Join(" ", legacySections));
     }
     else if (subHeadings.Count == 0)
     {
-        Warn(3, "顶部段无 ### 段标题（三段式要求 ### 💔 与/或 ### 变更要点）");
+        Warn(3, "顶部段无 ### 段标题（三段式要求 ### 破坏性/行为变更 与/或 ### 变更要点）");
     }
     else
     {
-        var breakingCount = subHeadings.Count(s => s.StartsWith("💔", StringComparison.Ordinal));
-        var breakingIdx = subHeadings.FindIndex(s => s.StartsWith("💔", StringComparison.Ordinal));
+        var breakingCount = subHeadings.Count(s => s.StartsWith("破坏性", StringComparison.Ordinal));
+        var breakingIdx = subHeadings.FindIndex(s => s.StartsWith("破坏性", StringComparison.Ordinal));
         var changeIdx = subHeadings.FindIndex(s => s == "变更要点");
-        var unknown = subHeadings.Where(s => !s.StartsWith("💔", StringComparison.Ordinal) && s != "变更要点").ToList();
+        var unknown = subHeadings.Where(s => !s.StartsWith("破坏性", StringComparison.Ordinal) && s != "变更要点").ToList();
         if (unknown.Count > 0)
-            Fail(3, "顶部段出现非标准 ### 段标题（只允许 💔 破坏性/行为变更 与 变更要点）: " + string.Join(" / ", unknown));
+            Fail(3, "顶部段出现非标准 ### 段标题（只允许 破坏性/行为变更 与 变更要点）: " + string.Join(" / ", unknown));
         else if (breakingCount > 1)
-            Fail(3, "顶部段出现多个 💔 段（破坏性变更段必须唯一）");
+            Fail(3, "顶部段出现多个 破坏性/行为变更 段（必须唯一）");
         else if (breakingIdx >= 0 && changeIdx >= 0 && breakingIdx > changeIdx)
-            Fail(3, "顶部段 💔 段必须在 变更要点 段之前");
+            Fail(3, "顶部段 破坏性/行为变更 段必须在 变更要点 段之前");
         else
-            Pass(3, "顶部段结构合规（三段式：头条 + 💔 按需 + 变更要点）");
+            Pass(3, "顶部段结构合规（三段式：头条 + 破坏性/行为变更 按需 + 变更要点）");
     }
 }
 

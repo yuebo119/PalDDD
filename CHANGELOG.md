@@ -30,7 +30,7 @@
 
 消费确认契约、五项 API 增补与 Saga 管理器公开化，依赖升至 .NET 11 GA 与双驱动主版本。
 
-### 💔 破坏性/行为变更
+### 破坏性/行为变更
 
 - **删除两处假 API 与死枚举**：`ISagaManager.GetInterruptedSagasAsync`（原方法恒返空列表，照旧调用等于误判「无人工待办」）与 `SagaStatus.DeadLettered`（语义位置已被 `CompensationFailed` 占据）移除。迁移：`manager.GetInterruptedSagasAsync(ct)` → `store.GetByStatusAsync(SagaStatus.AwaitingHumanDecision, n, ct)`。`SagaStatus` 各成员改显式编号，`AwaitingHumanDecision` 恒为 `5`、`4` 成为永久空洞（不得复用；直接删中间成员会重排编号，库里 `status=4` 的存量行被读成「等待人工决策」且 Dapper 模板 `status IN (0, 5)` 失配）。三栈水合点改用带定义域校验的映射（`SagaStatusGuard.FromPersisted`），未定义值抛 `InvalidOperationException`。**升级前置检查（必做）**：`SELECT COUNT(*) FROM saga_states WHERE status = 4`，非 0 先用 `CompensationFailed=3` 修正再启动，否则该行水合时 fail-fast。
 
