@@ -6,7 +6,7 @@
 //
 // 用法：dotnet run scripts/hook-pre-commit.cs（由 .githooks/pre-commit 启动器 exec）
 // 退出码：0=通过；1=任一门禁失败。
-// 门禁序列与触发条件逐条对应原 bash 版（ITM-671 建立、历次增补的 10 段编排）；
+// 门禁序列与触发条件逐条对应原 bash 版（ITM-671 建立、历次增补的编排段；段号含 4b/4c/4d 等插入位）；
 // 输出格式保持一致（emoji 段头 + ⛔ 失败行——grep 消费方稳定）。
 //
 // 原版第 14-18 行的 SIGPIPE 教训在此形态下结构性消解：C# 一次性快照暂存集 +
@@ -76,6 +76,25 @@ if (ACMR.Any(p => p.StartsWith("test/", StringComparison.Ordinal) && p.EndsWith(
 {
     Console.WriteLine("🚫 new-skip-guard（test/ .cs 有改动）…");
     FAIL += RunGate("scripts/new-skip-guard.cs", [], "⛔ new-skip-guard 拦截——新增强 [Skip] 须豁免并写到期日，或改为修 src");
+}
+
+// ─── 4c. declaration-guard（src/**.cs 决策声明注释净删除 = 删声明通过；2026-11-25 增。
+//         来源：M3-3 删除 SagaState.CloneForLease 的 P3 勘正声明致失败模式静默翻转。
+//         触发用 MDR：只有修改/删除才可能产生声明净删除；纯新增不触发。
+//         豁免：ALLOW_DECLARATION_REMOVAL=1 + 提交信息写理由）───
+if (MDR.Any(p => p.StartsWith("src/", StringComparison.Ordinal) && p.EndsWith(".cs", StringComparison.Ordinal)))
+{
+    Console.WriteLine("📌 declaration-guard（src/ .cs 有修改或删除）…");
+    FAIL += RunGate("scripts/declaration-guard.cs", [], "⛔ declaration-guard 拦截——声明注释被删除，须同提交落决策文档或显式豁免");
+}
+
+// ─── 4d. sql-comment-guard（src/**.cs 字符串字面量内嵌 SQL `--` 注释自噬；2026-11-25 增。
+//         来源：v72 勘正注释写进单行 SQL，`--` 吞掉 `AND locked_until` 致 fencing 丢失。
+//         扫全树（存量与新增同等对待）；触发用 ACMR：src .cs 有改动才跑，~1s）───
+if (ACMR.Any(p => p.StartsWith("src/", StringComparison.Ordinal) && p.EndsWith(".cs", StringComparison.Ordinal)))
+{
+    Console.WriteLine("💬 sql-comment-guard（src/ .cs 有改动）…");
+    FAIL += RunGate("scripts/sql-comment-guard.cs", [], "⛔ sql-comment-guard 拦截——SQL 字面量内嵌 `--` 注释会吞掉后续谓词");
 }
 
 // ─── 5. xml-guard（XML 良构性；xml 系扩展名入暂存集时触发。

@@ -573,10 +573,10 @@ static class PalDDD.Dapper.PostgreSql.PostgreSqlAuditor
     id          BIGSERIAL PRIMARY KEY,
     table_name  TEXT        NOT NULL,
     row_id      TEXT        NOT NULL,
-    operation   TEXT        NOT NULL,  -- INSERT | UPDATE | DELETE
+    operation   TEXT        NOT NULL,
     old_data    JSONB,
     new_data    JSONB,
-    changed_by  TEXT,                  -- 操作者标识
+    changed_by  TEXT,
     changed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

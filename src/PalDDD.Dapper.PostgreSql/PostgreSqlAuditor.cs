@@ -33,15 +33,19 @@ public static class PostgreSqlAuditor
     // ── 审计表 DDL ──
 
     /// <summary>创建标准审计日志表</summary>
+    /// <remarks>
+    /// 列语义：<c>operation</c> 取值 INSERT | UPDATE | DELETE；<c>changed_by</c> 为操作者标识。
+    /// 说明写在 XML doc 而非 DDL 行尾：行尾 `--` 会吞掉同一行后续追加的列定义。
+    /// </remarks>
     public const string CreateAuditTable = """
         CREATE TABLE IF NOT EXISTS audit_log (
             id          BIGSERIAL PRIMARY KEY,
             table_name  TEXT        NOT NULL,
             row_id      TEXT        NOT NULL,
-            operation   TEXT        NOT NULL,  -- INSERT | UPDATE | DELETE
+            operation   TEXT        NOT NULL,
             old_data    JSONB,
             new_data    JSONB,
-            changed_by  TEXT,                  -- 操作者标识
+            changed_by  TEXT,
             changed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 

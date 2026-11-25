@@ -78,7 +78,7 @@ var wiredNames = CollectWiredNames(root);
 string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage",
     "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai", "config-policy", "license-policy", "count-audit",
     "quality-baseline", "review-freshness", "xml-guard", "vuln-scan", "test-change-guard", "new-skip-guard", "perf-registry-check",
-    "changelog-check"];
+    "changelog-check", "declaration-guard", "sql-comment-guard"];
 
 // 门禁覆盖形态声明（T-34，2026-09-22）：每个**已探针**门禁必须在此声明它覆盖哪些形态。
 // 为什么是机械要求而非文档建议：V25 的实证——一个已接线、能红、报错精确到行的门禁，
@@ -115,6 +115,8 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     // 由 --selftest 的 13 断言覆盖。
     ["new-skip-guard"] = "test/**.cs 新增 Skip 标注形态（[Skip( / Skip = \" / .Skip(\" / Skip.Test( / Skip.Unless( / Skip.When(）净增拦截；干净文件放行；删 1 加 1 的 reason 修改放行（对称判定，防搬掩护洗白）；LINQ .Skip(1) 与 Skip.If（非 TUnit 形态）不误伤；**不覆盖**：字符串字面量内 Skip 文本（豁免兜底）",
     ["changelog-check"] = "隔离探针覆盖两极：目标版本对账失配（顶部段 ≠ props/参数版本）必红（C6，2026-10-26 接线 release.yml 后的阻断形态）/ 干净 CHANGELOG 放行必绿（负向对照，防恒红）；**不覆盖**：C8 tag 提交日比对（夹具无 tag——由真实仓库 v* tag 的本地/CI 运行承担）、C1–C5 既有检查（生产运行多月，selftest 16 断言另覆盖 C6–C10 判定函数）",
+    ["declaration-guard"] = "src/**.cs 决策声明注释净删除（P定案/勘正/取舍/联动约束/登记延后/暂不优化/禁止删除，位于 // 行注释或块注释续行）且暂存集无决策文档（docs/decisions/*.md、docs/review/decision-*.md）；隔离探针钉「净删除必红」与「纯新增放行」两极；豁免 ALLOW_DECLARATION_REMOVAL=1；**不覆盖**：ADR 编号引用（属人工层 grep 职责，机械层收窄理由见脚本头注）、raw string 内的声明字样、字符串字面量内字样、docs/test 内文字增删、整文件删除的「有意命中」不单列探针（与净删除同路径）",
+    ["sql-comment-guard"] = "src/**.cs 字符串字面量（普通/逐字/插值/多行 raw）内 `--` 后跟空白，或同字面量含 SQL 关键字（SELECT/INSERT/UPDATE/DELETE/WHERE/FROM/JOIN/VALUES/INTO/SET/LIMIT/ORDER BY/GROUP BY）；隔离探针钉「SQL 字面量内嵌 -- 必红」与「干净 SQL 放行」两极；`a--b` 形态记 WARN 不阻断；**不覆盖**：跨表达式常量折叠（`sql + \"-- x\"`）、.sql 资源文件与 docs 示例、其他数据库注释分隔符（`#`）",
     ["perf-registry-check"] = "bench/bench-registry.json ↔ --list flat 的类/方法/case/profile/预算/重复跑类/过滤器方法对账（--from-flat 隔离探针）；**不覆盖**：真实 bench 工程构建与 Program.cs 接线（由 eps-perf-check 与 CI 构建承担）",
 };
 
@@ -835,6 +837,67 @@ var probes = new List<Probe>
             RunGit(dir, "commit -q -m skip-base");
             File.WriteAllText(p, "[Skip(\"new reason\")]\npublic class RenamedSkip { }\n");
             return ["test/Fake.Tests/RenamedSkip.cs"];
+        }),
+    // ── declaration-guard / sql-comment-guard 隔离探针（2026-11-25 增，AGENTS.md §3 两条
+    //    待办机械层转正）。两者均为 CWD 系门禁（FindRepoRoot 以 cwd 向上找 PalDDD.slnx）
+    //    → 隔离目录直接跑。各自钉「坏输入必红」与「干净输入放行」两极。
+    // declaration-guard 的红探针必须在 Setup 内先落基座提交：否则暂存 diff 是全量新增，
+    // 不产生删除行，净删除恒 0（形态构造不出来，与 new-skip-guard 的 reason 探针同理）。
+    new(
+        Name: "declaration-guard 拒绝删除 src 声明注释（净删除且无决策文档）",
+        Gate: "declaration-guard",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL 检测到 src/** 决策声明注释被删除",
+        Setup: dir =>
+        {
+            var d = Path.Combine(dir, "src", "A");
+            Directory.CreateDirectory(d);
+            var p = Path.Combine(d, "B.cs");
+            File.WriteAllText(p,
+                "public static class B\n{\n    // P定案：浅拷贝共享是有意取舍\n    public static void M() { }\n}\n");
+            RunGit(dir, "add -- src/A/B.cs");
+            RunGit(dir, "commit -q -m decl-base");
+            File.WriteAllText(p, "public static class B\n{\n    public static void M() { }\n}\n");
+            return ["src/A/B.cs"];
+        }),
+    new(
+        Name: "declaration-guard 放行无声明字样的新增文件（负向对照）",
+        Gate: "declaration-guard",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS",
+        Setup: dir =>
+        {
+            var d = Path.Combine(dir, "src", "A");
+            Directory.CreateDirectory(d);
+            File.WriteAllText(Path.Combine(d, "Clean.cs"),
+                "public static class Clean\n{\n    // 普通实现说明，无决策声明字样\n    public static void M() { }\n}\n");
+            return ["src/A/Clean.cs"];
+        }),
+    new(
+        Name: "sql-comment-guard 拒绝 SQL 字面量内嵌 -- 注释",
+        Gate: "sql-comment-guard",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL 检测到",
+        Setup: dir =>
+        {
+            var d = Path.Combine(dir, "src", "A");
+            Directory.CreateDirectory(d);
+            File.WriteAllText(Path.Combine(d, "Sql.cs"),
+                "internal static class Sql\n{\n    internal const string Q = \"SELECT 1 FROM t WHERE a = 1 -- 备注\";\n}\n");
+            return ["src/A/Sql.cs"];
+        }),
+    new(
+        Name: "sql-comment-guard 放行干净 SQL 字面量（负向对照）",
+        Gate: "sql-comment-guard",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS 扫描",
+        Setup: dir =>
+        {
+            var d = Path.Combine(dir, "src", "A");
+            Directory.CreateDirectory(d);
+            File.WriteAllText(Path.Combine(d, "SqlClean.cs"),
+                "internal static class SqlClean\n{\n    internal const string Q = \"SELECT 1 FROM t WHERE a = @a\";\n}\n");
+            return ["src/A/SqlClean.cs"];
         }),
     // ── perf-registry-check 隔离探针（2026-10-23）：注册表覆盖门禁的两极。
     // --from-flat + --skip-cases 让探针不依赖真实 bench 工程与 Params 源文件；

@@ -15,7 +15,7 @@
 
 ## 背景
 
-本仓 2026-07 起为 MIT，2026-09-19 改为 AGPL-3.0-or-later（社区策略导向，见 CHANGELOG §[2.0.0] 与 `docs/review/audit-2026-09-17-independent.md`：当时把「AGPL → 宽松」归类为产品/商业决策，2026-09-19/21 两轮审计裁决维持 AGPL）。
+本仓 v1.0.0-preview.1（2026-07-04 发布）为 MIT，v1.0.0（2026-07-30 发布）起的全部已发布版本为 AGPL-3.0-or-later（社区策略导向，见 CHANGELOG §[2.0.0] 与 `docs/review/audit-2026-09-17-independent.md`：当时把「AGPL → 宽松」归类为产品/商业决策，2026-09-19/21 两轮审计裁决维持 AGPL）。换证的实际动作发生在 2026-07-04~07-30 之间，2026-09-19 是审计裁决日而非换证日；实证依据见文末「勘正注记」。
 
 2026-10-24~26 两个前提发生了变化：
 
@@ -70,3 +70,19 @@
 ## 开放决策点
 
 - 无。若未来接受外部贡献（首个非 SuperLee 实质 PR），重开 CLA/DCO 评估以保持重许可自由。
+
+## 勘正注记（2026-11-25）
+
+**勘正 1：背景段的许可变更时点**。原文写「2026-07 起为 MIT，2026-09-19 改为 AGPL-3.0-or-later」，其中 09-19 是审计裁决日而非换证日。
+
+2026-11-23 的 NuGet 实证给出实际区间（下载 NuGet.org 上 `PalDDD.Core` 全部 12 个已发布 nupkg，逐个解 nuspec 读 `<license>`）：
+
+| 版本区间 | published | 许可 |
+|---|---|---|
+| v1.0.0-preview.1 | 2026-07-04 | MIT |
+| v1.0.0 ~ v4.0.0（10 个版本） | 2026-07-30 ~ 2026-10-11 | AGPL-3.0-or-later |
+| v5.0.0-preview.1 起 | 2026-10-27 | Apache-2.0 |
+
+换证本体发生在 2026-07-04~07-30 之间（v1.0.0 pack 日 07-30 的 nuspec 已是 AGPL）。本 ADR 的决策与结论不受影响：时点表述属背景描述，重许可动作仍在 v5 线且依据不变。
+
+方法注记（防后续会话重复踩坑）：读包的许可只能下载 nupkg 解 nuspec——NuGet registration API 的 license 字段为空且 catalog 链接已死（ResourceNotFound）；git tag 的 creatordate 早于 NuGet published 日（tag 先打、发布后行），不能以 tag 日期作判据。

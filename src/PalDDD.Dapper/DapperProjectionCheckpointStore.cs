@@ -471,6 +471,10 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
           AND status <> 1
         """;
 
+    // v69 勘正：仅 Processing 可完成（对齐 EFCore v53 口径——v62 的 status<>1 允许
+    // Failed→Completed 翻转，与 EFCore「Failed/Completed 实例的 MarkCompleted 不再翻转」
+    // 注释矛盾；测试 ProjectionCheckpoint_MarkCompleted_FailedSnapshot_DoesNotFlip 锁定）。
+    // 说明移出 SQL 字面量：嵌在 `AND status = 0` 的行尾会让后续追加的谓词被数据库静默注释。
     private const string MarkCompleted = """
         UPDATE projection_checkpoints
         SET status = 1,
@@ -481,7 +485,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
           AND source_name = @SourceName
           AND position = @Position
           AND revision = @Revision
-          AND status = 0 -- v69 勘正：仅 Processing 可完成（对齐 EFCore v53 口径——v62 的 status<>1 允许 Failed→Completed 翻转，与 EFCore"Failed/Completed 实例的 MarkCompleted 不再翻转"注释矛盾；测试 ProjectionCheckpoint_MarkCompleted_FailedSnapshot_DoesNotFlip 锁定）
+          AND status = 0
         """;
 
     private const string MarkFailed = """
