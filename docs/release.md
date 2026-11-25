@@ -646,7 +646,7 @@ dotnet run scripts/release-notes.cs -- <版本号|unreleased>                  #
 dotnet run scripts/release-notes.cs -- <版本号> --write body.md --packages-dir release-packages  # 落盘（CI 用）
 ```
 
-派生形态：头条 + ⚠️ 升级须知（破坏性/行为变更 短标题 + 首句）+ 本版变更（短标题 + 首句摘要）+ 包清单一行 + 页脚。`〔内部〕` 与 `### 附录` 条目不上页。禁止在 Release 页面手工编辑变更条目。
+派生形态：头条 + 升级须知（破坏性/行为变更 短标题 + 首句）+ 本版变更（短标题 + 首句摘要）+ 包清单一行 + 页脚。`〔内部〕` 与 `### 附录` 条目不上页。禁止在 Release 页面手工编辑变更条目。
 
 ### 11.9 反面案例（勿再犯）
 

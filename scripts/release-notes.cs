@@ -23,7 +23,7 @@
 //
 // 派生规则（单一事实源：CHANGELOG 版本段）：
 //   头条一句话    = 版本标题下第一段（≤80 字，Release 页首行）
-//   ⚠️ 升级须知   = ### 破坏性/行为变更 段，取「短标题：动作首句」
+//   升级须知        = ### 破坏性/行为变更 段，取「短标题：动作首句」
 //   本版变更      = 其余段落的条目，只取短标题，跳过 〔内部〕 与 ### 附录 条目
 //   包清单        = 一行 NuGet 链接，替代逐包表格（无产物目录时只给锚点包链接，不写包数）
 //   页脚          = 完整变更日志 + compare 链接
@@ -209,7 +209,7 @@ sb.Append(headline).Append("\n\n");
 var breakingOut = breaking.Where(b => !b.Internal).ToList();
 if (breakingOut.Count > 0)
 {
-    sb.Append("## ⚠️ 升级须知\n\n");
+    sb.Append("## 升级须知\n\n");
     foreach (var b in breakingOut)
     {
         var detail = FirstSentence(b.Detail);
