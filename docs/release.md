@@ -375,8 +375,9 @@ on:
 | 5.5 | Verify CHANGELOG entry | `scripts/changelog-check.cs -- <版本>`（2026-10-26 增，对齐 Pal.ORM M1-3：校验前置到 pack/push 之前，此前 release 路径无任何 CHANGELOG 校验）；C1–C10，含顶部版本对账/段日期 == tag 提交日/条目非空 | FAIL → exit（漏转正/日期失实在推送 NuGet 前拦截） |
 | 6 | Pack | 全部公开发布项目 | pack 失败 → exit |
 | 7 | Verify package count | 断言 nupkg 数 = 发布清单总数 | 数量不对 → exit（防漏发） |
-| 8 | Push to NuGet.org | `--skip-duplicate` + 推送计数断言（v60 加）| push 失败/计数不符 → exit |
-| 8b | NuGet push skipped 警告 | secret 缺失时 `::warning::`（v60 加，v62 修 job 级 env 作用域） | 显式警告不 exit |
+| 7.5 | NuGet login (OIDC) | 2026-11-24 Trusted Publishing：`NuGet/login@v1` 用 `NUGET_USER` + `id-token: write` 换取约 1 小时短期令牌，紧贴 Push 之前（避免令牌过期） | login 失败（缺策略/缺权限/缺 secret）→ Push 步不执行 |
+| 8 | Push to NuGet.org | `--skip-duplicate` + 推送计数断言（v60 加）；api-key 用步骤 7.5 输出的 OIDC 令牌，非长期 secret | push 失败/计数不符 → exit |
+| 8b | NuGet push skipped | 缺 `NUGET_USER` 且未显式 opt-out 时 fail（防「0 包发布」假成功）；显式 `skip-nuget=true` 时警告放行 | 缺凭证 → exit |
 | 9 | Extract Release Notes + Create GitHub Release | 仅 tag 触发时：body = CHANGELOG **当前版本段自动提取** + 动态包表（从实际 nupkg 产物生成）+ 上一版本对比链接；标题 `PalDDD <tag>`（2026-10-26 对齐 Pal.ORM，原 body 为整个 CHANGELOG.md 全文） | 创建失败 → exit |
 
 ### 6.3 关键配置
@@ -403,8 +404,10 @@ runs-on: ubuntu-latest
 
 | Secret 名 | 用途 | 获取方式 |
 |-----------|------|---------|
-| `NUGET_API_KEY` | 推送到 nuget.org | https://www.nuget.org/account/apikeys（Push 权限，Glob Pattern=`PalDDD.*`，365 天有效期） |
-| `production` environment | 发布审批门（可选一次性配置，2026-10-26 增） | GitHub Settings → Environments → New environment → `production` → Required reviewers 勾选维护者；配置后 release.yml 的 publish 在推送 NuGet 前等待人工批准，未配置时直接放行 |
+| `NUGET_USER` | 推送到 nuget.org（Trusted Publishing OIDC 登录，2026-11-24 迁移） | nuget.org 用户名（**非邮箱**）；配在 `production` environment 的 secret 下。另须在 https://www.nuget.org/account/trustedpublishing 建策略：Repository Owner=`yuebo119` / Repository=`PalDDD` / Workflow File=`release.yml` / Environment=`production` |
+| `production` environment | 发布审批门（一次性配置，2026-10-26 增） | GitHub Settings → Environments → New environment → `production` → Required reviewers 勾选维护者；配置后 release.yml 的 publish 在推送 NuGet 前等待人工批准，未配置时直接放行 |
+
+> **2026-11-24 Trusted Publishing 迁移说明**：NuGet 自 2026-08-17 起新 API key 最长 30 天，所有长有效期 key 于 2026-11-01 统一过期（`NUGET_API_KEY` 因此三次 403 阻断 v5.0.0 发布）。现改用 OIDC 短期令牌：工作流加 `id-token: write` 权限，`NuGet/login@v1` 用 `NUGET_USER` 换取约 1 小时有效的令牌，`dotnet nuget push --api-key` 改用该令牌。旧 `NUGET_API_KEY` secret 暂不删除（验证发布成功后再清理）。
 
 ---
 

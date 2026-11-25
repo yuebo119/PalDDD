@@ -24,6 +24,11 @@ concurrency:
 
 permissions:
   contents: write
+  # 2026-11-24 Trusted Publishing 迁移：NuGet OIDC 短期令牌替代长有效期 API key。
+  # id-token: write 必需——缺失时 NuGet/login@v1 换取令牌会 403（技能实测故障表）。
+  # 背景：NuGet 自 2026-08-17 起新 key 最长 30 天，所有长有效期 key 于 2026-11-01
+  # 统一过期（v5.0.0 发行轮三次 403 根因）；Trusted Publishing 免轮换 key。
+  id-token: write
 
 jobs:
   release:
@@ -33,12 +38,13 @@ jobs:
     # 审批点应在推送侧而非触发侧）。仓库侧未配置该 environment 时本声明无行为变化
     # （GitHub 隐式创建空环境直接放行），一次性配置见 docs/release.md §6.4。
     environment: production
-    # ITM-717（2026-10-27 清零轮）：密钥收窄到唯一消费步。密钥本体只在 Push 步的 step env
-    # 注入；三个判定步的 if 读 job 级布尔信号 HAS_NUGET_KEY（job env 允许 secrets 表达式，
-    # step if 不允许直接读 secrets 上下文——2026-10-27 首发实证：if 内联 secrets 使整个
-    # workflow 校验失败，v62 的 step env 不跨步坑以本布尔形态兼顾）。
+    # 2026-11-24 Trusted Publishing 迁移：判定信号从 NUGET_API_KEY 改为 NUGET_USER
+    # （production environment 的 secret，nuget.org 用户名非邮箱）。NuGet/login 用 OIDC
+    # 换取短期令牌，不再有可过期的 API key；本布尔只判「是否已配置发布凭证」。
+    # 三个判定步的 if 读 job 级布尔信号 HAS_NUGET_USER（job env 允许 secrets 表达式，
+    # step if 不允许直接读 secrets 上下文——2026-10-27 首发实证的校验失败坑）。
     env:
-      HAS_NUGET_KEY: ${{ secrets.NUGET_API_KEY != '' }}
+      HAS_NUGET_USER: ${{ secrets.NUGET_USER != '' }}
     timeout-minutes: 45
 
     steps:
@@ -195,21 +201,32 @@ jobs:
           fi
           echo "Package count: $COUNT (expected $EXPECTED)"
 
+      - name: NuGet login (OIDC)
+        # 2026-11-24 Trusted Publishing：用 GitHub OIDC 换取 NuGet 短期令牌（约 1 小时），
+        # 替代会过期的 NUGET_API_KEY。前置：nuget.org 建可信发布策略（Repository Owner /
+        # Repository / Workflow File=release.yml / Environment=production），且 production
+        # environment 配 NUGET_USER secret（nuget.org 用户名，非邮箱）。
+        # 步骤紧贴 Push 之前（技能故障表：login 与 push 间隔 >1h 令牌过期）。
+        id: nuget-login
+        if: ${{ env.HAS_NUGET_USER == 'true' && inputs.skip-nuget != true }}
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
       - name: Push to NuGet.org
         # R54-P1-1 勘正（2026-09-19 第五十四轮片1）：补 skip-nuget 接线——原条件只查
         # key 存在，「勾选 skip-nuget + 有 key」时 35 包照推（input 唯一有实际作用的
-        # 场景完全失效，不可逆公开副作用）。ITM-717（2026-10-27）：密钥唯一注入点收窄到
-        # 本步（step env），if 判定直接读 secrets 上下文。
-        if: ${{ env.HAS_NUGET_KEY == 'true' && inputs.skip-nuget != true }}
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        # 场景完全失效，不可逆公开副作用）。ITM-717（2026-10-27）：凭证唯一注入点收窄到
+        # 本步。2026-11-24 Trusted Publishing 迁移：改读 login 步骤输出的 OIDC 令牌，
+        # api-key 不再是长期 secret。
+        if: ${{ env.HAS_NUGET_USER == 'true' && inputs.skip-nuget != true }}
         run: |
           set -euo pipefail
           PUSHED=0
           for nupkg in release-packages/*.nupkg; do
             echo "Pushing: $(basename $nupkg)"
             dotnet nuget push "$nupkg" \
-              --api-key "$NUGET_API_KEY" \
+              --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
               --source https://api.nuget.org/v3/index.json \
               --skip-duplicate
             PUSHED=$((PUSHED+1))
@@ -222,18 +239,19 @@ jobs:
             exit 1
           fi
 
-      - name: NuGet push skipped (secret missing) — fail
-        if: ${{ env.HAS_NUGET_KEY != 'true' && inputs.skip-nuget != true }}
+      - name: NuGet push skipped (credentials missing) — fail
+        if: ${{ env.HAS_NUGET_USER != 'true' && inputs.skip-nuget != true }}
         run: |
           # M3-9（v2 审计 O-4，2026-09-19）：原 v60 形态仅 ::warning:: 且 GitHub Release
           # 照建——「发布成功」可等于「0 个包发布」（假成功）。tag/手动触发均为显式
-          # 发布意图，缺 key 应 fail 而非静默跳过。逃生门：手动触发时显式勾选
+          # 发布意图，缺凭证应 fail 而非静默跳过。逃生门：手动触发时显式勾选
           # skip-nuget（只建 Release 附包、不推 NuGet 的模式成为显式选择）。
-          echo "::error::NUGET_API_KEY is not configured - 35 packages were NOT pushed to NuGet.org. If you intentionally want a Release-only run (no NuGet push), re-run with the skip-nuget input set to true."
+          # 2026-11-24 Trusted Publishing：缺 NUGET_USER 即视为凭证未配置。
+          echo "::error::NUGET_USER (nuget.org username) is not configured in production environment - 36 packages were NOT pushed to NuGet.org. Re-run with skip-nuget=true for a Release-only run."
           exit 1
 
       - name: NuGet push intentionally skipped (explicit opt-out)
-        if: ${{ env.HAS_NUGET_KEY != 'true' && inputs.skip-nuget == true }}
+        if: ${{ env.HAS_NUGET_USER != 'true' && inputs.skip-nuget == true }}
         run: |
           echo "::warning::NuGet push intentionally skipped (skip-nuget=true) - GitHub Release will be created with nupkg attachments only."
 
