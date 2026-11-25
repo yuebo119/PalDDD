@@ -407,7 +407,7 @@ runs-on: ubuntu-latest
 | `NUGET_USER` | 推送到 nuget.org（Trusted Publishing OIDC 登录，2026-11-24 迁移） | nuget.org 用户名（**非邮箱**）；配在 `production` environment 的 secret 下。另须在 https://www.nuget.org/account/trustedpublishing 建策略：Repository Owner=`yuebo119` / Repository=`PalDDD` / Workflow File=`release.yml` / Environment=`production` |
 | `production` environment | 发布审批门（一次性配置，2026-10-26 增） | GitHub Settings → Environments → New environment → `production` → Required reviewers 勾选维护者；配置后 release.yml 的 publish 在推送 NuGet 前等待人工批准，未配置时直接放行 |
 
-> **2026-11-24 Trusted Publishing 迁移说明**：NuGet 自 2026-08-17 起新 API key 最长 30 天，所有长有效期 key 于 2026-11-01 统一过期（`NUGET_API_KEY` 因此三次 403 阻断 v5.0.0 发布）。现改用 OIDC 短期令牌：工作流加 `id-token: write` 权限，`NuGet/login@v1` 用 `NUGET_USER` 换取约 1 小时有效的令牌，`dotnet nuget push --api-key` 改用该令牌。旧 `NUGET_API_KEY` secret 暂不删除（验证发布成功后再清理）。
+> **2026-11-24 Trusted Publishing 迁移说明**：NuGet 自 2026-08-17 起新 API key 最长 30 天，所有长有效期 key 于 2026-11-01 统一过期（`NUGET_API_KEY` 因此三次 403 阻断 v5.0.0 发布）。现改用 OIDC 短期令牌：工作流加 `id-token: write` 权限，`NuGet/login@v1` 用 `NUGET_USER` 换取约 1 小时有效的令牌，`dotnet nuget push --api-key` 改用该令牌。旧 `NUGET_API_KEY` secret 已于 v5.0.0 发布成功后删除（2026-11-25），仓库现仅保留 production environment 的 `NUGET_USER`。
 
 ---
 
