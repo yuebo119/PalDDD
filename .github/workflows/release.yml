@@ -257,8 +257,8 @@ jobs:
 
       - name: Extract Release Notes
         # 2026-11-25 改为单源派生（对齐 Pal.ORM 发布变更日志规范 §七）：Release body 由
-        # scripts/release-notes.cs 从 CHANGELOG 版本段派生（头条 + ⚠️升级须知 + 本版变更
-        # 短标题 + 包清单 + 页脚，体量 ≤1400 字符）。本地预览与 CI 共用同一实现，禁止手写第二份。
+        # scripts/release-notes.cs 从 CHANGELOG 版本段派生（头条 + 升级须知 + 本版变更
+        # 短标题 + 首句摘要 + 包清单 + 页脚，体量 ≤4000 字符）。本地预览与 CI 共用同一实现，禁止手写第二份。
         # 原 awk 把整段 CHANGELOG 原文塞进 body（含 9 分类 + 附录叙事），Release 页体量失控
         #（Pal.ORM 同族实测 1192~30973 字符摆动）。头条/短标题/体量在此步校验，失败即断不建 Release。
         # 版本段存在性已由上游 changelog-check C6 保证（段缺失在那一步即红）。
